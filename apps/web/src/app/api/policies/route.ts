@@ -149,18 +149,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'insured_name is required.' }, { status: 400 });
   }
 
+  // ✅ LOOSENED VALIDATION: Only require core transaction metrics to proceed
   if (
-    !payload.phone ||
-    !payload.email ||
-    !payload.address ||
-    !payload.carrier ||
-    !payload.line_of_business ||
-    payload.premium === undefined ||
+    !payload.carrier?.trim() ||
+    !payload.line_of_business?.trim() ||
     !policyNumber ||
     !payload.effective_date ||
     !payload.renewal_date
   ) {
-    return NextResponse.json({ message: 'Missing required fields.' }, { status: 400 });
+    return NextResponse.json({ message: 'Missing required policy parameters (Carrier, Line of Business, Policy Number, Effective & Renewal dates).' }, { status: 400 });
   }
 
   const insuredName = normalizeText(payload.insured_name);
@@ -233,7 +230,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   let clientUpdate = await supabase.from('clients').update(clientUpdatePayload).eq('id', clientId);
   
-  // Safe fallback if database cache triggers a column parsing drop
   if (clientUpdate.error && isColumnError(clientUpdate.error.message)) {
     const { source: _source, ...fallbackPayload } = clientUpdatePayload;
     clientUpdate = await supabase.from('clients').update(fallbackPayload).eq('id', clientId);
@@ -297,7 +293,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     message: `Policy issued for ${insertResult.data.insured_name}. Renewal automation will monitor ${insertResult.data.renewal_date}.`,
   });
 
-  if (emailConsent && email) {
+  // ✅ EMAIL SAFEGUARD: Direct Vercel execution with valid address tracking checks
+  if (emailConsent && email && email.trim().length > 0) {
     try {
       await sendEmail({
         to: email,
@@ -352,7 +349,6 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: updateResult.error.message }, { status: 500 });
   }
 
-  // ✅ NEW AUTO-SYNC: Sync edited holder details directly back to the matching Client Profile
   if (updateResult.data && updateResult.data.client_id) {
     const syncPayload = {
       full_name: updateResult.data.insured_name,
