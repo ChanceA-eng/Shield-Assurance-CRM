@@ -3,9 +3,13 @@
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@9.12.3",
+  "prisma": {
+    "schema": "apps/api/prisma/schema.prisma"
+  },
   "scripts": {
     "dev": "concurrently -n web,api,worker -c auto \"corepack pnpm --filter @crm/web dev\" \"corepack pnpm --filter @crm/api dev\" \"corepack pnpm --filter @crm/worker dev\"",
     "build": "corepack pnpm -r build",
+    "postinstall": "prisma generate --schema=apps/api/prisma/schema.prisma",
     "lint": "corepack pnpm -r lint",
     "typecheck": "corepack pnpm -r typecheck",
     "test": "corepack pnpm -r test",
