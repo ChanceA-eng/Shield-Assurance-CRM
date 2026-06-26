@@ -1,0 +1,80 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Account {
+  id          String    @id @default(uuid())
+  name        String
+  isCorporate Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  contacts    Contact[]
+  deals       Deal[]
+}
+
+model Contact {
+  id         String     @id @default(uuid())
+  accountId  String
+  account    Account    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  firstName  String
+  lastName   String
+  email      String     @unique
+  phone      String?
+  createdAt  DateTime   @default(now())
+  activities Activity[]
+}
+
+model Deal {
+  id           String    @id @default(uuid())
+  accountId    String
+  account      Account   @relation(fields: [accountId], references: [id])
+  title        String
+  stage        DealStage @default(LEAD)
+  amount       Float?
+  lineType     LineType
+  customFields Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Activity {
+  id         String       @id @default(uuid())
+  contactId  String
+  contact    Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  type       ActivityType
+  direction  Direction    @default(INBOUND)
+  subject    String
+  body       String
+  externalId String?
+  createdAt  DateTime     @default(now())
+}
+
+enum DealStage {
+  LEAD
+  QUOTING
+  PRESENTED
+  BOUND
+  LOST
+}
+
+enum LineType {
+  P_C
+  LIFE_HEALTH
+}
+
+enum ActivityType {
+  EMAIL
+  SMS
+  CALL
+  SYSTEM_NOTE
+}
+
+enum Direction {
+  INBOUND
+  OUTBOUND
+}
