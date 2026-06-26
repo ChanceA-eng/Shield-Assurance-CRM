@@ -1,6 +1,7 @@
 {
-  "framework": null,
+  "framework": "nextjs",
   "installCommand": "cd ../.. && corepack pnpm install --frozen-lockfile",
-  "buildCommand": "cd ../.. && corepack pnpm --filter @crm/api build",
-  "outputDirectory": "dist"
+  "buildCommand": "cd ../.. && corepack pnpm --filter @crm/web build",
+  "devCommand": "cd ../.. && corepack pnpm --filter @crm/web dev",
+  "outputDirectory": "../web/.next"
 }
