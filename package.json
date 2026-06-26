@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "concurrently -n web,api,worker -c auto \"corepack pnpm --filter @crm/web dev\" \"corepack pnpm --filter @crm/api dev\" \"corepack pnpm --filter @crm/worker dev\"",
     "build": "corepack pnpm -r build",
-    "postinstall": "pnpm prisma generate --schema=apps/api/prisma/schema.prisma",
+    "postinstall": "corepack pnpm --filter @crm/api prisma:generate",
     "lint": "corepack pnpm -r lint",
     "typecheck": "corepack pnpm -r typecheck",
     "test": "corepack pnpm -r test",
