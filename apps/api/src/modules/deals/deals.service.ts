@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service.js';
 import { WorkflowService } from '../workflow/workflow.service.js';
 
@@ -22,7 +23,15 @@ export class DealsService {
     lineType: 'P_C' | 'LIFE_HEALTH';
     customFields?: Record<string, unknown>;
   }) {
-    return this.prisma.deal.create({ data: input });
+    const data: Prisma.DealUncheckedCreateInput = {
+      accountId: input.accountId,
+      title: input.title,
+      amount: input.amount,
+      lineType: input.lineType,
+      customFields: input.customFields ? (input.customFields as Prisma.InputJsonValue) : undefined,
+    };
+
+    return this.prisma.deal.create({ data });
   }
 
   async updateStage(input: { dealId: string; stage: DealStage; triggeredBy: string }) {
