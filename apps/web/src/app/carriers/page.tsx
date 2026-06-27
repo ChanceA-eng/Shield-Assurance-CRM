@@ -1,9 +1,6 @@
-import SectionLayout from '../../components/crm/SectionLayout';
+import type { Route } from 'next';
+import { redirect } from 'next/navigation';
 
-export default function CarriersPage(): JSX.Element {
-  return (
-    <SectionLayout title="Carriers">
-      <p className="text-sm text-[#3e3e3c]">Carriers module route is active.</p>
-    </SectionLayout>
-  );
+export default function CarriersPage(): never {
+  redirect('/rashi' as Route);
 }

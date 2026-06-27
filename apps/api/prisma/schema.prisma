@@ -54,6 +54,45 @@ model Activity {
   createdAt  DateTime     @default(now())
 }
 
+model KnowledgeDocument {
+  id           String                  @id @default(uuid())
+  title        String
+  sourceType   SourceType
+  sourceUrl    String?
+  carrierName  String?
+  stateContext String?
+  policyType   String?
+  topic        String?
+  topicTags    String[]                @default([])
+  summary      String?
+  rawText      String?
+  status       DocumentStatus          @default(PENDING)
+  errorMessage String?
+  insights     DocumentInsight[]
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  @@index([carrierName])
+  @@index([stateContext])
+  @@index([policyType])
+  @@index([topic])
+  @@index([status])
+}
+
+model DocumentInsight {
+  id              String            @id @default(uuid())
+  documentId      String
+  document        KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  insightIndex    Int
+  content         String
+  embedding       Unsupported("vector")?
+  embeddingValues Float[]           @default([])
+  createdAt       DateTime          @default(now())
+
+  @@unique([documentId, insightIndex])
+  @@index([documentId])
+}
+
 enum DealStage {
   LEAD
   QUOTING
@@ -77,4 +116,19 @@ enum ActivityType {
 enum Direction {
   INBOUND
   OUTBOUND
+}
+
+enum SourceType {
+  PDF
+  ARTICLE
+  LINK
+  VIDEO_TRANSCRIPT
+  NOTE
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
 }

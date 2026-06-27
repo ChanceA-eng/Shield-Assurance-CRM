@@ -22,7 +22,7 @@ export const navItems: NavItem[] = [
   { label: 'Certificates', icon: 'award', path: '/certificates', group: 'Insurance Ops' },
   { label: 'Billing Issues', icon: 'dollar-sign', path: '/billing', group: 'Insurance Ops' },
 
-  { label: 'Carriers', icon: 'briefcase', path: '/carriers', group: 'Admin' },
+  { label: 'Rashi', icon: 'briefcase', path: '/rashi' as Route, group: 'Admin' },
   { label: 'Reports', icon: 'bar-chart-2', path: '/reports', group: 'Admin' },
   { label: 'Settings', icon: 'settings', path: '/settings', group: 'Admin' },
 ];

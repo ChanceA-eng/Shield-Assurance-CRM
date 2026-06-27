@@ -7,6 +7,7 @@ import { ActivitiesModule } from './modules/activities/activities.module.js';
 import { WorkflowModule } from './modules/workflow/workflow.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
 import { RealtimeModule } from './modules/realtime/realtime.module.js';
+import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { RealtimeModule } from './modules/realtime/realtime.module.js';
     WorkflowModule,
     IntegrationsModule,
     RealtimeModule,
+    KnowledgeModule,
   ],
   providers: [PrismaService],
   exports: [PrismaService],

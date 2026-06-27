@@ -1,8 +1,15 @@
 import 'dotenv/config';
 import { Worker } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
-import { WORKFLOW_EVENTS, type DealBoundEventPayload } from '@crm/shared';
+import {
+  RASHI_JOB_NAMES,
+  RASHI_QUEUE_NAMES,
+  WORKFLOW_EVENTS,
+  type DealBoundEventPayload,
+  type KnowledgeIngestJobPayload,
+} from '@crm/shared';
 import { sendSms, sendWelcomeEmail } from './services.js';
+import { processKnowledgeDocument } from './knowledge.js';
 
 const prisma = new PrismaClient();
 
@@ -64,6 +71,25 @@ const workflowWorker = new Worker(
   },
 );
 
+const knowledgeWorker = new Worker(
+  RASHI_QUEUE_NAMES.KNOWLEDGE_INGEST,
+  async (job) => {
+    if (job.name !== RASHI_JOB_NAMES.INGEST_DOCUMENT) {
+      return;
+    }
+
+    await processKnowledgeDocument(prisma, job.data as KnowledgeIngestJobPayload);
+  },
+  {
+    connection: {
+      host: process.env.REDIS_HOST ?? '127.0.0.1',
+      port: Number(process.env.REDIS_PORT ?? 6379),
+    },
+    concurrency: 2,
+    lockDuration: 120000,
+  },
+);
+
 workflowWorker.on('completed', (job) => {
   console.log(`[worker] Completed ${job.name} (${job.id})`);
 });
@@ -72,7 +98,16 @@ workflowWorker.on('failed', (job, err) => {
   console.error(`[worker] Failed ${job?.name} (${job?.id}):`, err.message);
 });
 
+knowledgeWorker.on('completed', (job) => {
+  console.log(`[worker] Completed ${job.name} (${job.id})`);
+});
+
+knowledgeWorker.on('failed', (job, err) => {
+  console.error(`[worker] Failed ${job?.name} (${job?.id}):`, err.message);
+});
+
 async function shutdown(): Promise<void> {
+  await knowledgeWorker.close();
   await workflowWorker.close();
   await prisma.$disconnect();
 }
