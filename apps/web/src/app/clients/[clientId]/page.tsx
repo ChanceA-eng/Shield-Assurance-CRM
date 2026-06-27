@@ -70,6 +70,15 @@ interface NotificationItem {
   created_at?: string | null;
 }
 
+interface DeliveryAuditItem {
+  msg_id: string;
+  to_email?: string | null;
+  from_email?: string | null;
+  subject?: string | null;
+  status: string;
+  last_event_time?: string | null;
+}
+
 type TimelineItem =
   | (CommunicationItem & { kind: 'communication' })
   | (ScheduledMessage & { kind: 'scheduled' })
@@ -127,6 +136,7 @@ export default function ClientConversationPage(): JSX.Element {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [deliveryAudit, setDeliveryAudit] = useState<DeliveryAuditItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all');
   const [composer, setComposer] = useState(emptyComposer);
@@ -153,6 +163,14 @@ export default function ClientConversationPage(): JSX.Element {
     setTasks(taskData ?? []);
     setEvents(eventData ?? []);
     setNotifications(notificationData ?? []);
+
+    if (clientData?.email) {
+      const deliveryData = await safeJson<DeliveryAuditItem[]>(`/api/communication-log/delivery?to_email=${encodeURIComponent(clientData.email)}&limit=25`);
+      setDeliveryAudit(deliveryData ?? []);
+    } else {
+      setDeliveryAudit([]);
+    }
+
     setLoading(false);
   };
 
@@ -487,6 +505,23 @@ export default function ClientConversationPage(): JSX.Element {
                         Cancel
                       </button>
                     </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded border border-[#dddbda] bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-[#080707]">Email Delivery Audit</h3>
+                <span className="text-xs text-[#6a6a6a]">{deliveryAudit.length} recent</span>
+              </div>
+              <div className="space-y-2">
+                {deliveryAudit.length === 0 ? <p className="text-sm text-[#6a6a6a]">No recent delivery activity for this client email.</p> : null}
+                {deliveryAudit.map((item) => (
+                  <article key={item.msg_id} className="rounded-lg border border-[#f3f2f1] bg-[#fbfbfb] p-3 text-sm">
+                    <p className="font-semibold text-[#14324f]">{item.subject || 'Email message'}</p>
+                    <p className="text-xs text-[#6a6a6a]">{item.to_email || '--'} · {safeDate(item.last_event_time)} · {item.status}</p>
+                    <p className="mt-1 line-clamp-2 text-[#425468]">From: {item.from_email || '--'}</p>
                   </article>
                 ))}
               </div>
