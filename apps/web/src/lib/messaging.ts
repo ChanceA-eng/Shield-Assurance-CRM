@@ -12,6 +12,7 @@ export async function sendEmail(payload: EmailPayload): Promise<void> {
     throw new Error('SendGrid is not configured. Missing SENDGRID_API_KEY or SENDGRID_FROM_EMAIL.');
   }
 
+  // ✅ CORRECTED PAYLOAD: SendGrid v3 strictly requires 'subject' at the root level
   const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
     headers: {
@@ -19,9 +20,21 @@ export async function sendEmail(payload: EmailPayload): Promise<void> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      personalizations: [{ to: [{ email: payload.to }], subject: payload.subject }],
-      from: { email: fromEmail },
-      content: [{ type: 'text/plain', value: payload.body }],
+      personalizations: [
+        { 
+          to: [{ email: payload.to.trim().toLowerCase() }] 
+        }
+      ],
+      from: { 
+        email: fromEmail.trim().toLowerCase() 
+      },
+      subject: payload.subject.trim(), // Mandatory top-level property
+      content: [
+        { 
+          type: 'text/plain', 
+          value: payload.body.trim() 
+        }
+      ],
     }),
   });
 
@@ -31,7 +44,7 @@ export async function sendEmail(payload: EmailPayload): Promise<void> {
       status: response.status,
       to: payload.to,
       subject: payload.subject,
-      body: errorBody,
+      responseDetails: errorBody,
     });
     throw new Error(`SendGrid request failed (${response.status}): ${errorBody}`);
   }
