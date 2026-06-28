@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import type { Route } from 'next';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ScopeFilters {
   carrierName?: string;
@@ -43,12 +45,20 @@ interface QueryCitation {
   topic: string | null;
 }
 
-function resolveCitationSource(citation: QueryCitation): string {
-  if (citation.sourceUrl) {
-    return citation.sourceUrl;
+function resolveCitationSource(citation: QueryCitation): string | null {
+  if (!citation.sourceUrl) {
+    return null;
   }
 
-  return `/rashi/document/${citation.documentId}`;
+  return `/api/rashi/documents/${citation.documentId}/view`;
+}
+
+function resolveDocumentSource(document: RashiDocument): string | null {
+  if (!document.sourceUrl) {
+    return null;
+  }
+
+  return `/api/rashi/documents/${document.id}/view`;
 }
 
 interface ChatMessage {
@@ -61,6 +71,83 @@ interface StatsResponse {
   documents: number;
   readyDocuments: number;
   totalInsights: number;
+}
+
+type HighlightKind = 'LIMIT' | 'DEDUCTIBLE' | 'FORM' | 'STATUS';
+
+const HIGHLIGHT_TOKEN_REGEX = /\[(LIMIT|DEDUCTIBLE|FORM|STATUS):\s*([^\]]+?)\]/g;
+const INLINE_CITATION_REGEX = /\[(\d+)\](?!\()/g;
+
+function withInlineCitationLinks(text: string): string {
+  return text.replace(INLINE_CITATION_REGEX, '[cite $1](citation:$1)');
+}
+
+function badgeClasses(kind: HighlightKind): string {
+  switch (kind) {
+    case 'LIMIT':
+      return 'border-emerald-300 bg-emerald-50 text-emerald-700';
+    case 'DEDUCTIBLE':
+      return 'border-sky-300 bg-sky-50 text-sky-700';
+    case 'FORM':
+      return 'border-amber-300 bg-amber-50 text-amber-700';
+    case 'STATUS':
+      return 'border-violet-300 bg-violet-50 text-violet-700';
+    default:
+      return 'border-slate-300 bg-slate-50 text-slate-700';
+  }
+}
+
+function renderTextWithHighlights(text: string, keyPrefix: string): React.ReactNode[] {
+  const result: React.ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(HIGHLIGHT_TOKEN_REGEX)) {
+    const matchIndex = match.index ?? 0;
+    const fullToken = match[0];
+    const tokenType = match[1] as HighlightKind;
+    const tokenValue = match[2]?.trim() ?? '';
+
+    if (matchIndex > lastIndex) {
+      result.push(text.slice(lastIndex, matchIndex));
+    }
+
+    result.push(
+      <span
+        key={`${keyPrefix}-${matchIndex}`}
+        className={`mx-0.5 inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-semibold tracking-wide ${badgeClasses(tokenType)}`}
+      >
+        {tokenValue}
+      </span>,
+    );
+
+    lastIndex = matchIndex + fullToken.length;
+  }
+
+  if (lastIndex < text.length) {
+    result.push(text.slice(lastIndex));
+  }
+
+  return result.length > 0 ? result : [text];
+}
+
+function renderNodeWithHighlights(node: React.ReactNode, keyPrefix: string): React.ReactNode {
+  if (typeof node === 'string') {
+    return renderTextWithHighlights(node, keyPrefix);
+  }
+
+  if (Array.isArray(node)) {
+    return node.map((child, index) => renderNodeWithHighlights(child, `${keyPrefix}-${index}`));
+  }
+
+  if (React.isValidElement(node)) {
+    const element = node as React.ReactElement<{ children?: React.ReactNode }>;
+    return React.cloneElement(element, {
+      key: `${keyPrefix}-node`,
+      children: renderNodeWithHighlights(element.props.children, `${keyPrefix}-child`),
+    });
+  }
+
+  return node;
 }
 
 function formatDate(value: string): string {
@@ -77,14 +164,26 @@ function getEmbeddedSourceUrl(sourceUrl: string): string {
   return normalized;
 }
 
+const RASHI_GREETING: ChatMessage = {
+  role: 'assistant',
+  text: 'Shalom! I am Rashi, your underwriting intelligence assistant. Ask me about carrier appetite, exclusions, eligibility, state requirements, or any coverage question — I\'ll answer based on your indexed knowledge base.',
+};
+
+function generateSessionId(): string {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export default function RashiChatWorkspace({ title, description, scope }: RashiChatWorkspaceProps): JSX.Element {
   const [documents, setDocuments] = useState<RashiDocument[]>([]);
   const [stats, setStats] = useState<StatsResponse>({ documents: 0, readyDocuments: 0, totalInsights: 0 });
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([RASHI_GREETING]);
   const [input, setInput] = useState('');
+  const [sessionId, setSessionId] = useState<string>(() => generateSessionId());
   const [activeSourceUrl, setActiveSourceUrl] = useState<string | null>(null);
   const [activeSourceTitle, setActiveSourceTitle] = useState<string>('Source Viewer');
   const [selectedTopic, setSelectedTopic] = useState('');
@@ -130,9 +229,10 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
     }
 
     if (!activeSourceUrl) {
-      const firstSource = docsPayload.find((document) => document.sourceUrl);
-      if (firstSource?.sourceUrl) {
-        setActiveSourceUrl(firstSource.sourceUrl);
+      const firstSource = docsPayload.find((document) => Boolean(document.sourceUrl));
+      const resolvedSourceUrl = firstSource ? resolveDocumentSource(firstSource) : null;
+      if (firstSource && resolvedSourceUrl) {
+        setActiveSourceUrl(resolvedSourceUrl);
         setActiveSourceTitle(firstSource.title);
       }
     }
@@ -147,6 +247,22 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const handleCitationOpen = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    citation: QueryCitation,
+  ): void => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const sourceUrl = resolveCitationSource(citation);
+    if (!sourceUrl) {
+      return;
+    }
+
+    setActiveSourceUrl(sourceUrl);
+    setActiveSourceTitle(citation.documentTitle);
+  };
 
   const handleSendMessage = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
@@ -168,7 +284,7 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message,
-        history,
+        sessionId,
         carrierName: scope?.carrierName,
         stateContext: scope?.stateContext,
         policyType: scope?.policyType,
@@ -183,7 +299,11 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
       return;
     }
 
-    const payload = (await response.json()) as { answer: string; citations: QueryCitation[] };
+    const payload = (await response.json()) as { answer: string; citations: QueryCitation[]; sessionId?: string };
+
+    if (payload.sessionId) {
+      setSessionId(payload.sessionId);
+    }
 
     setMessages((current) => [
       ...current,
@@ -194,9 +314,10 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
       },
     ]);
 
-    const firstCitation = payload.citations[0];
-    if (firstCitation) {
-      setActiveSourceUrl(resolveCitationSource(firstCitation));
+    const firstCitation = payload.citations.find((citation) => Boolean(resolveCitationSource(citation)));
+    const resolvedCitationSourceUrl = firstCitation ? resolveCitationSource(firstCitation) : null;
+    if (resolvedCitationSourceUrl && firstCitation) {
+      setActiveSourceUrl(resolvedCitationSourceUrl);
       setActiveSourceTitle(firstCitation.documentTitle);
     }
 
@@ -256,45 +377,114 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
 
       <section className="grid min-h-[72vh] gap-4 xl:grid-cols-2">
         <div className="flex min-h-[72vh] flex-col overflow-hidden rounded-2xl border border-[#dddbda] bg-white shadow-sm">
-          <div className="border-b border-slate-100 p-4">
-            <p className="text-lg font-semibold text-[#081a30]">Rashi Underwriting Chat</p>
-            <p className="mt-1 text-xs text-[#64748b]">Ask underwriting questions naturally. Rashi answers from indexed key points only.</p>
+          <div className="flex items-center justify-between border-b border-slate-100 p-4">
+            <div>
+              <p className="text-lg font-semibold text-[#081a30]">Rashi Underwriting Chat</p>
+              <p className="mt-1 text-xs text-[#64748b]">Rashi answers from your indexed knowledge base. Follow-up questions retain full context.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMessages([RASHI_GREETING]);
+                setSessionId(generateSessionId());
+              }}
+              className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+            >
+              New Thread
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto bg-[#f8fbff] p-4">
-            {messages.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-[#cbd5e1] bg-white p-4 text-sm leading-6 text-[#475569]">
-                Start the conversation with a question like: "Can we write a 22-year-old commercial roof risk in Florida?"
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {messages.map((message, index) => (
-                  <div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[86%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'bg-[#0b2545] text-white' : 'border border-[#d8e6f6] bg-white text-[#223041]'}`}>
-                      <p>{message.text}</p>
-                      {message.role === 'assistant' && message.citations && message.citations.length > 0 ? (
-                        <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                          {message.citations.slice(0, 4).map((citation, citationIndex) => (
-                            <button
-                              key={`${citation.documentId}-${citation.insightIndex}-${citationIndex}`}
-                              type="button"
-                              onClick={() => {
-                                setActiveSourceUrl(resolveCitationSource(citation));
-                                setActiveSourceTitle(citation.documentTitle);
-                              }}
-                              className="rounded-full border border-[#c9ddf4] bg-[#eef6ff] px-2.5 py-1 font-semibold text-[#0f62af] hover:bg-[#e0efff]"
-                            >
-                              [{citationIndex + 1}] {citation.documentTitle}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
+            <div className="space-y-3">
+              {messages.map((message, index) => (
+                <div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[86%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'bg-[#0b2545] text-white' : 'border border-[#d8e6f6] bg-white text-[#223041]'}`}>
+                    {message.role === 'assistant' ? (
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ children }) => <p className="my-1.5 leading-6">{renderNodeWithHighlights(children, `p-${index}`)}</p>,
+                          ul: ({ children }) => <ul className="my-1.5 list-disc space-y-1 pl-5">{children}</ul>,
+                          ol: ({ children }) => <ol className="my-1.5 list-decimal space-y-1 pl-5">{children}</ol>,
+                          li: ({ children }) => <li>{renderNodeWithHighlights(children, `li-${index}`)}</li>,
+                          strong: ({ children }) => <strong className="font-semibold text-[#0b2545]">{renderNodeWithHighlights(children, `strong-${index}`)}</strong>,
+                          h1: ({ children }) => <h3 className="mb-1 mt-2 text-base font-semibold text-[#081a30]">{renderNodeWithHighlights(children, `h1-${index}`)}</h3>,
+                          h2: ({ children }) => <h3 className="mb-1 mt-2 text-base font-semibold text-[#081a30]">{renderNodeWithHighlights(children, `h2-${index}`)}</h3>,
+                          h3: ({ children }) => <h4 className="mb-1 mt-2 text-sm font-semibold text-[#081a30]">{renderNodeWithHighlights(children, `h3-${index}`)}</h4>,
+                          blockquote: ({ children }) => <blockquote className="my-2 border-l-2 border-slate-300 pl-3 text-[#334155]">{renderNodeWithHighlights(children, `quote-${index}`)}</blockquote>,
+                          code: ({ children }) => <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs text-slate-700">{children}</code>,
+                          a: ({ href, children }) => {
+                            if (href?.startsWith('citation:')) {
+                              const citationNumber = Number(href.split(':')[1]);
+                              const citation = Number.isFinite(citationNumber)
+                                ? message.citations?.[citationNumber - 1]
+                                : undefined;
+
+                              if (!citation || !Number.isFinite(citationNumber) || citationNumber < 1) {
+                                return <span className="rounded bg-slate-100 px-1 py-0.5 text-xs text-slate-600">[{children}]</span>;
+                              }
+
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    handleCitationOpen(event, citation);
+                                  }}
+                                  className="mx-0.5 inline-flex items-center rounded border border-[#b8d6f6] bg-[#eaf4ff] px-1.5 py-0.5 text-xs font-bold text-[#0f62af] hover:bg-[#dceeff]"
+                                  title={`Open source: ${citation.documentTitle}`}
+                                >
+                                  [{citationNumber}]
+                                </button>
+                              );
+                            }
+
+                            return (
+                              <a href={href} target="_blank" rel="noreferrer" className="text-[#0f62af] underline decoration-[#0f62af]/40 underline-offset-2 hover:text-[#015ba1]">
+                                {children}
+                              </a>
+                            );
+                          },
+                        }}
+                      >
+                        {withInlineCitationLinks(message.text)}
+                      </ReactMarkdown>
+                    ) : (
+                      <p className="whitespace-pre-wrap">{message.text}</p>
+                    )}
+                    {message.role === 'assistant' && message.citations && message.citations.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                        {message.citations.slice(0, 4).map((citation, citationIndex) => (
+                          <button
+                            key={`${citation.documentId}-${citation.insightIndex}-${citationIndex}`}
+                            type="button"
+                            disabled={!citation.sourceUrl}
+                            onClick={(event) => {
+                              handleCitationOpen(event, citation);
+                            }}
+                            className="rounded-full border border-[#c9ddf4] bg-[#eef6ff] px-2.5 py-1 font-semibold text-[#0f62af] hover:bg-[#e0efff] disabled:cursor-not-allowed disabled:opacity-50"
+                            title={citation.sourceUrl ? citation.documentTitle : `${citation.documentTitle} has no source asset URL`}
+                          >
+                            [{citationIndex + 1}] {citation.documentTitle}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
-                ))}
-                <div ref={messagesEndRef} />
-              </div>
-            )}
+                </div>
+              ))}
+              {sending ? (
+                <div className="flex justify-start">
+                  <div className="rounded-2xl border border-[#d8e6f6] bg-white px-5 py-3 text-sm text-[#64748b]">
+                    <span className="inline-flex gap-1">
+                      <span className="animate-bounce" style={{ animationDelay: '0ms' }}>●</span>
+                      <span className="animate-bounce" style={{ animationDelay: '150ms' }}>●</span>
+                      <span className="animate-bounce" style={{ animationDelay: '300ms' }}>●</span>
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+              <div ref={messagesEndRef} />
+            </div>
           </div>
 
           <form onSubmit={handleSendMessage} className="flex items-center gap-2 border-t border-slate-100 bg-white p-4">
@@ -347,11 +537,18 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                   <button
                     key={document.id}
                     type="button"
+                    disabled={!document.sourceUrl}
                     onClick={() => {
-                      setActiveSourceUrl(document.sourceUrl ?? `/rashi/document/${document.id}`);
+                      const sourceUrl = resolveDocumentSource(document);
+                      if (!sourceUrl) {
+                        return;
+                      }
+
+                      setActiveSourceUrl(sourceUrl);
                       setActiveSourceTitle(document.title);
                     }}
-                    className="w-full rounded-lg border border-[#e2e8f0] bg-[#fbfdff] px-3 py-2 text-left text-xs text-[#334155] transition hover:border-[#0176d3]"
+                    className="w-full rounded-lg border border-[#e2e8f0] bg-[#fbfdff] px-3 py-2 text-left text-xs text-[#334155] transition hover:border-[#0176d3] disabled:cursor-not-allowed disabled:opacity-55"
+                    title={document.sourceUrl ? document.title : `${document.title} has no source asset URL`}
                   >
                     <p className="font-semibold text-[#081a30]">{document.title}</p>
                     <p className="mt-1 text-[#64748b]">{document.sourceType} · {document.status} · {formatDate(document.updatedAt)}</p>

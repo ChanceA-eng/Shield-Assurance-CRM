@@ -1,5 +1,7 @@
 import { PrismaClient } from '@prisma/client';
-import { buildDeterministicEmbedding, buildKnowledgeInsights } from '@crm/shared';
+import { RASHI_EMBEDDING_DIMENSION, buildDeterministicEmbedding, buildKnowledgeInsights } from '@crm/shared';
+
+const RASHI_EMBEDDING_VECTOR_SIZE = Number(process.env.RASHI_EMBEDDING_DIMENSION ?? RASHI_EMBEDDING_DIMENSION);
 
 function truncateSummary(rawText: string): string {
   return rawText.replace(/\s+/g, ' ').trim().slice(0, 320);
@@ -20,6 +22,7 @@ async function createEmbedding(input: string): Promise<number[]> {
     body: JSON.stringify({
       model: process.env.RASHI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
       input,
+      dimensions: RASHI_EMBEDDING_VECTOR_SIZE,
       encoding_format: 'float',
     }),
   });

@@ -11,7 +11,34 @@ import {
 import { sendSms, sendWelcomeEmail } from './services.js';
 import { processKnowledgeDocument } from './knowledge.js';
 
-const prisma = new PrismaClient();
+function buildPrismaDatabaseUrl(): string | undefined {
+  const rawUrl = process.env.DATABASE_URL;
+  if (!rawUrl) return undefined;
+
+  const usesSupabasePooler = rawUrl.includes('pooler.supabase.com') || rawUrl.includes(':6543');
+  const hasPgbouncerFlag = /[?&]pgbouncer=true(?:&|$)/i.test(rawUrl);
+
+  if (!usesSupabasePooler || hasPgbouncerFlag) {
+    return rawUrl;
+  }
+
+  const separator = rawUrl.includes('?') ? '&' : '?';
+  return `${rawUrl}${separator}pgbouncer=true&connection_limit=1`;
+}
+
+const databaseUrl = buildPrismaDatabaseUrl();
+
+const prisma = new PrismaClient(
+  databaseUrl
+    ? {
+        datasources: {
+          db: {
+            url: databaseUrl,
+          },
+        },
+      }
+    : undefined,
+);
 
 const workflowWorker = new Worker(
   'insurance-workflows',

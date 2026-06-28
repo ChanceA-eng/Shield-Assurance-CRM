@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import {
+  RASHI_EMBEDDING_DIMENSION,
   RASHI_JOB_NAMES,
   RASHI_QUEUE_NAMES,
   RASHI_SOURCE_TYPES,
@@ -8,6 +9,8 @@ import {
   type RashiSourceType,
 } from '@crm/shared';
 import { PrismaService } from '../../common/prisma.service.js';
+
+const RASHI_EMBEDDING_VECTOR_SIZE = Number(process.env.RASHI_EMBEDDING_DIMENSION ?? RASHI_EMBEDDING_DIMENSION);
 
 interface KnowledgeFilters {
   documentId?: string;
@@ -262,6 +265,7 @@ export class KnowledgeService implements OnModuleDestroy {
       body: JSON.stringify({
         model: process.env.RASHI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
         input,
+        dimensions: RASHI_EMBEDDING_VECTOR_SIZE,
         encoding_format: 'float',
       }),
     });

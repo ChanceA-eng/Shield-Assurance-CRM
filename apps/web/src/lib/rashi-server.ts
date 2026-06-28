@@ -307,7 +307,7 @@ async function generateTopicKeyPoints(rawText: string, fallbackTopic?: string): 
 
   let response: Response;
   try {
-    response = await fetch('https://api.openai.com/v1/responses', {
+    response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -315,39 +315,35 @@ async function generateTopicKeyPoints(rawText: string, fallbackTopic?: string): 
       },
       body: JSON.stringify({
         model: process.env.RASHI_CHAT_MODEL ?? 'gpt-4o-mini',
-        input: [
+        messages: [
           {
             role: 'system',
-            content: [
-              {
-                type: 'input_text',
-                text: 'You are an underwriting intelligence parser. Convert source text into concise paraphrased key points grouped by topic. Do not quote long text. Output plain text lines only in this exact format: Topic | Key point. Keep each key point under 190 characters. Return 10 to 20 lines.',
-              },
-            ],
+            content: 'You are an underwriting intelligence parser. Convert source text into concise paraphrased key points grouped by topic. Do not quote long text. Output plain text lines only in this exact format: Topic | Key point. Keep each key point under 190 characters. Return 10 to 20 lines.',
           },
           {
             role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: `Document topic hint: ${fallbackTopic ?? 'General'}\n\nSource text:\n${rawText.slice(0, 26000)}`,
-              },
-            ],
+            content: `Document topic hint: ${fallbackTopic ?? 'General'}\n\nSource text:\n${rawText.slice(0, 26000)}`,
           },
         ],
+        temperature: 0.5,
+        max_tokens: 1200,
       }),
       signal: AbortSignal.timeout(25000),
     });
-  } catch {
+  } catch (error) {
+    console.error('[Rashi KeyPoint Generation Error]', error);
     return buildFallbackKeyPoints(rawText, fallbackTopic);
   }
 
   if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    console.error('[Rashi KeyPoint Generation HTTP Error]', response.status, errorText);
     return buildFallbackKeyPoints(rawText, fallbackTopic);
   }
 
-  const payload = (await response.json()) as { output_text?: string };
-  const parsed = parseKeyPointsFromText(payload.output_text?.trim() ?? '', fallbackTopic);
+  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const output = payload.choices?.[0]?.message?.content?.trim();
+  const parsed = parseKeyPointsFromText(output ?? '', fallbackTopic);
   if (parsed.length === 0) {
     return buildFallbackKeyPoints(rawText, fallbackTopic);
   }
@@ -731,10 +727,40 @@ async function composeAnswer(
     .map((entry) => `${entry.role.toUpperCase()}: ${entry.text}`)
     .join('\n');
 
+  const systemPrompt = `You are Rashi, the highly knowledgeable and conversational AI Underwriting Assistant for Shield Assurance. You are like a senior underwriting partner sitting beside the agent - confident, direct, and deeply familiar with carrier guidelines.
+
+Your personality:
+- Speak naturally and professionally, like an experienced colleague, not a search engine
+- Give clear YES/NO/CONDITIONAL postures when the data supports it
+- Be proactive: if a related exclusion or condition is relevant, mention it even if not directly asked
+- Use friendly affirmations when an agent's instinct is right
+
+FORMATTING RULES (STRICT):
+1. NEVER output a wall of text.
+2. Use Markdown headings or short section labels when useful.
+3. Use bullet points for coverages, eligibility, limits, exclusions, or requirements.
+4. Bold critical values using Markdown, such as **$1M/$1M**, **$0 deductible**, **Occurrence**.
+5. Wrap key entities using these tokens when present in evidence:
+   - [LIMIT: ...] for limits and monetary thresholds
+   - [DEDUCTIBLE: ...] for deductibles
+   - [FORM: ...] for form type
+   - [STATUS: ...] for eligibility posture or underwriting status
+6. Keep answers concise, readable, and scannable for an agent on a live phone call.
+
+CRITICAL RULES:
+1. Answer ONLY from the provided key points; never invent or assume rules.
+2. Every factual underwriting statement must include a bracket citation [1], [2], etc.
+3. Never treat any single carrier as the default source; focus on a carrier only if the question or scope explicitly names it.
+4. If the conversation has prior history, maintain context and remember what the agent said before.
+5. If key points do NOT directly address the user's specific question, respond exactly: "I cannot verify that criterion in the current carrier guidelines."
+6. If the user asks about exclusions but the chunks only list eligible classes, explicitly state: "The document outlines eligible risks, but I don't see explicit exclusions listed."`;
+
+  const userMessage = `Conversation history:\n${historyContext || 'No prior history.'}\n\nQuestion:\n${question}\n\nIntent:\n${intent}\n\nRetrieval scope:\n${retrievalScope}\n\nRetrieved key points:\n${evidence}\n\nUsing ONLY these key points, provide a concise underwriting-style answer. If relevant details exist, summarize the rules, exclusions, and conditions with citations. If the key points do not actually address the question, say you cannot verify it.`;
+
   let response: Response;
 
   try {
-    response = await fetch('https://api.openai.com/v1/responses', {
+    response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -742,39 +768,29 @@ async function composeAnswer(
       },
       body: JSON.stringify({
         model: process.env.RASHI_CHAT_MODEL ?? 'gpt-4o-mini',
-        input: [
-          {
-            role: 'system',
-            content: [
-              {
-                type: 'input_text',
-                text: 'You are Rashi, an underwriting chatbot assistant for Shield Assurance. Read the provided key points and answer ONLY from those key points. Rules: (1) Respond conversationally, directly, and concisely. (2) Summarize what the documents actually say for this question. (3) Extract underwriting meaning: appetite, eligibility, exclusions, conditions, and decision posture when supported. (4) Every material statement must include bracket citations like [1] or [2]. (5) Do not invent rules or infer beyond the supplied key points. (6) Do not paste long raw excerpts. (7) Never treat any single carrier as the default answer source. Focus on a specific carrier only if the question or retrieval scope explicitly indicates it. (8) If key points do not address the question, reply exactly: "I cannot verify that criterion in the current carrier guidelines."',
-              },
-            ],
-          },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: `Conversation history:\n${historyContext || 'No prior history.'}\n\nQuestion:\n${question}\n\nIntent:\n${intent}\n\nRetrieval scope:\n${retrievalScope}\n\nRetrieved key points:\n${evidence}\n\nUsing ONLY these key points, provide a concise underwriting-style answer. If relevant details exist, summarize the rules, exclusions, and conditions with citations. If not, return the exact fallback sentence.`,
-              },
-            ],
-          },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
         ],
+        temperature: 0.7,
+        max_tokens: 800,
       }),
       signal: AbortSignal.timeout(20000),
     });
-  } catch {
+  } catch (error) {
+    console.error('[Rashi LLM Error]', error);
     return buildFallbackAnswer(question, citations.slice(0, Math.min(3, citations.length)));
   }
 
   if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    console.error('[Rashi LLM HTTP Error]', response.status, errorText);
     return buildFallbackAnswer(question, citations.slice(0, Math.min(3, citations.length)));
   }
 
-  const payload = (await response.json()) as { output_text?: string };
-  return payload.output_text?.trim() || buildFallbackAnswer(question, citations.slice(0, Math.min(3, citations.length)));
+  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const answer = payload.choices?.[0]?.message?.content?.trim();
+  return answer || buildFallbackAnswer(question, citations.slice(0, Math.min(3, citations.length)));
 }
 
 export async function askRashi(input: AskRashiInput): Promise<{
@@ -947,44 +963,42 @@ export async function analyzeRashiDocument(documentId: string, action: RashiAnal
       .join('\n');
     summary = fallbackPoints || '- No actionable underwriting points found in this document.';
   } else {
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: process.env.RASHI_CHAT_MODEL ?? 'gpt-4o-mini',
-        input: [
-          {
-            role: 'system',
-            content: [
-              {
-                type: 'input_text',
-                text: 'You are an insurance underwriting analyst. Return 3-6 short bullet points with high-value decision criteria only. Do not quote long passages or dump raw text.',
-              },
-            ],
-          },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: `Action: ${ACTION_PROMPTS[action]}\n\nDocument: ${document.title}\n\nSource text:\n${backgroundText.slice(0, 16000)}`,
-              },
-            ],
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(20000),
-    });
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: process.env.RASHI_CHAT_MODEL ?? 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an insurance underwriting analyst. Return 3-6 short bullet points with high-value decision criteria only. Do not quote long passages or dump raw text.',
+            },
+            {
+              role: 'user',
+              content: `Action: ${ACTION_PROMPTS[action]}\n\nDocument: ${document.title}\n\nSource text:\n${backgroundText.slice(0, 16000)}`,
+            },
+          ],
+          temperature: 0.6,
+          max_tokens: 600,
+        }),
+        signal: AbortSignal.timeout(20000),
+      });
 
-    if (!response.ok) {
-      throw new Error(`OpenAI analysis failed: ${response.status} ${response.statusText}`);
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        throw new Error(`OpenAI analysis failed: ${response.status} ${errorText}`);
+      }
+
+      const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      summary = payload.choices?.[0]?.message?.content?.trim() || '- No actionable underwriting points returned.';
+    } catch (error) {
+      console.error('[Rashi Document Analysis Error]', error);
+      throw error;
     }
-
-    const payload = (await response.json()) as { output_text?: string };
-    summary = payload.output_text?.trim() || '- No actionable underwriting points returned.';
   }
 
   return {
