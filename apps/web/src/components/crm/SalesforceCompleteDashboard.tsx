@@ -605,8 +605,8 @@ export default function SalesforceCompleteDashboard(): JSX.Element {
 
           <section className="mt-4 rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[#0f2943]">Automation Alerts</h2>
-              <span className="text-xs text-[#6b7d90]">Consent-aware email, SMS, and in-app actions</span>
+              <h2 className="text-sm font-semibold text-[#0f2943]">Operations Log</h2>
+              <span className="text-xs text-[#6b7d90]">Agency-wide automation and service events</span>
             </div>
             {notifications.length === 0 ? <p className="text-sm text-[#6b7d90]">No new alerts.</p> : null}
             <ul className="space-y-2">

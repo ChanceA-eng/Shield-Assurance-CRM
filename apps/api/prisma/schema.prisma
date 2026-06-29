@@ -1,6 +1,5 @@
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -150,4 +149,139 @@ model ChatMessage {
   createdAt DateTime    @default(now())
 
   @@index([sessionId])
+}
+
+model Client {
+  id               String            @id @default(uuid())
+  fullName         String            @map("full_name")
+  phone            String?
+  email            String?
+  address          String?
+  source           String?
+  emailConsent     Boolean?          @map("email_consent")
+  smsConsent       Boolean?          @map("sms_consent")
+  preferredChannel String?           @map("preferred_channel")
+  createdAt        DateTime?         @default(now()) @map("created_at")
+  policies         Policy[]
+  communications   CommunicationLog[]
+  assets           ClientAsset[]
+  clientTasks      ClientTask[]
+  files            ClientFile[]
+  tags             ClientTag[]
+  activities       ClientActivity[]
+
+  @@map("clients")
+}
+
+model Policy {
+  id             String   @id @default(uuid())
+  clientId       String?  @map("client_id")
+  client         Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  insuredName    String   @map("insured_name")
+  phone          String?
+  email          String?
+  address        String?
+  carrier        String
+  lineOfBusiness String   @map("line_of_business")
+  premium        Float?
+  policyNumber   String?  @map("policy_number")
+  effectiveDate  DateTime @map("effective_date")
+  renewalDate    DateTime @map("renewal_date")
+  status         String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([clientId])
+  @@map("policies")
+}
+
+model CommunicationLog {
+  id             String   @id @default(uuid())
+  clientId       String?  @map("client_id")
+  client         Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  channel        String?
+  direction      String?
+  subject        String?
+  body           String?
+  sentAt         DateTime? @default(now()) @map("sent_at")
+  automationType String?  @map("automation_type")
+  metadata       Json?
+
+  @@index([clientId, sentAt])
+  @@map("communication_log")
+}
+
+model ClientAsset {
+  id        String   @id @default(uuid())
+  clientId  String   @map("client_id")
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  title     String
+  assetType String   @default("general") @map("asset_type")
+  value     String?
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
+
+  @@index([clientId])
+  @@map("client_assets")
+}
+
+model ClientTask {
+  id          String   @id @default(uuid())
+  clientId    String   @map("client_id")
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  subject     String
+  description String?
+  dueDate     DateTime? @map("due_date")
+  status      String   @default("open")
+  priority    String   @default("medium")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
+
+  @@index([clientId])
+  @@map("client_tasks")
+}
+
+model ClientFile {
+  id         String   @id @default(uuid())
+  clientId   String   @map("client_id")
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  fileName   String   @map("file_name")
+  fileUrl    String?  @map("file_url")
+  fileType   String?  @map("file_type")
+  fileSize   BigInt?  @map("file_size")
+  status     String   @default("uploaded")
+  metadata   Json?
+  uploadedAt DateTime @default(now()) @map("uploaded_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([clientId])
+  @@map("client_files")
+}
+
+model ClientTag {
+  id        String   @id @default(uuid())
+  clientId  String   @map("client_id")
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tag       String
+  color     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([clientId, tag])
+  @@index([clientId])
+  @@map("client_tags")
+}
+
+model ClientActivity {
+  id           String   @id @default(uuid())
+  clientId     String   @map("client_id")
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  activityType String   @map("activity_type")
+  title        String
+  body         String?
+  metadata     Json?
+  occurredAt   DateTime @default(now()) @map("occurred_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([clientId])
+  @@map("client_activities")
 }

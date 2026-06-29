@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { sendEmail } from '../../../lib/messaging';
+import { appendAgencySignature } from '../../../lib/agency-signature';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
@@ -34,6 +35,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     body?: string;
     automation_type?: string;
     to?: string;
+    attachments?: Array<{ filename?: string; content?: string; type?: string }>;
+    profile_files?: Array<{ id?: string; file_name?: string; file_url?: string }>;
   };
 
   if (!payload.channel || !payload.body || !payload.automation_type) {
@@ -42,6 +45,30 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const subject = payload.subject?.trim() || (payload.channel === 'email' ? 'Message from Shield Assurance CRM' : 'SMS Notification');
   const direction = payload.direction ?? 'outbound';
+
+  const profileFiles = (payload.profile_files ?? [])
+    .map((file) => ({
+      id: file.id?.trim() || '',
+      file_name: file.file_name?.trim() || 'Client file',
+      file_url: file.file_url?.trim() || '',
+    }))
+    .filter((file) => file.file_url);
+
+  const profileLinksBlock = profileFiles.length > 0
+    ? `\n\nAttached client file links:\n${profileFiles.map((item) => `- ${item.file_name}: ${item.file_url}`).join('\n')}`
+    : '';
+
+  const mergedBody = `${payload.body}${profileLinksBlock}`;
+  const style = payload.automation_type?.trim().toLowerCase() === 'manual' ? 'personal' : 'system';
+  const messageBody = direction === 'outbound' ? appendAgencySignature(mergedBody, style) : mergedBody;
+
+  const attachments = (payload.attachments ?? [])
+    .map((attachment) => ({
+      filename: attachment.filename?.trim() || '',
+      content: attachment.content?.trim() || '',
+      type: attachment.type?.trim() || 'application/octet-stream',
+    }))
+    .filter((attachment) => attachment.filename && attachment.content);
 
   if (payload.channel === 'email' && direction === 'outbound') {
     let recipientEmail = payload.to?.trim().toLowerCase() ?? '';
@@ -62,7 +89,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       await sendEmail({
         to: recipientEmail,
         subject,
-        body: payload.body,
+        body: messageBody,
+        attachments,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown email delivery failure';
@@ -78,7 +106,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         channel: payload.channel,
         direction,
         subject,
-        body: payload.body,
+        body: messageBody,
         automation_type: payload.automation_type,
         sent_at: new Date().toISOString(),
       },

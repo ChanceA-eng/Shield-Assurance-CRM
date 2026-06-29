@@ -1,5 +1,6 @@
 import { getSupabaseServerClient } from './supabase-server';
 import { sendEmail } from './messaging';
+import { appendAgencySignature } from './agency-signature';
 
 export type AutomationChannel = 'email' | 'sms' | 'in_app';
 export type AutomationType = 'renewal' | 'claim' | 'endorsement' | 'lead' | 'appointment' | 'certificate';
@@ -142,13 +143,15 @@ export async function queueEvent(input: {
 async function sendEmailIfAllowed(client: ClientPreferences | null, subject: string, body: string, automationType: AutomationType): Promise<void> {
   if (!client?.email || !client.email_consent) return;
 
+  const signedBody = appendAgencySignature(body, 'system');
+
   try {
-    await sendEmail({ to: client.email, subject, body });
+    await sendEmail({ to: client.email, subject, body: signedBody });
     await writeCommunicationLog({
       client_id: client.id,
       channel: 'email',
       subject,
-      body,
+      body: signedBody,
       automation_type: automationType,
     });
   } catch (error) {

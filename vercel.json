@@ -3,5 +3,11 @@
   "installCommand": "corepack pnpm install --frozen-lockfile",
   "buildCommand": "corepack pnpm --filter @crm/web build",
   "devCommand": "corepack pnpm --filter @crm/web dev",
-  "outputDirectory": "apps/web/.next"
+  "outputDirectory": "apps/web/.next",
+  "crons": [
+    {
+      "path": "/api/messages/process-scheduled",
+      "schedule": "* * * * *"
+    }
+  ]
 }

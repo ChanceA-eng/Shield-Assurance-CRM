@@ -2,6 +2,11 @@ interface EmailPayload {
   to: string;
   subject: string;
   body: string;
+  attachments?: Array<{
+    filename: string;
+    content: string;
+    type?: string;
+  }>;
 }
 
 export async function sendEmail(payload: EmailPayload): Promise<void> {
@@ -13,6 +18,13 @@ export async function sendEmail(payload: EmailPayload): Promise<void> {
   }
 
   // ✅ CORRECTED PAYLOAD: SendGrid v3 strictly requires 'subject' at the root level
+  const attachments = (payload.attachments ?? []).map((attachment) => ({
+    content: attachment.content,
+    filename: attachment.filename,
+    type: attachment.type || 'application/octet-stream',
+    disposition: 'attachment',
+  }));
+
   const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
     headers: {
@@ -35,6 +47,7 @@ export async function sendEmail(payload: EmailPayload): Promise<void> {
           value: payload.body.trim() 
         }
       ],
+      ...(attachments.length > 0 ? { attachments } : {}),
     }),
   });
 
