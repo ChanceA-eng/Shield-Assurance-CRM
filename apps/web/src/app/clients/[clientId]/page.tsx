@@ -1108,10 +1108,8 @@ export default function ClientWorkspacePage(): JSX.Element {
     setDraftingAiMessage(false);
   };
 
-  const stageOptions = ['Lead', 'Prospect', 'Quoted', 'Bound', 'Renewal'];
-
   return (
-    <SectionLayout title="Client 360 Workspace">
+    <SectionLayout title="Client">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link href="/clients" className="text-sm font-semibold text-[#0176d3] hover:underline">
@@ -1121,13 +1119,12 @@ export default function ClientWorkspacePage(): JSX.Element {
           <p className="text-sm text-[#3e3e3c]">
             {client?.email || '--'} · {client?.phone || '--'}
           </p>
-          <p className="text-xs text-[#60748a]">Lead source: {client?.source || '--'}</p>
         </div>
         <div className="flex flex-wrap gap-2 text-xs text-[#3e3e3c]">
           <span className="rounded-full bg-[#e3f2ff] px-3 py-1 font-semibold text-[#0a4f8f]">Email {emailCommunicationOn ? 'On' : 'Off'}</span>
           <span className="rounded-full bg-[#ecf8f1] px-3 py-1 font-semibold text-[#1f7a47]">SMS {smsCommunicationOn ? 'On' : 'Off'}</span>
-          <span className="rounded-full bg-[#fff3de] px-3 py-1 font-semibold text-[#8a4d00]">Preferred {client?.preferred_channel || 'email'}</span>
-          <span className="rounded-full bg-[#edf4ff] px-3 py-1 font-semibold text-[#2f5c9f]">Lifecycle {lifecycleStage}</span>
+          <span className="rounded-full bg-[#fff3de] px-3 py-1 font-semibold text-[#8a4d00]">Preferred: {client?.preferred_channel || 'email'}</span>
+          <span className="rounded-full bg-[#edf4ff] px-3 py-1 font-semibold text-[#2f5c9f]">Lifecycle: {lifecycleStage}</span>
           <button
             type="button"
             className="rounded-full bg-[#0f62af] px-3 py-1 font-semibold text-white hover:bg-[#0a4f8f]"
@@ -1145,8 +1142,6 @@ export default function ClientWorkspacePage(): JSX.Element {
         <div className={`relative grid grid-cols-1 gap-4 transition-all duration-300 ${isConversationOpen ? 'xl:pr-[26rem]' : ''}`}>
           <section className="rounded border border-[#dddbda] bg-white shadow-sm">
             <div className="border-b border-[#f3f2f1] px-4 py-4">
-              <h3 className="text-lg font-semibold text-[#080707]">Client Profile</h3>
-              <p className="text-xs text-[#6a6a6a]">All client details, service work, and account context in one place.</p>
               <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
                 <div className="rounded border border-[#e8eef7] bg-[#f8fbff] p-2">
                   <p className="text-[11px] uppercase tracking-[0.16em] text-[#60748a]">Policies</p>
@@ -1170,7 +1165,6 @@ export default function ClientWorkspacePage(): JSX.Element {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <h4 className="text-sm font-semibold text-amber-900">Underwriting Risk Analysis</h4>
-                    <p className="text-xs text-amber-700">Scan client profile and conversation activity for carrier risk indicators.</p>
                   </div>
                   <button
                     type="button"
@@ -1227,25 +1221,6 @@ export default function ClientWorkspacePage(): JSX.Element {
                       <p>Address: {client?.address || '--'}</p>
                       <p>Business type: {leads[0]?.line_of_business || '--'}</p>
                       <p>State: --</p>
-                    </div>
-                  </section>
-
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-4">
-                    <h4 className="text-sm font-semibold text-[#14324f]">Lifecycle Pipeline</h4>
-                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-5">
-                      {stageOptions.map((stage) => {
-                        const active = stage === lifecycleStage;
-                        return (
-                          <div
-                            key={stage}
-                            className={`rounded border px-2 py-2 text-center text-xs font-semibold ${
-                              active ? 'border-[#0176d3] bg-[#e7f2ff] text-[#015ba1]' : 'border-[#e1e8f0] bg-white text-[#60748a]'
-                            }`}
-                          >
-                            {stage}
-                          </div>
-                        );
-                      })}
                     </div>
                   </section>
 

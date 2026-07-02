@@ -43,7 +43,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'channel, body and automation_type are required.' }, { status: 400 });
   }
 
-  const subject = payload.subject?.trim() || (payload.channel === 'email' ? 'Message from Shield Assurance CRM' : 'SMS Notification');
+  const subject = payload.subject?.trim() || (payload.channel === 'email' ? 'Message from Shield Assurance' : 'SMS Notification');
   const direction = payload.direction ?? 'outbound';
 
   const profileFiles = (payload.profile_files ?? [])

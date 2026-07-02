@@ -38,7 +38,8 @@ export async function sendEmail(payload: EmailPayload): Promise<void> {
         }
       ],
       from: { 
-        email: fromEmail.trim().toLowerCase() 
+        email: fromEmail.trim().toLowerCase(),
+        name: 'Shield Assurance'
       },
       subject: payload.subject.trim(), // Mandatory top-level property
       content: [

@@ -36,6 +36,7 @@ type ConvertResponse = {
 
 interface UnderwritingPanelProps {
   accountId: string | null;
+  leadId?: string | null;
   initialCompletenessScore: number;
   initialCarrierMatrix: Record<string, CarrierResult>;
   underwritingFlags: string[];
@@ -43,6 +44,7 @@ interface UnderwritingPanelProps {
 
 export default function UnderwritingPanel({
   accountId,
+  leadId,
   initialCompletenessScore,
   initialCarrierMatrix,
   underwritingFlags,
@@ -92,6 +94,15 @@ export default function UnderwritingPanel({
     setQuote(data.quote ?? null);
     setQuoteHistory(data.quoteHistory ?? []);
     setConvertedClientId(data.convertedClientId ?? null);
+
+    if (leadId) {
+      await fetch(`/api/leads/${leadId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'Quoted' }),
+      }).catch(() => null);
+    }
+
     setIsGenerating(false);
   }
 

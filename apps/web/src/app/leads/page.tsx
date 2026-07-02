@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import SectionLayout from '../../components/crm/SectionLayout';
 import NewLeadModal from './NewLeadModal';
 
@@ -227,7 +228,11 @@ export default function LeadsPage(): JSX.Element {
               <tbody>
                 {leads.map((lead) => (
                   <tr key={lead.id} className="border-t border-[#f3f2f1]">
-                    <td className="px-3 py-2 font-semibold text-[#0176d3]">{lead.full_name}</td>
+                    <td className="px-3 py-2 font-semibold text-[#0176d3]">
+                      <Link href={`/clients/workspace?lead=${lead.id}`} className="hover:underline">
+                        {lead.full_name}
+                      </Link>
+                    </td>
                     <td className="px-3 py-2">{lead.phone || '--'}</td>
                     <td className="px-3 py-2">{lead.email || '--'}</td>
                     <td className="px-3 py-2">{lead.line_of_business}</td>

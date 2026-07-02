@@ -62,6 +62,46 @@ function readPolicyNumber(payload: NewPolicyPayload): string {
   return '';
 }
 
+async function closeMatchingLeadOnPolicyIssue(input: {
+  supabase: ReturnType<typeof getSupabaseServerClient>;
+  insuredName: string;
+  email: string;
+  phone: string;
+}): Promise<void> {
+  const { supabase, insuredName, email, phone } = input;
+  if (!supabase) return;
+
+  const statuses = ['new', 'working', 'quoted'];
+
+  const tryCloseBy = async (column: 'email' | 'phone' | 'full_name', value: string): Promise<boolean> => {
+    if (!value) return false;
+
+    const lookup = await supabase
+      .from('leads')
+      .select('id')
+      .in('status', statuses)
+      .eq(column, value)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle<{ id: string }>();
+
+    if (lookup.error || !lookup.data?.id) {
+      return false;
+    }
+
+    const update = await supabase.from('leads').update({ status: 'closed' }).eq('id', lookup.data.id);
+    return !update.error;
+  };
+
+  const closedByEmail = await tryCloseBy('email', email);
+  if (closedByEmail) return;
+
+  const closedByPhone = await tryCloseBy('phone', phone);
+  if (closedByPhone) return;
+
+  await tryCloseBy('full_name', insuredName);
+}
+
 function buildPolicyUpdate(payload: NewPolicyPayload): Record<string, string | number | null> {
   const updates: Record<string, string | number | null> = {};
   if (typeof payload.client_id === 'string') updates.client_id = normalizeText(payload.client_id) || null;
@@ -302,6 +342,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     lineOfBusiness: insertResult.data.line_of_business,
     premium: Number(insertResult.data.premium ?? 0),
     renewalDate: insertResult.data.renewal_date,
+  });
+
+  await closeMatchingLeadOnPolicyIssue({
+    supabase,
+    insuredName,
+    email,
+    phone,
   });
 
   // ✅ EMAIL SAFEGUARD: Direct Vercel execution with valid address tracking checks

@@ -104,7 +104,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         try {
           await sendEmail({
             to: recipientEmail,
-            subject: message.subject?.trim() || 'Message from Shield Assurance CRM',
+            subject: message.subject?.trim() || 'Message from Shield Assurance',
             body: signedBody,
           });
         } catch (error) {

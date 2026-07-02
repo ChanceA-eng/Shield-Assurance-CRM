@@ -9,6 +9,7 @@ import UnderwritingPanel from './UnderwritingPanel';
 export default function CommercialIntakeClient(): JSX.Element {
   const searchParams = useSearchParams();
   const accountId = searchParams.get('id');
+  const leadId = searchParams.get('lead');
   const [insights, setInsights] = useState<IntakeInsights | null>(null);
 
   return (
@@ -21,6 +22,7 @@ export default function CommercialIntakeClient(): JSX.Element {
         </div>
         <UnderwritingPanel
           accountId={accountId}
+          leadId={leadId}
           initialCompletenessScore={insights?.completenessScore ?? 0}
           initialCarrierMatrix={insights?.carrierMatrix ?? {}}
           underwritingFlags={insights?.underwritingFlags ?? []}
