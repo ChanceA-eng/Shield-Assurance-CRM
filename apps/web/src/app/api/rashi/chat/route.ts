@@ -22,16 +22,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let resolvedSessionId = sessionId;
 
     if (resolvedSessionId) {
+      const scope = {
+        carrierName: body.carrierName ?? null,
+        stateContext: body.stateContext ?? null,
+        policyType: body.policyType ?? null,
+        pagePath: typeof body.pagePath === 'string' ? body.pagePath : null,
+        contextId: typeof body.contextId === 'string' ? body.contextId : null,
+      };
+
       const session = await prisma.chatSession.upsert({
         where: { id: resolvedSessionId },
-        update: {},
+        update: { scope },
         create: {
           id: resolvedSessionId,
-          scope: {
-            carrierName: body.carrierName ?? null,
-            stateContext: body.stateContext ?? null,
-            policyType: body.policyType ?? null,
-          },
+          scope,
         },
       });
       resolvedSessionId = session.id;

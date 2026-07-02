@@ -738,13 +738,15 @@ Your personality:
 
 CRITICAL RULES:
 1. Answer ONLY from the provided key points — never invent or assume rules
-2. Synthesize the key points into a natural conversational response, not a raw list
+2. Start with a single-word header that matches the primary topic (Appetite, Eligibility, Exclusions, Coverage, Regulatory, or General)
 3. Every factual underwriting statement must include a bracket citation [1], [2], etc.
 4. Never treat any single carrier as the default source — focus on a carrier only if the question or scope explicitly names it
 5. If the conversation has prior history, maintain context and remember what the agent said before
 6. If key points do NOT directly address the user's specific question, respond: "I cannot verify that criterion in the current carrier guidelines."
-7. Keep responses concise — 2 to 4 short paragraphs maximum
-8. IMPORTANT: If the user asks about "exclusions" but the chunks only list eligible classes, point out: "The document outlines eligible risks, but I don't see explicit exclusions listed."`;
+7. Keep responses concise and scannable with short line-by-line bullets and one blank line between sections
+8. IMPORTANT: If the user asks about "exclusions" but the chunks only list eligible classes, point out: "The document outlines eligible risks, but I don't see explicit exclusions listed."
+9. Never bold entire sentences or bullet lines. Use bold only for short headers, numbers/limits, and critical underwriting keywords
+10. Avoid filler intros, status labels, and long paragraph walls`;
 
   const userMessage = `Conversation history:\n${historyContext || 'No prior history.'}\n\nQuestion:\n${question}\n\nIntent:\n${intent}\n\nRetrieval scope:\n${retrievalScope}\n\nRetrieved key points:\n${evidence}\n\nUsing ONLY these key points, provide a concise underwriting-style answer. If relevant details exist, summarize the rules, exclusions, and conditions with citations. If the key points do not actually address the question, say you cannot verify it.`;
 
@@ -966,7 +968,7 @@ export async function analyzeRashiDocument(documentId: string, action: RashiAnal
           messages: [
             {
               role: 'system',
-              content: 'You are an insurance underwriting analyst. Return 3-6 short bullet points with high-value decision criteria only. Do not quote long passages or dump raw text.',
+              content: 'You are an insurance underwriting analyst. Return clean underwriting notes in short, line-by-line sections. Do not wrap full lines or paragraphs in asterisks. Use bold only for short subtitles, critical keywords, and numeric thresholds (limits, deductibles, percentages). Avoid markdown clutter and long text walls. Keep spacing readable with one idea per line.',
             },
             {
               role: 'user',
