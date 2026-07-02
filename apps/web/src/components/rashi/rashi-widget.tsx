@@ -18,6 +18,11 @@ function generateSessionId(): string {
 
 export default function RashiWidget(): JSX.Element {
   const pathname = usePathname();
+
+  if (pathname === '/login') {
+    return <></>;
+  }
+
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
