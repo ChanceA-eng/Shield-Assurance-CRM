@@ -77,7 +77,7 @@ export default function RashiKnowledgeCenter(): JSX.Element {
           href={'/rashi/knowledge' as Route}
           className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-gray-800"
         >
-          Open Ingestion Manager
+          Open Knowledge Manager & Sheets
         </Link>
       </section>
 

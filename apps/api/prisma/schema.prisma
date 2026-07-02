@@ -80,6 +80,20 @@ model KnowledgeDocument {
   @@index([status])
 }
 
+model CustomSheet {
+  id        String   @id @default(uuid())
+  title     String
+  category  String   @default("General")
+  columns   Json
+  rows      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@index([updatedAt])
+  @@map("custom_sheets")
+}
+
 model DocumentInsight {
   id              String            @id @default(uuid())
   documentId      String

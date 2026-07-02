@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import type { Route } from 'next';
 import React, { useEffect, useMemo, useState } from 'react';
+import RashiSheetWorkspace from './rashi-sheet-workspace';
 
 interface RashiDocument {
   id: string;
@@ -559,6 +560,8 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
           </div>
         </div>
       </section>
+
+      <RashiSheetWorkspace />
 
       <section className="rounded-2xl border border-[#dddbda] bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between">
