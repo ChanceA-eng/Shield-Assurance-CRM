@@ -1,12 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 
-function firstDayOfMonthISO(): string {
-  const d = new Date();
-  const first = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-  return first.toISOString().slice(0, 10);
-}
-
 function thirtyDaysFromNowISO(): string {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() + 30);
@@ -30,14 +24,14 @@ export async function GET(): Promise<NextResponse> {
     }
 
     const [
-      policiesMtd,
+      policyPremiums,
       activeLeadsCount,
       totalLeadsCount,
       convertedLeadsCount,
       renewalsCount,
       openClaimsCount,
     ] = await Promise.all([
-      supabase.from('policies').select('premium').gte('effective_date', firstDayOfMonthISO()),
+      supabase.from('policies').select('premium'),
       supabase.from('leads').select('id', { count: 'exact', head: true }).in('status', ['new', 'working', 'quoted']),
       supabase.from('leads').select('id', { count: 'exact', head: true }),
       supabase.from('leads').select('id', { count: 'exact', head: true }).eq('status', 'closed'),
@@ -49,19 +43,21 @@ export async function GET(): Promise<NextResponse> {
       supabase.from('claims').select('id', { count: 'exact', head: true }).eq('status', 'open'),
     ]);
 
-    if (policiesMtd.error) throw policiesMtd.error;
+    if (policyPremiums.error) throw policyPremiums.error;
     if (activeLeadsCount.error) throw activeLeadsCount.error;
     if (totalLeadsCount.error) throw totalLeadsCount.error;
     if (convertedLeadsCount.error) throw convertedLeadsCount.error;
     if (renewalsCount.error) throw renewalsCount.error;
     if (openClaimsCount.error) throw openClaimsCount.error;
 
-    const mtdPremium = (policiesMtd.data ?? []).reduce((sum, row) => sum + toNumber(row.premium), 0);
+    const totalPremium = (policyPremiums.data ?? []).reduce((sum, row) => sum + toNumber(row.premium), 0);
     const totalLeads = totalLeadsCount.count ?? 0;
     const convertedLeads = convertedLeadsCount.count ?? 0;
 
     return NextResponse.json({
-      mtd_written_premium: Math.round(mtdPremium),
+      total_written_premium: Math.round(totalPremium),
+      totalPremium: Math.round(totalPremium),
+      premium: Math.round(totalPremium),
       active_leads: activeLeadsCount.count ?? 0,
       lead_conversion_rate: totalLeads > 0 ? convertedLeads / totalLeads : 0,
       renewals_30_days: renewalsCount.count ?? 0,

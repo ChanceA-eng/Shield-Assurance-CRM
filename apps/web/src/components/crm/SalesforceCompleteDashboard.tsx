@@ -5,7 +5,9 @@ import React, { useEffect, useState } from 'react';
 import SidebarNav from './SidebarNav';
 
 interface MetricsResponse {
-  mtd_written_premium: number;
+  total_written_premium: number;
+  totalPremium?: number;
+  premium?: number;
   active_leads: number;
   lead_conversion_rate: number;
   renewals_30_days: number;
@@ -211,6 +213,11 @@ export default function SalesforceCompleteDashboard(): JSX.Element {
   }).length;
 
   const pendingCertificates = certificates.filter((cert) => cert.status.toLowerCase() === 'pending').length;
+  const totalPremiumValue =
+    metrics?.total_written_premium ??
+    metrics?.totalPremium ??
+    metrics?.premium ??
+    0;
 
   const today = todayISO();
 
@@ -235,8 +242,8 @@ export default function SalesforceCompleteDashboard(): JSX.Element {
 
   const kpiCards: KpiCard[] = [
     {
-      label: 'MTD Premium',
-      value: metrics ? `$${metrics.mtd_written_premium.toLocaleString()}` : '--',
+      label: 'Total Premium',
+      value: metrics ? `$${totalPremiumValue.toLocaleString()}` : '--',
       trend: '+8.2%',
       trendUp: true,
       href: '/policies',

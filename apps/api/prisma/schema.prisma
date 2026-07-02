@@ -1,6 +1,7 @@
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 generator client {
@@ -150,4 +151,218 @@ model ChatMessage {
   createdAt DateTime    @default(now())
 
   @@index([sessionId])
+}
+
+model Client {
+  id               String            @id @default(uuid())
+  fullName         String            @map("full_name")
+  phone            String?
+  email            String?
+  address          String?
+  source           String?
+  emailConsent     Boolean?          @map("email_consent")
+  smsConsent       Boolean?          @map("sms_consent")
+  preferredChannel String?           @map("preferred_channel")
+  createdAt        DateTime?         @default(now()) @map("created_at")
+  policies         Policy[]
+  communications   CommunicationLog[]
+  assets           ClientAsset[]
+  clientTasks      ClientTask[]
+  files            ClientFile[]
+  tags             ClientTag[]
+  activities       ClientActivity[]
+
+  @@map("clients")
+}
+
+model Policy {
+  id             String   @id @default(uuid())
+  clientId       String?  @map("client_id")
+  client         Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  insuredName    String   @map("insured_name")
+  phone          String?
+  email          String?
+  address        String?
+  carrier        String
+  lineOfBusiness String   @map("line_of_business")
+  premium        Float?
+  policyNumber   String?  @map("policy_number")
+  effectiveDate  DateTime @map("effective_date")
+  renewalDate    DateTime @map("renewal_date")
+  status         String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([clientId])
+  @@map("policies")
+}
+
+model CommunicationLog {
+  id             String   @id @default(uuid())
+  clientId       String?  @map("client_id")
+  client         Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  channel        String?
+  direction      String?
+  subject        String?
+  body           String?
+  sentAt         DateTime? @default(now()) @map("sent_at")
+  automationType String?  @map("automation_type")
+  metadata       Json?
+
+  @@index([clientId, sentAt])
+  @@map("communication_log")
+}
+
+model ClientAsset {
+  id        String   @id @default(uuid())
+  clientId  String   @map("client_id")
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  title     String
+  assetType String   @default("general") @map("asset_type")
+  value     String?
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
+
+  @@index([clientId])
+  @@map("client_assets")
+}
+
+model ClientTask {
+  id          String   @id @default(uuid())
+  clientId    String   @map("client_id")
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  subject     String
+  description String?
+  dueDate     DateTime? @map("due_date")
+  status      String   @default("open")
+  priority    String   @default("medium")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
+
+  @@index([clientId])
+  @@map("client_tasks")
+}
+
+model ClientFile {
+  id         String   @id @default(uuid())
+  clientId   String   @map("client_id")
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  fileName   String   @map("file_name")
+  fileUrl    String?  @map("file_url")
+  fileType   String?  @map("file_type")
+  fileSize   BigInt?  @map("file_size")
+  status     String   @default("uploaded")
+  metadata   Json?
+  uploadedAt DateTime @default(now()) @map("uploaded_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([clientId])
+  @@map("client_files")
+}
+
+model ClientTag {
+  id        String   @id @default(uuid())
+  clientId  String   @map("client_id")
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tag       String
+  color     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([clientId, tag])
+  @@index([clientId])
+  @@map("client_tags")
+}
+
+model ClientActivity {
+  id           String   @id @default(uuid())
+  clientId     String   @map("client_id")
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  activityType String   @map("activity_type")
+  title        String
+  body         String?
+  metadata     Json?
+  occurredAt   DateTime @default(now()) @map("occurred_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([clientId])
+  @@map("client_activities")
+}
+
+model CommercialAccount {
+  id                    String    @id @default(uuid())
+  legalName             String    @map("legal_name")
+  dbaName               String?   @map("dba_name")
+  entityType            String    @map("entity_type")
+  fein                  String    @unique
+  physicalAddress       String    @map("physical_address")
+  grossRevenue          Decimal   @map("gross_revenue") @db.Decimal(15, 2)
+  yearsExperience       Int       @map("years_experience")
+  hasEmployees          Boolean   @default(false) @map("has_employees")
+  hasSubcontractors     Boolean   @default(false) @map("has_subcontractors")
+  hasProperty           Boolean   @default(false) @map("has_property")
+  hasAutos              Boolean   @default(false) @map("has_autos")
+  industryGroup         String    @map("industry_group")
+  naicsCode             String    @map("naics_code")
+  riskProfileMetadata   Json?     @map("risk_profile_metadata")
+  riskSnapshot          Json?     @map("risk_snapshot")
+  riskCompletenessScore Int?      @map("risk_completeness_score")
+  carrierMatrix         Json?     @map("carrier_matrix")
+  consentIp             String    @map("consent_ip")
+  consentTimestamp      DateTime  @default(now()) @map("consent_timestamp")
+  convertedClientId     String?   @map("converted_client_id")
+  convertedAt           DateTime? @map("converted_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  quotes                CommercialQuote[]
+
+  @@index([industryGroup])
+  @@index([convertedClientId])
+  @@index([createdAt])
+  @@map("commercial_accounts")
+}
+
+model CommercialQuote {
+  id        String            @id @default(uuid())
+  accountId String            @map("account_id")
+  account   CommercialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  carrier   String
+  snapshot  Json
+  status    String
+  createdAt DateTime          @default(now()) @map("created_at")
+
+  @@index([accountId])
+  @@index([createdAt])
+  @@map("commercial_quotes")
+}
+
+model PersonalAccount {
+  id                      String   @id @default(uuid())
+  firstName               String   @map("first_name")
+  lastName                String   @map("last_name")
+  dob                     DateTime @db.Date
+  primaryPhone            String   @map("primary_phone")
+  primaryEmail            String   @map("primary_email")
+  streetAddress           String   @map("street_address")
+  city                    String
+  state                   String   @default("AZ")
+  zipCode                 String   @map("zip_code")
+  currentCarrier          String?  @map("current_carrier")
+  currentPolicyExpiration DateTime? @map("current_policy_expiration") @db.Date
+  creditScoreTier         String?  @map("credit_score_tier")
+  rawCarrierData          Json?    @map("raw_carrier_data")
+  autoSnapshot            Json?    @map("auto_snapshot")
+  propertySnapshot        Json?    @map("property_snapshot")
+  quoteModules            Json?    @map("quote_modules")
+  consentIp               String   @map("consent_ip")
+  consentTimestamp        DateTime @default(now()) @map("consent_timestamp")
+  convertedClientId       String?  @map("converted_client_id")
+  convertedAt             DateTime? @map("converted_at")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  @@index([lastName, firstName])
+  @@index([convertedClientId])
+  @@index([currentPolicyExpiration])
+  @@index([createdAt])
+  @@map("personal_accounts")
 }

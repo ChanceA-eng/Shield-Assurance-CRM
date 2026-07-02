@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { writeCommunicationLog, writeNotification } from '../../../lib/automation';
+import { schedulePolicyRenewalLifecycle } from '../../../lib/automation';
 import { sendEmail } from '../../../lib/messaging';
 
 interface NewPolicyPayload {
@@ -291,6 +292,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     client_id: insertResult.data.client_id,
     type: 'renewal',
     message: `Policy issued for ${insertResult.data.insured_name}. Renewal automation will monitor ${insertResult.data.renewal_date}.`,
+  });
+
+  await schedulePolicyRenewalLifecycle({
+    policyId: insertResult.data.id,
+    clientId,
+    insuredName: insertResult.data.insured_name,
+    carrier: insertResult.data.carrier,
+    lineOfBusiness: insertResult.data.line_of_business,
+    premium: Number(insertResult.data.premium ?? 0),
+    renewalDate: insertResult.data.renewal_date,
   });
 
   // ✅ EMAIL SAFEGUARD: Direct Vercel execution with valid address tracking checks

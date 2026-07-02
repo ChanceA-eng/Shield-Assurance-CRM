@@ -535,6 +535,16 @@ export default function ClientWorkspacePage(): JSX.Element {
     [assets],
   );
 
+  const commercialSubmissionAssets = useMemo(
+    () => assets.filter((item) => normalize(item.asset_type) === 'commercial_intake' || normalize(item.asset_type) === 'commercial_quote'),
+    [assets],
+  );
+
+  const personalSubmissionAssets = useMemo(
+    () => assets.filter((item) => normalize(item.asset_type) === 'personal_submission'),
+    [assets],
+  );
+
   const preferredChannel = normalize(client?.preferred_channel);
   const emailCommunicationOn = Boolean(client?.email_consent) || preferredChannel === 'email' || preferredChannel === 'both';
   const smsCommunicationOn = Boolean(client?.sms_consent) || preferredChannel === 'sms' || preferredChannel === 'both';
@@ -1237,6 +1247,46 @@ export default function ClientWorkspacePage(): JSX.Element {
                         );
                       })}
                     </div>
+                  </section>
+
+                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-4">
+                    <h4 className="text-sm font-semibold text-[#14324f]">Submission Snapshot</h4>
+
+                    {commercialSubmissionAssets.length === 0 && personalSubmissionAssets.length === 0 ? (
+                      <p className="mt-2 text-sm text-[#6a6a6a]">No linked submission data yet.</p>
+                    ) : null}
+
+                    {commercialSubmissionAssets.map((asset) => {
+                      const metadata = (asset.metadata ?? {}) as Record<string, unknown>;
+                      return (
+                        <article key={asset.id} className="mt-3 rounded border border-[#d8e3f0] bg-white p-3">
+                          <p className="text-sm font-semibold text-[#14324f]">Commercial Submission</p>
+                          <p className="text-xs text-[#60748a]">{asset.title}</p>
+                          <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-[#425468] md:grid-cols-2">
+                            <p>Industry: {String(metadata.industry_group ?? '--')}</p>
+                            <p>NAICS: {String(metadata.naics_code ?? '--')}</p>
+                            <p>FEIN: {String(metadata.fein ?? '--')}</p>
+                            <p>Quote Status: {String(metadata.quote_status ?? '--')}</p>
+                          </div>
+                        </article>
+                      );
+                    })}
+
+                    {personalSubmissionAssets.map((asset) => {
+                      const metadata = (asset.metadata ?? {}) as Record<string, unknown>;
+                      return (
+                        <article key={asset.id} className="mt-3 rounded border border-[#d8e3f0] bg-white p-3">
+                          <p className="text-sm font-semibold text-[#14324f]">Personal Submission</p>
+                          <p className="text-xs text-[#60748a]">{asset.title}</p>
+                          <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-[#425468] md:grid-cols-2">
+                            <p>Current Carrier: {String(metadata.current_carrier ?? '--')}</p>
+                            <p>Policy Expiration: {String(metadata.current_policy_expiration ?? '--')}</p>
+                            <p>DOB: {String(metadata.dob ?? '--')}</p>
+                            <p>Submission Id: {String(metadata.personal_account_id ?? '--')}</p>
+                          </div>
+                        </article>
+                      );
+                    })}
                   </section>
                 </div>
               ) : null}

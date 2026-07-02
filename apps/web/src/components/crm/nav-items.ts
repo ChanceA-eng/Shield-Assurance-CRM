@@ -17,6 +17,8 @@ export const navItems: NavItem[] = [
   { label: 'Scheduler', icon: 'calendar-days', path: '/scheduler', group: 'Core' },
 
   { label: 'Renewals', icon: 'refresh-cw', path: '/renewals', group: 'Insurance Ops' },
+  { label: 'Commercial', icon: 'clipboard', path: '/commercial/queue' as Route, group: 'Insurance Ops' },
+  { label: 'Personal', icon: 'user', path: '/personal' as Route, group: 'Insurance Ops' },
   { label: 'Claims', icon: 'alert-triangle', path: '/claims', group: 'Insurance Ops' },
   { label: 'Endorsements', icon: 'edit', path: '/endorsements', group: 'Insurance Ops' },
   { label: 'Certificates', icon: 'award', path: '/certificates', group: 'Insurance Ops' },

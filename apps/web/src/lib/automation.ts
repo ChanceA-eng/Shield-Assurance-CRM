@@ -27,6 +27,12 @@ function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function daysBeforeISO(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
 function isMissingColumnError(message: string | undefined): boolean {
   if (!message) return false;
   const normalized = message.toLowerCase();
@@ -140,6 +146,61 @@ export async function queueEvent(input: {
   ]);
 }
 
+export async function schedulePolicyRenewalLifecycle(input: {
+  policyId: string;
+  clientId: string;
+  insuredName: string;
+  carrier: string;
+  lineOfBusiness: string;
+  premium: number;
+  renewalDate: string;
+}): Promise<void> {
+  const renewalTaskDate = daysBeforeISO(input.renewalDate, 45);
+
+  await queueInternalAction({
+    clientId: input.clientId,
+    type: 'renewal',
+    title: `Review renewal options for ${input.insuredName}`,
+    dueDate: renewalTaskDate,
+    relatedType: 'policy',
+    relatedId: input.policyId,
+  });
+
+  await safeInsert('tasks', [
+    {
+      subject: `Renewal pipeline initialized for ${input.insuredName}`,
+      description: 'Stage: Renewal Pending',
+      due_date: renewalTaskDate,
+      status: 'open',
+      priority: 'medium',
+      related_type: 'renewal_pipeline',
+      related_id: input.policyId,
+    },
+  ]);
+
+  await writeNotification({
+    client_id: input.clientId,
+    type: 'renewal',
+    message: `Renewal approaching for ${input.insuredName} - expires on ${input.renewalDate}.`,
+  });
+
+  await safeInsert('client_assets', [
+    {
+      client_id: input.clientId,
+      title: `Renewal Insight - ${input.insuredName}`,
+      asset_type: 'renewal_insight',
+      value: `${input.carrier} | ${input.lineOfBusiness}`,
+      metadata: {
+        policy_id: input.policyId,
+        current_premium: input.premium,
+        carrier: input.carrier,
+        renewal_stage: 'Renewal Pending',
+        suggested_upsell_lines: ['Workers Comp', 'Commercial Auto', 'Umbrella'],
+      },
+    },
+  ]);
+}
+
 async function sendEmailIfAllowed(client: ClientPreferences | null, subject: string, body: string, automationType: AutomationType): Promise<void> {
   if (!client?.email || !client.email_consent) return;
 
@@ -179,7 +240,7 @@ export async function runRenewalAutomation(): Promise<{ processed: number }> {
   const supabase = getSupabaseServerClient();
   if (!supabase) return { processed: 0 };
 
-  const reminderOffsets = [30, 15, 3, 0] as const;
+  const reminderOffsets = [45, 30, 15, 3, 0] as const;
   let processed = 0;
 
   for (const daysBeforeRenewal of reminderOffsets) {

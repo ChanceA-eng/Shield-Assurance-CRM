@@ -5,15 +5,24 @@ function buildPrismaDatabaseUrl(): string | undefined {
   const rawUrl = process.env.DATABASE_URL;
   if (!rawUrl) return undefined;
 
-  const usesSupabasePooler = rawUrl.includes('pooler.supabase.com') || rawUrl.includes(':6543');
-  const hasPgbouncerFlag = /[?&]pgbouncer=true(?:&|$)/i.test(rawUrl);
+  const url = new URL(rawUrl);
+  const isDirectSupabaseHost = url.hostname.endsWith('.supabase.co') && url.port === '5432';
+  const usesSupabasePooler = url.hostname.includes('pooler.supabase.com') || url.port === '6543';
 
-  if (!usesSupabasePooler || hasPgbouncerFlag) {
+  if (isDirectSupabaseHost) {
+    url.port = '6543';
+  }
+
+  if (!usesSupabasePooler && !isDirectSupabaseHost) {
     return rawUrl;
   }
 
-  const separator = rawUrl.includes('?') ? '&' : '?';
-  return `${rawUrl}${separator}pgbouncer=true&connection_limit=1`;
+  url.searchParams.set('pgbouncer', 'true');
+  if (!url.searchParams.has('connection_limit')) {
+    url.searchParams.set('connection_limit', '1');
+  }
+
+  return url.toString();
 }
 
 @Injectable()

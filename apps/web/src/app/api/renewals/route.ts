@@ -13,6 +13,19 @@ function daysFromNowISO(days: number): string {
   return isoDate(date);
 }
 
+function normalizePremium(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
+}
+
 async function getWindowCount(window: RenewalWindow): Promise<number> {
   const supabase = getSupabaseServerClient();
   if (!supabase) return 0;
@@ -67,6 +80,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: error.message }, { status: 500 });
   }
 
+  const items = (data ?? []).map((policy) => ({
+    ...policy,
+    premium: normalizePremium(policy.premium),
+  }));
+
   return NextResponse.json(
     {
       window,
@@ -76,7 +94,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         '90': count90,
         overdue: countOverdue,
       },
-      items: data ?? [],
+      items,
     },
     { status: 200 },
   );
