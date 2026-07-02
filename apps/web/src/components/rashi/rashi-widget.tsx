@@ -130,7 +130,7 @@ export default function RashiWidget(): JSX.Element {
                       p: ({ children }) => <p className="my-1">{children}</p>,
                       ul: ({ children }) => <ul className="list-disc space-y-1 pl-4">{children}</ul>,
                       li: ({ children }) => <li className="my-1">{children}</li>,
-                      strong: ({ children }) => <strong className="rounded bg-yellow-50 px-1 font-bold text-[#0b2545]">{children}</strong>,
+                      strong: ({ children }) => <strong className="rounded bg-blue-50 px-1 font-bold text-[#0b2545]">{children}</strong>,
                     }}
                   >
                     {message.content}

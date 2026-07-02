@@ -672,18 +672,19 @@ function selectDiverseInsights(rows: QueryRow[], topK: number): QueryRow[] {
 
 function buildFallbackAnswer(question: string, citations: QueryRow[]): string {
   if (citations.length === 0) {
-    return `The provided key points do not address this question: "${question}".`;
+    return `General\n\n- I cannot verify that criterion in the current carrier guidelines.`;
   }
 
+  const primaryTopic = citations[0]?.topic?.trim() || 'General';
   const points = citations
-    .slice(0, 3)
-    .map((citation, index) => {
+    .slice(0, 4)
+    .map((citation) => {
       const snippet = citation.content.replace(/\s+/g, ' ').trim().slice(0, 170);
-      return `- [${index + 1}] ${citation.title}: ${snippet}${snippet.length >= 170 ? '...' : ''}`;
+      return `- **${citation.title}**: ${snippet}${snippet.length >= 170 ? '...' : ''}`;
     })
-    .join('\n');
+    .join('\n\n');
 
-  return `Based on retrieved key points, here are the closest matches for "${question}":\n${points}\n\nThe provided key points may not fully answer this question.`;
+  return `${primaryTopic}\n\n${points}`;
 }
 
 async function composeAnswer(
@@ -739,16 +740,17 @@ Your personality:
 CRITICAL RULES:
 1. Answer ONLY from the provided key points — never invent or assume rules
 2. Start with a single-word header that matches the primary topic (Appetite, Eligibility, Exclusions, Coverage, Regulatory, or General)
-3. Every factual underwriting statement must include a bracket citation [1], [2], etc.
+3. Do NOT output bracket citations like [1] or [2], and do NOT include conversational intros like "Based on retrieved key points"
 4. Never treat any single carrier as the default source — focus on a carrier only if the question or scope explicitly names it
 5. If the conversation has prior history, maintain context and remember what the agent said before
 6. If key points do NOT directly address the user's specific question, respond: "I cannot verify that criterion in the current carrier guidelines."
 7. Keep responses concise and scannable with short line-by-line bullets and one blank line between sections
 8. IMPORTANT: If the user asks about "exclusions" but the chunks only list eligible classes, point out: "The document outlines eligible risks, but I don't see explicit exclusions listed."
 9. Never bold entire sentences or bullet lines. Use bold only for short headers, numbers/limits, and critical underwriting keywords
-10. Avoid filler intros, status labels, and long paragraph walls`;
+10. Avoid filler intros, status labels, and long paragraph walls
+11. Prefer direct bullet answers over paragraphs, and keep each bullet to a single core idea`;
 
-  const userMessage = `Conversation history:\n${historyContext || 'No prior history.'}\n\nQuestion:\n${question}\n\nIntent:\n${intent}\n\nRetrieval scope:\n${retrievalScope}\n\nRetrieved key points:\n${evidence}\n\nUsing ONLY these key points, provide a concise underwriting-style answer. If relevant details exist, summarize the rules, exclusions, and conditions with citations. If the key points do not actually address the question, say you cannot verify it.`;
+  const userMessage = `Conversation history:\n${historyContext || 'No prior history.'}\n\nQuestion:\n${question}\n\nIntent:\n${intent}\n\nRetrieval scope:\n${retrievalScope}\n\nRetrieved key points:\n${evidence}\n\nUsing ONLY these key points, provide a concise underwriting-style answer. Start with the single-word topic header, then use short bullets with blank lines between sections. Do not use bracket citations. If the key points do not actually address the question, say you cannot verify it.`;
 
   let response: Response;
 
