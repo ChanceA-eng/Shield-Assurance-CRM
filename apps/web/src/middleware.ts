@@ -31,15 +31,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   const pathname = request.nextUrl.pathname;
   const publicRoute = isPublicRoute(pathname);
 
-  if (publicRoute) {
-    request.cookies.set('shield-public-route', '1');
-  } else {
-    request.cookies.delete('shield-public-route');
-  }
-
-  let response = NextResponse.next({
-    request,
-  });
+  let response = NextResponse.next();
 
   const { url, anonKey } = getSupabaseAuthEnv();
   const supabase = createServerClient(url, anonKey, {
@@ -48,14 +40,6 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
         return request.cookies.getAll();
       },
       setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value }) => {
-          request.cookies.set(name, value);
-        });
-
-        response = NextResponse.next({
-          request,
-        });
-
         cookiesToSet.forEach(({ name, value, options }) => {
           response.cookies.set(name, value, options);
         });
