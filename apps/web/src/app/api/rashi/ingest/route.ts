@@ -1,32 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractTextFromUpload, ingestRashiDocument } from '../../../../lib/rashi-server';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { uploadRashiSourceFile } from '../../../../lib/rashi-storage';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
-
-function sanitizeFileName(fileName: string): string {
-  return fileName
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-}
-
-async function saveUploadToPublic(file: File): Promise<string> {
-  const uploadsDir = path.join(process.cwd(), 'public', 'uploads', 'rashi');
-  await mkdir(uploadsDir, { recursive: true });
-
-  const baseName = sanitizeFileName(file.name || 'asset-upload');
-  const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${baseName || 'asset-upload'}`;
-  const absolutePath = path.join(uploadsDir, uniqueName);
-
-  const buffer = Buffer.from(await file.arrayBuffer());
-  await writeFile(absolutePath, buffer);
-
-  return `/uploads/rashi/${uniqueName}`;
-}
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
@@ -39,7 +16,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const rawTextField = formData.get('rawText');
       const extractedText = file instanceof File ? await extractTextFromUpload(file) : '';
       const rawText = (typeof rawTextField === 'string' ? rawTextField : '') || extractedText;
-      const generatedSourceUrl = file instanceof File ? await saveUploadToPublic(file) : undefined;
+      const generatedSourceUrl = file instanceof File ? (await uploadRashiSourceFile(file, 'documents')).publicUrl : undefined;
       const providedSourceUrl = String(formData.get('sourceUrl') ?? '') || undefined;
 
       const payload = await ingestRashiDocument({

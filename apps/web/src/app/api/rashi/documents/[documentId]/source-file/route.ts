@@ -1,32 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import { prisma } from '../../../../../../lib/prisma';
+import { uploadRashiSourceFile } from '../../../../../../lib/rashi-storage';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
-
-function sanitizeFileName(fileName: string): string {
-  return fileName
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-}
-
-async function saveUploadToPublic(file: File): Promise<string> {
-  const uploadsDir = path.join(process.cwd(), 'public', 'uploads', 'rashi');
-  await mkdir(uploadsDir, { recursive: true });
-
-  const baseName = sanitizeFileName(file.name || 'asset-upload');
-  const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${baseName || 'asset-upload'}`;
-  const absolutePath = path.join(uploadsDir, uniqueName);
-
-  const buffer = Buffer.from(await file.arrayBuffer());
-  await writeFile(absolutePath, buffer);
-
-  return `/uploads/rashi/${uniqueName}`;
-}
 
 export async function PATCH(
   request: NextRequest,
@@ -41,7 +18,7 @@ export async function PATCH(
       return NextResponse.json({ message: 'A file is required.' }, { status: 400 });
     }
 
-    const sourceUrl = await saveUploadToPublic(file);
+    const sourceUrl = (await uploadRashiSourceFile(file, 'source-files')).publicUrl;
 
     const updated = await prisma.knowledgeDocument.update({
       where: { id: documentId },
