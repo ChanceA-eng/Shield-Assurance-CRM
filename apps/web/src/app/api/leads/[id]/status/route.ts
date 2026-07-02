@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { processLeadStatusChanged } from '../../../../../lib/automation';
 
+interface RouteContext {
+  params: Promise<{ id: string }>;
+}
+
 function normalizeLeadStatus(input: string): string | null {
   const value = input.trim().toLowerCase();
 
@@ -21,7 +25,7 @@ function normalizeLeadStatus(input: string): string | null {
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  context: RouteContext,
 ): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -35,7 +39,8 @@ export async function PATCH(
     return NextResponse.json({ message: 'A valid status is required.' }, { status: 400 });
   }
 
-  const leadId = params.id?.trim();
+  const { id } = await context.params;
+  const leadId = id?.trim();
   if (!leadId) {
     return NextResponse.json({ message: 'Lead id is required.' }, { status: 400 });
   }

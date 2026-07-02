@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import SectionLayout from '../../../components/crm/SectionLayout';
 
@@ -9,7 +9,7 @@ interface WorkspaceResolution {
   clientId: string;
 }
 
-export default function LeadWorkspaceResolverPage(): JSX.Element {
+function LeadWorkspaceResolverContent(): JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
   const leadId = searchParams.get('lead');
@@ -47,5 +47,21 @@ export default function LeadWorkspaceResolverPage(): JSX.Element {
         {error ? <p className="text-sm text-rose-700">{error}</p> : null}
       </div>
     </SectionLayout>
+  );
+}
+
+export default function LeadWorkspaceResolverPage(): JSX.Element {
+  return (
+    <Suspense
+      fallback={
+        <SectionLayout title="Client">
+          <div className="rounded border border-[#dddbda] bg-white p-4 shadow-sm">
+            <p className="text-sm text-[#3e3e3c]">Opening client workspace...</p>
+          </div>
+        </SectionLayout>
+      }
+    >
+      <LeadWorkspaceResolverContent />
+    </Suspense>
   );
 }

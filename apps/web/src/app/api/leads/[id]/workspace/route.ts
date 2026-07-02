@@ -9,16 +9,21 @@ interface LeadRow {
   source: string | null;
 }
 
+interface RouteContext {
+  params: Promise<{ id: string }>;
+}
+
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } },
+  context: RouteContext,
 ): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
   }
 
-  const leadId = params.id?.trim();
+  const { id } = await context.params;
+  const leadId = id?.trim();
   if (!leadId) {
     return NextResponse.json({ message: 'Lead id is required.' }, { status: 400 });
   }
