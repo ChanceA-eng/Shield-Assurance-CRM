@@ -672,19 +672,85 @@ function selectDiverseInsights(rows: QueryRow[], topK: number): QueryRow[] {
 
 function buildFallbackAnswer(question: string, citations: QueryRow[]): string {
   if (citations.length === 0) {
-    return `General\n\n- I cannot verify that criterion in the current carrier guidelines.`;
+    return 'General\n\n- I cannot verify that criterion in the current carrier guidelines.';
   }
 
-  const primaryTopic = citations[0]?.topic?.trim() || 'General';
-  const points = citations
-    .slice(0, 4)
-    .map((citation) => {
-      const snippet = citation.content.replace(/\s+/g, ' ').trim().slice(0, 170);
-      return `- **${citation.title}**: ${snippet}${snippet.length >= 170 ? '...' : ''}`;
-    })
-    .join('\n\n');
+  return synthesizeFromCitations(question, citations);
+}
 
-  return `${primaryTopic}\n\n${points}`;
+function parseStoredInsight(content: string): { topic?: string; point: string } {
+  const compact = content.replace(/\s+/g, ' ').trim();
+  const match = compact.match(/^Topic:\s*(.+?)\s*\|\s*Key Point:\s*(.+)$/i);
+  if (!match) {
+    return { point: compact };
+  }
+
+  return {
+    topic: match[1]?.trim() || undefined,
+    point: match[2]?.trim() || compact,
+  };
+}
+
+function deriveHeader(question: string, citations: QueryRow[]): string {
+  const normalized = question.toLowerCase();
+  if (/\b(plan|plans|tier|option)\b/.test(normalized)) return 'Plans';
+  if (/\b(eligible|eligibility|qualif|requirement|criteria)\b/.test(normalized)) return 'Eligibility';
+  if (/\b(exclusion|excluded|ineligible|decline|declination)\b/.test(normalized)) return 'Exclusions';
+  if (/\b(appetite|acceptable|target risk|preferred risk)\b/.test(normalized)) return 'Appetite';
+  if (/\b(coverage|covered|limit|deductible|liability)\b/.test(normalized)) return 'Coverage';
+  if (/\b(state|regulation|doi|compliance|filing)\b/.test(normalized)) return 'Regulatory';
+
+  const topic = citations.map((citation) => citation.topic?.trim()).find((value): value is string => Boolean(value));
+  if (!topic) return 'General';
+
+  if (/eligib/i.test(topic)) return 'Eligibility';
+  if (/exclus|ineligib|declin/i.test(topic)) return 'Exclusions';
+  if (/appetite|target|acceptable/i.test(topic)) return 'Appetite';
+  if (/cover|limit|deductible/i.test(topic)) return 'Coverage';
+  if (/regulat|state|compliance/i.test(topic)) return 'Regulatory';
+  if (/plan|option|tier/i.test(topic)) return 'Plans';
+  return 'General';
+}
+
+function sanitizeAssistantAnswer(answer: string): string {
+  return answer
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\s+$/g, '')
+    .trim();
+}
+
+function looksLikeRawDump(answer: string): boolean {
+  const normalized = answer.toLowerCase();
+  if (/topic:\s*.+\|\s*key\s*point\s*:/i.test(answer)) return true;
+  if (/^source\s*:/im.test(answer)) return true;
+  if (/^insight\s+\d+/im.test(answer)) return true;
+  if (/based on (the )?(retrieved|provided) (context|key points)/i.test(normalized)) return true;
+  return false;
+}
+
+function synthesizeFromCitations(question: string, citations: QueryRow[]): string {
+  const header = deriveHeader(question, citations);
+  const seen = new Set<string>();
+
+  const bullets = citations
+    .map((citation) => parseStoredInsight(citation.content).point)
+    .map((point) => point.replace(/\s+/g, ' ').trim())
+    .filter((point) => point.length > 12)
+    .filter((point) => {
+      const key = point.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 4)
+    .map((point) => `- ${point}`);
+
+  if (bullets.length === 0) {
+    return 'General\n\n- I cannot verify that criterion in the current carrier guidelines.';
+  }
+
+  return `${header}\n\n${bullets.join('\n\n')}`;
 }
 
 async function composeAnswer(
@@ -712,7 +778,7 @@ async function composeAnswer(
         `Policy: ${citation.policyType ?? 'n/a'}\n` +
         `Topic: ${citation.topic ?? 'n/a'}\n` +
         `Insight Index: ${citation.insightIndex + 1}\n` +
-        `Text: ${citation.content}`,
+        `Key Point: ${parseStoredInsight(citation.content).point}`,
     )
     .join('\n\n');
 
@@ -728,29 +794,25 @@ async function composeAnswer(
     .map((entry) => `${entry.role.toUpperCase()}: ${entry.text}`)
     .join('\n');
 
-  const systemPrompt = `You are Rashi, the highly knowledgeable and conversational AI Underwriting Assistant for Shield Assurance. You are like a senior underwriting partner sitting beside the agent — confident, direct, and deeply familiar with carrier guidelines.
+  const systemPrompt = `You are Rashi, the Underwriting Assistant for Shield Assurance.
 
-Your personality:
-- Speak naturally and professionally, like an experienced colleague, not a search engine
-- Give clear YES/NO/CONDITIONAL postures when the data supports it
-- Synthesize information into a clean executive summary — never dump bullet lists of raw text
-- Be proactive: if a related exclusion or condition is relevant, mention it even if not directly asked
-- Use friendly affirmations when an agent's instinct is right
+You will receive a user question and retrieved database key points.
+Treat retrieved key points as source material to synthesize, never as final output.
 
-CRITICAL RULES:
-1. Answer ONLY from the provided key points — never invent or assume rules
-2. Start with a single-word header that matches the primary topic (Appetite, Eligibility, Exclusions, Coverage, Regulatory, or General)
-3. Do NOT output bracket citations like [1] or [2], and do NOT include conversational intros like "Based on retrieved key points"
-4. Never treat any single carrier as the default source — focus on a carrier only if the question or scope explicitly names it
-5. If the conversation has prior history, maintain context and remember what the agent said before
-6. If key points do NOT directly address the user's specific question, respond: "I cannot verify that criterion in the current carrier guidelines."
-7. Keep responses concise and scannable with short line-by-line bullets and one blank line between sections
-8. IMPORTANT: If the user asks about "exclusions" but the chunks only list eligible classes, point out: "The document outlines eligible risks, but I don't see explicit exclusions listed."
-9. Never bold entire sentences or bullet lines. Use bold only for short headers, numbers/limits, and critical underwriting keywords
-10. Avoid filler intros, status labels, and long paragraph walls
-11. Prefer direct bullet answers over paragraphs, and keep each bullet to a single core idea`;
+Formatting requirements:
+1. Determine the core subject and start with a single-word header: Plans, Appetite, Eligibility, Exclusions, Coverage, Regulatory, or General.
+2. After the header, write concise single-sentence bullet points and separate bullets with a blank line.
+3. Never output raw retrieval labels or database strings such as "Topic:", "Key Point:", "Source:", or "Insight".
+4. Never include bracket citations like [1] and never include filler intros.
+5. Use bold only for numbers, percentages, dollar amounts, and distinct carrier names.
+6. If evidence does not directly answer the question, output exactly: I cannot verify that criterion in the current carrier guidelines.
 
-  const userMessage = `Conversation history:\n${historyContext || 'No prior history.'}\n\nQuestion:\n${question}\n\nIntent:\n${intent}\n\nRetrieval scope:\n${retrievalScope}\n\nRetrieved key points:\n${evidence}\n\nUsing ONLY these key points, provide a concise underwriting-style answer. Start with the single-word topic header, then use short bullets with blank lines between sections. Do not use bracket citations. If the key points do not actually address the question, say you cannot verify it.`;
+Reasoning requirements:
+- Answer only from provided key points.
+- Synthesize overlapping points into clean guidance.
+- Maintain continuity with recent conversation history when relevant.`;
+
+  const userMessage = `Conversation history:\n${historyContext || 'No prior history.'}\n\nQuestion:\n${question}\n\nIntent:\n${intent}\n\nRetrieval scope:\n${retrievalScope}\n\nRetrieved key points:\n${evidence}\n\nSynthesize the answer now. Do not copy labels or raw source lines.`;
 
   let response: Response;
 
@@ -767,7 +829,7 @@ CRITICAL RULES:
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage },
         ],
-        temperature: 0.7,
+        temperature: 0.2,
         max_tokens: 800,
       }),
       signal: AbortSignal.timeout(20000),
@@ -785,7 +847,16 @@ CRITICAL RULES:
 
   const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const answer = payload.choices?.[0]?.message?.content?.trim();
-  return answer || buildFallbackAnswer(question, citations.slice(0, Math.min(3, citations.length)));
+  if (!answer) {
+    return buildFallbackAnswer(question, citations.slice(0, Math.min(3, citations.length)));
+  }
+
+  const cleaned = sanitizeAssistantAnswer(answer);
+  if (looksLikeRawDump(cleaned)) {
+    return synthesizeFromCitations(question, citations.slice(0, Math.min(5, citations.length)));
+  }
+
+  return cleaned;
 }
 
 export async function askRashi(input: AskRashiInput): Promise<{
