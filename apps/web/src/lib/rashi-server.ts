@@ -54,6 +54,7 @@ type UnderwritingIntent =
 
 interface ParsedQuestionContext {
   carrierName?: string;
+  carrierScope: 'CARRIER' | 'GLOBAL';
   stateContext?: string;
   policyType?: string;
   topic?: string;
@@ -175,8 +176,10 @@ async function parseQuestionContext(question: string, input: RashiFilters): Prom
   const catalog = await loadMetadataCatalog();
   const explicitState = normalizeState(input.stateContext);
   const explicitPolicy = normalizePolicyType(input.policyType);
+  const explicitCarrier = normalizeOptional(input.carrierName);
 
-  const detectedCarrier = findBestMention(question, catalog.carriers);
+  const extractedCarrier = await extractCarrierFromQuestion(question, catalog.carriers, explicitCarrier);
+
   const detectedTopic = findBestMention(question, catalog.topics);
   const detectedPolicy = findBestMention(question, catalog.policies);
   const detectedStateByCatalog = findBestMention(question, catalog.states);
@@ -185,7 +188,8 @@ async function parseQuestionContext(question: string, input: RashiFilters): Prom
   const detectedStateByToken = stateMatch.find((token) => catalog.states.includes(token));
 
   return {
-    carrierName: normalizeOptional(input.carrierName) ?? detectedCarrier,
+    carrierName: extractedCarrier.carrierName,
+    carrierScope: extractedCarrier.scope,
     stateContext: explicitState ?? detectedStateByCatalog ?? detectedStateByToken,
     policyType: explicitPolicy ?? detectedPolicy,
     topic: normalizeOptional(input.topic) ?? detectedTopic,
@@ -193,7 +197,7 @@ async function parseQuestionContext(question: string, input: RashiFilters): Prom
   };
 }
 
-function buildFallbackStages(filters: RashiFilters): RashiFilters[] {
+function buildFallbackStages(filters: RashiFilters, strictCarrier: boolean): RashiFilters[] {
   if (filters.documentId) {
     return [filters];
   }
@@ -209,10 +213,105 @@ function buildFallbackStages(filters: RashiFilters): RashiFilters[] {
   if (full.topic) stages.push({ ...full, topic: undefined });
   if (full.policyType) stages.push({ ...full, policyType: undefined, topic: undefined });
   if (full.stateContext) stages.push({ ...full, stateContext: undefined, policyType: undefined, topic: undefined });
-  if (full.carrierName) stages.push({ ...full, carrierName: undefined, stateContext: undefined, policyType: undefined, topic: undefined });
 
+  if (strictCarrier && full.carrierName) {
+    stages.push({
+      carrierName: full.carrierName,
+      stateContext: undefined,
+      policyType: undefined,
+      topic: undefined,
+    });
+    return stages;
+  }
+
+  if (full.carrierName) stages.push({ ...full, carrierName: undefined, stateContext: undefined, policyType: undefined, topic: undefined });
   stages.push({});
   return stages;
+}
+
+function resolveCarrierMatch(candidate: string, carriers: string[]): string | undefined {
+  const normalizedCandidate = candidate.trim().toLowerCase();
+  if (!normalizedCandidate) {
+    return undefined;
+  }
+
+  const exact = carriers.find((carrier) => carrier.trim().toLowerCase() === normalizedCandidate);
+  if (exact) {
+    return exact;
+  }
+
+  const inclusive = carriers.find((carrier) => {
+    const normalizedCarrier = carrier.trim().toLowerCase();
+    return normalizedCarrier.includes(normalizedCandidate) || normalizedCandidate.includes(normalizedCarrier);
+  });
+  return inclusive;
+}
+
+async function extractCarrierFromQuestion(
+  question: string,
+  carriers: string[],
+  explicitCarrier?: string,
+): Promise<{ carrierName?: string; scope: 'CARRIER' | 'GLOBAL' }> {
+  if (explicitCarrier) {
+    return { carrierName: explicitCarrier, scope: 'CARRIER' };
+  }
+
+  const fallbackMention = findBestMention(question, carriers);
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey || carriers.length === 0) {
+    return fallbackMention ? { carrierName: fallbackMention, scope: 'CARRIER' } : { scope: 'GLOBAL' };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: process.env.RASHI_CHAT_MODEL ?? 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'Extract the insurance carrier referenced in the user question. Return ONLY one value: either the exact carrier name from the allowed list, or GLOBAL if none is clearly mentioned.',
+          },
+          {
+            role: 'user',
+            content: `Allowed carrier names:\n${carriers.join('\n')}\n\nQuestion:\n${question}`,
+          },
+        ],
+        temperature: 0,
+        max_tokens: 24,
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (error) {
+    console.error('[Rashi Carrier Extraction Error]', error);
+    return fallbackMention ? { carrierName: fallbackMention, scope: 'CARRIER' } : { scope: 'GLOBAL' };
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    console.error('[Rashi Carrier Extraction HTTP Error]', response.status, errorText);
+    return fallbackMention ? { carrierName: fallbackMention, scope: 'CARRIER' } : { scope: 'GLOBAL' };
+  }
+
+  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const raw = payload.choices?.[0]?.message?.content?.trim() ?? '';
+  const cleaned = raw.replace(/^['"`\s]+|['"`\s]+$/g, '');
+
+  if (!cleaned || cleaned.toUpperCase() === 'GLOBAL') {
+    return { scope: 'GLOBAL' };
+  }
+
+  const resolved = resolveCarrierMatch(cleaned, carriers) ?? fallbackMention;
+  if (!resolved) {
+    return { scope: 'GLOBAL' };
+  }
+
+  return { carrierName: resolved, scope: 'CARRIER' };
 }
 
 function normalizeSourceType(sourceType: string): SourceType {
@@ -763,7 +862,7 @@ async function composeAnswer(
     return 'Rashi could not find any indexed material that matches this question yet. Upload and process underwriting guides, state bulletins, or notes first.';
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     return buildFallbackAnswer(question, citations);
   }
@@ -836,24 +935,67 @@ Reasoning requirements:
     });
   } catch (error) {
     console.error('[Rashi LLM Error]', error);
-    return buildFallbackAnswer(question, citations.slice(0, Math.min(3, citations.length)));
+    return buildFallbackAnswer(question, citations);
   }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => 'Unknown error');
     console.error('[Rashi LLM HTTP Error]', response.status, errorText);
-    return buildFallbackAnswer(question, citations.slice(0, Math.min(3, citations.length)));
+    return buildFallbackAnswer(question, citations);
   }
 
   const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const answer = payload.choices?.[0]?.message?.content?.trim();
   if (!answer) {
-    return buildFallbackAnswer(question, citations.slice(0, Math.min(3, citations.length)));
+    throw new Error('OpenAI returned an empty answer for this Rashi request.');
   }
 
   const cleaned = sanitizeAssistantAnswer(answer);
   if (looksLikeRawDump(cleaned)) {
-    return synthesizeFromCitations(question, citations.slice(0, Math.min(5, citations.length)));
+    let rewriteResponse: Response;
+
+    try {
+      rewriteResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: process.env.RASHI_CHAT_MODEL ?? 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'Rewrite the draft into final assistant output. Keep only a single-word header and concise single-sentence bullets. Remove all raw labels such as Topic, Key Point, Source, and Insight.',
+            },
+            {
+              role: 'user',
+              content: `Question:\n${question}\n\nDraft answer to rewrite:\n${cleaned}`,
+            },
+          ],
+          temperature: 0.1,
+          max_tokens: 500,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (error) {
+      console.error('[Rashi LLM Rewrite Error]', error);
+      return buildFallbackAnswer(question, citations);
+    }
+
+    if (!rewriteResponse.ok) {
+      const rewriteError = await rewriteResponse.text().catch(() => 'Unknown error');
+      console.error('[Rashi LLM Rewrite HTTP Error]', rewriteResponse.status, rewriteError);
+      return buildFallbackAnswer(question, citations);
+    }
+
+    const rewritePayload = (await rewriteResponse.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const rewritten = sanitizeAssistantAnswer(rewritePayload.choices?.[0]?.message?.content?.trim() || '');
+    if (!rewritten || looksLikeRawDump(rewritten)) {
+      return buildFallbackAnswer(question, citations);
+    }
+
+    return rewritten;
   }
 
   return cleaned;
@@ -893,7 +1035,7 @@ export async function askRashi(input: AskRashiInput): Promise<{
   const queryEmbedding = await createEmbedding(question);
 
   let retrievalRows: QueryRow[] = [];
-  const stages = buildFallbackStages(retrievalFilters);
+  const stages = buildFallbackStages(retrievalFilters, parsedContext.carrierScope === 'CARRIER');
   for (const stage of stages) {
     retrievalRows = await findRelevantInsights(queryEmbedding, stage, Math.max(topK * 6, 18));
     if (retrievalRows.length > 0) {
