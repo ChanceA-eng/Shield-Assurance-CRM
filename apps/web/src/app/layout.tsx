@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import RashiWidget from '../components/rashi/rashi-widget';
+import { NavProvider } from '../context/NavContext';
+import { NotificationProvider } from '../context/NotificationContext';
 
 export const metadata: Metadata = {
   title: 'Shield Assurance CRM',
@@ -11,7 +13,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en">
       <body>
-        {children}
+        <NotificationProvider>
+          <NavProvider>{children}</NavProvider>
+        </NotificationProvider>
         <RashiWidget />
       </body>
     </html>

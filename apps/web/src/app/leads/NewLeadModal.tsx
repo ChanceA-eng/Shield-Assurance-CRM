@@ -12,8 +12,15 @@ interface NewLeadModalProps {
 interface FormState {
   full_name: string;
   business: string;
+  industry: string;
+  category: string;
   phone: string;
   email: string;
+  address: string;
+  website: string;
+  est_employees: string;
+  est_revenue: string;
+  risk_exposure: string;
   line_of_business: string;
   source: string;
   notes: string;
@@ -22,8 +29,15 @@ interface FormState {
 const EMPTY_FORM: FormState = {
   full_name: '',
   business: '',
+  industry: '',
+  category: '',
   phone: '',
   email: '',
+  address: '',
+  website: '',
+  est_employees: '',
+  est_revenue: '',
+  risk_exposure: '',
   line_of_business: 'commercial',
   source: 'cold_outreach',
   notes: '',
@@ -51,11 +65,18 @@ export default function NewLeadModal({ onClose, onSaved }: NewLeadModalProps): J
 
     const payload = {
       full_name: form.full_name,
-      business: form.business,
+      business_name: form.business,
+      industry: form.industry,
+      category: form.category,
       phone: form.phone,
       email: form.email,
+      address: form.address,
+      website: form.website,
+      est_employees: form.est_employees,
+      est_revenue: form.est_revenue,
+      risk_exposure: form.risk_exposure,
       line_of_business: selectedLob,
-      source: form.source,
+      source: 'agent_intake',
       notes: form.notes,
       status: 'new',
       script_hook: scriptData?.hook ?? '',
@@ -65,7 +86,7 @@ export default function NewLeadModal({ onClose, onSaved }: NewLeadModalProps): J
       ),
     };
 
-    const res = await fetch('/api/leads', {
+    const res = await fetch('/api/leads/intake', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -136,6 +157,23 @@ export default function NewLeadModal({ onClose, onSaved }: NewLeadModalProps): J
                 onChange={(e) => set('business', e.target.value)}
               />
 
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <input
+                  type="text"
+                  placeholder="Industry"
+                  className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm focus:border-[#0176d3] focus:outline-none"
+                  value={form.industry}
+                  onChange={(e) => set('industry', e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Category"
+                  className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm focus:border-[#0176d3] focus:outline-none"
+                  value={form.category}
+                  onChange={(e) => set('category', e.target.value)}
+                />
+              </div>
+
               <input
                 type="tel"
                 placeholder="Phone Number *"
@@ -150,6 +188,47 @@ export default function NewLeadModal({ onClose, onSaved }: NewLeadModalProps): J
                 className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm focus:border-[#0176d3] focus:outline-none"
                 value={form.email}
                 onChange={(e) => set('email', e.target.value)}
+              />
+
+              <input
+                type="text"
+                placeholder="Address"
+                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm focus:border-[#0176d3] focus:outline-none"
+                value={form.address}
+                onChange={(e) => set('address', e.target.value)}
+              />
+
+              <input
+                type="text"
+                placeholder="Website"
+                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm focus:border-[#0176d3] focus:outline-none"
+                value={form.website}
+                onChange={(e) => set('website', e.target.value)}
+              />
+
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <input
+                  type="text"
+                  placeholder="Est. Employees"
+                  className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm focus:border-[#0176d3] focus:outline-none"
+                  value={form.est_employees}
+                  onChange={(e) => set('est_employees', e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Est. Revenue"
+                  className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm focus:border-[#0176d3] focus:outline-none"
+                  value={form.est_revenue}
+                  onChange={(e) => set('est_revenue', e.target.value)}
+                />
+              </div>
+
+              <textarea
+                placeholder="Risk Exposure"
+                rows={3}
+                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm focus:border-[#0176d3] focus:outline-none"
+                value={form.risk_exposure}
+                onChange={(e) => set('risk_exposure', e.target.value)}
               />
 
               <select

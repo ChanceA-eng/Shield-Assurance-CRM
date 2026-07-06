@@ -11,6 +11,9 @@ interface NewClientPayload {
   email_consent?: boolean;
   sms_consent?: boolean;
   preferred_channel?: string;
+  policy_effective_at?: string | null;
+  last_viewed_at?: string | null;
+  last_activity_at?: string | null;
 }
 
 function isColumnError(message: string | undefined): boolean {
@@ -19,15 +22,104 @@ function isColumnError(message: string | undefined): boolean {
   return value.includes('column') || value.includes('schema cache') || value.includes('does not exist');
 }
 
-export async function GET(): Promise<NextResponse> {
+function normalizeIsoDate(value: string | null | undefined): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString();
+}
+
+function isMissingFunctionError(message: string | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+
+  const value = message.toLowerCase();
+  if (!value.includes('get_actionable_clients_count')) {
+    return false;
+  }
+
+  return value.includes('does not exist') || value.includes('could not find the function') || value.includes('schema cache');
+}
+
+export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
   }
 
+  const actionableCount = request.nextUrl.searchParams.get('actionableCount') === 'true';
+
+  if (actionableCount) {
+    const rpcResult = await supabase.rpc('get_actionable_clients_count');
+
+    if (!rpcResult.error) {
+      return NextResponse.json({ count: typeof rpcResult.data === 'number' ? rpcResult.data : 0 }, { status: 200 });
+    }
+
+    if (!isMissingFunctionError(rpcResult.error.message)) {
+      if (isColumnError(rpcResult.error.message)) {
+        return NextResponse.json({ count: 0 }, { status: 200 });
+      }
+
+      return NextResponse.json({ message: rpcResult.error.message }, { status: 500 });
+    }
+
+    const clientsWithTracking = await supabase
+      .from('clients')
+      .select('id,created_at,policy_effective_at,last_viewed_at,last_activity_at')
+      .limit(500);
+
+    if (clientsWithTracking.error && isColumnError(clientsWithTracking.error.message)) {
+      return NextResponse.json({ count: 0 }, { status: 200 });
+    }
+
+    if (clientsWithTracking.error) {
+      return NextResponse.json({ message: clientsWithTracking.error.message }, { status: 500 });
+    }
+
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const actionable = (clientsWithTracking.data ?? []).filter((client) => {
+      const policyEffectiveAt = client.policy_effective_at ? new Date(client.policy_effective_at).getTime() : null;
+      const lastViewedAt = client.last_viewed_at ? new Date(client.last_viewed_at).getTime() : null;
+      const lastActivityAt = client.last_activity_at ? new Date(client.last_activity_at).getTime() : new Date(client.created_at).getTime();
+
+      const hasNewMessage = !Number.isNaN(lastActivityAt) && lastActivityAt > (lastViewedAt ?? 0);
+
+      const milestone30At = typeof policyEffectiveAt === 'number' && !Number.isNaN(policyEffectiveAt)
+        ? policyEffectiveAt + 30 * dayMs
+        : null;
+      const milestone45At = typeof policyEffectiveAt === 'number' && !Number.isNaN(policyEffectiveAt)
+        ? policyEffectiveAt + 45 * dayMs
+        : null;
+
+      const hit30DayMilestone = typeof milestone30At === 'number'
+        ? now >= milestone30At && (lastViewedAt === null || Number.isNaN(lastViewedAt) || lastViewedAt < milestone30At)
+        : false;
+      const hit45DayMilestone = typeof milestone45At === 'number'
+        ? now >= milestone45At && (lastViewedAt === null || Number.isNaN(lastViewedAt) || lastViewedAt < milestone45At)
+        : false;
+
+      return hasNewMessage || hit30DayMilestone || hit45DayMilestone;
+    }).length;
+
+    return NextResponse.json({ count: actionable }, { status: 200 });
+  }
+
   const queryResult = await supabase
     .from('clients')
-    .select('id,full_name,phone,email,address,source,email_consent,sms_consent,preferred_channel,created_at')
+    .select('id,full_name,phone,email,address,source,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at')
     .order('created_at', { ascending: false })
     .limit(100);
 
@@ -137,6 +229,30 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   if (typeof payload.email_consent === 'boolean') updates.email_consent = payload.email_consent;
   if (typeof payload.sms_consent === 'boolean') updates.sms_consent = payload.sms_consent;
   if (typeof payload.preferred_channel === 'string') updates.preferred_channel = payload.preferred_channel.trim();
+  if (Object.prototype.hasOwnProperty.call(payload, 'policy_effective_at')) {
+    const policyEffectiveAt = normalizeIsoDate(payload.policy_effective_at);
+    if (payload.policy_effective_at !== null && !policyEffectiveAt) {
+      return NextResponse.json({ message: 'Invalid policy_effective_at value.' }, { status: 400 });
+    }
+
+    updates.policy_effective_at = policyEffectiveAt;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'last_viewed_at')) {
+    const viewedAt = normalizeIsoDate(payload.last_viewed_at);
+    if (payload.last_viewed_at !== null && !viewedAt) {
+      return NextResponse.json({ message: 'Invalid last_viewed_at value.' }, { status: 400 });
+    }
+
+    updates.last_viewed_at = viewedAt;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'last_activity_at')) {
+    const activityAt = normalizeIsoDate(payload.last_activity_at);
+    if (payload.last_activity_at !== null && !activityAt) {
+      return NextResponse.json({ message: 'Invalid last_activity_at value.' }, { status: 400 });
+    }
+
+    updates.last_activity_at = activityAt;
+  }
 
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ message: 'No update fields were provided.' }, { status: 400 });
@@ -144,7 +260,18 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 
   const updateResult = await supabase.from('clients').update(updates).eq('id', payload.id).select('*').single();
   if (updateResult.error && isColumnError(updateResult.error.message)) {
-    const { source: _source, ...fallbackUpdates } = updates;
+    const {
+      source: _source,
+      policy_effective_at: _policyEffectiveAt,
+      last_viewed_at: _lastViewedAt,
+      last_activity_at: _lastActivityAt,
+      ...fallbackUpdates
+    } = updates;
+
+    if (Object.keys(fallbackUpdates).length === 0) {
+      return NextResponse.json({ message: 'Client notification tracking columns are not available yet.' }, { status: 200 });
+    }
+
     const fallbackUpdateResult = await supabase.from('clients').update(fallbackUpdates).eq('id', payload.id).select('*').single();
 
     if (fallbackUpdateResult.error) {

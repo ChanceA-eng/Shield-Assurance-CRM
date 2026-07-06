@@ -118,6 +118,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: error.message }, { status: 500 });
   }
 
+  if (payload.client_id && direction === 'inbound') {
+    await supabase
+      .from('clients')
+      .update({ last_activity_at: new Date().toISOString() })
+      .eq('id', payload.client_id);
+  }
+
   return NextResponse.json(
     {
       ...data,

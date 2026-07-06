@@ -13,6 +13,10 @@ interface SyncLeadRecord {
   form_payload: Record<string, unknown>;
 }
 
+interface LeadIdRow {
+  id: string;
+}
+
 function isAuthorizedCron(request: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET?.trim();
   const authHeader = request.headers.get('authorization') ?? '';
@@ -96,6 +100,74 @@ function normalizeExternalLead(lead: Record<string, unknown>): SyncLeadRecord {
   };
 }
 
+async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) {
+    return { created: 0 };
+  }
+
+  const now = new Date();
+  const day = now.getDay();
+  if (day === 0 || day === 6) {
+    return { created: 0 };
+  }
+
+  const { data: leads, error: leadsError } = await supabase
+    .from('leads')
+    .select('id')
+    .in('status', ['lead', 'working', 'quoted']);
+
+  if (leadsError || !leads || leads.length === 0) {
+    return { created: 0 };
+  }
+
+  const startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('interactions')
+    .select('lead_id')
+    .eq('follow_up_completed', false)
+    .gte('follow_up_at', startOfDay.toISOString());
+
+  if (existingError) {
+    return { created: 0 };
+  }
+
+  const existingLeadIds = new Set(
+    (existingRows ?? [])
+      .map((row) => asString((row as { lead_id?: unknown }).lead_id))
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  const targetDate = new Date(now);
+  targetDate.setHours(8, 0, 0, 0);
+  if (targetDate < now) {
+    targetDate.setHours(targetDate.getHours() + 1);
+  }
+
+  const inserts = (leads as LeadIdRow[])
+    .filter((lead) => !existingLeadIds.has(lead.id))
+    .map((lead) => ({
+      lead_id: lead.id,
+      content: 'System Automated Follow-Up: General prospect check-in reminder.',
+      follow_up_at: targetDate.toISOString(),
+      follow_up_completed: false,
+      created_at: now.toISOString(),
+    }));
+
+  if (inserts.length === 0) {
+    return { created: 0 };
+  }
+
+  const { error: insertError } = await supabase.from('interactions').insert(inserts);
+  if (insertError) {
+    return { created: 0 };
+  }
+
+  return { created: inserts.length };
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -106,11 +178,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'Unauthorized cron request.' }, { status: 401 });
   }
 
+  const followUpRoutine = await enforceDefaultFollowUpRoutine();
+
   const exportUrl = process.env.WEBSITE_LEADS_EXPORT_URL?.trim() || 'https://www.shield-assurance.com/api/export-submissions';
   const syncToken = process.env.WEBSITE_SYNC_TOKEN?.trim();
 
   if (!syncToken) {
-    return NextResponse.json({ message: 'WEBSITE_SYNC_TOKEN is not configured.' }, { status: 503 });
+    return NextResponse.json(
+      {
+        ok: true,
+        pulled: 0,
+        inserted: 0,
+        skippedExisting: 0,
+        followUpsCreated: followUpRoutine.created,
+        syncSkipped: 'WEBSITE_SYNC_TOKEN is not configured.',
+      },
+      { status: 200 },
+    );
   }
 
   const webResponse = await fetch(exportUrl, {
@@ -133,7 +217,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const externalLeads = extractLeadArray(responsePayload);
 
   if (externalLeads.length === 0) {
-    return NextResponse.json({ ok: true, pulled: 0, inserted: 0, skippedExisting: 0 }, { status: 200 });
+    return NextResponse.json({ ok: true, pulled: 0, inserted: 0, skippedExisting: 0, followUpsCreated: followUpRoutine.created }, { status: 200 });
   }
 
   const normalizedLeads = externalLeads.map(normalizeExternalLead);
@@ -163,6 +247,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         pulled: normalizedLeads.length,
         inserted: 0,
         skippedExisting,
+        followUpsCreated: followUpRoutine.created,
       },
       { status: 200 },
     );
@@ -179,6 +264,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       pulled: normalizedLeads.length,
       inserted: insertResult.data?.length ?? insertRecords.length,
       skippedExisting,
+      followUpsCreated: followUpRoutine.created,
     },
     { status: 200 },
   );

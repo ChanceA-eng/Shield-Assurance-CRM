@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import React, { useEffect, useState } from 'react';
 import SidebarNav from './SidebarNav';
+import { useNav } from '../../context/NavContext';
 
 interface MetricsResponse {
   total_written_premium: number;
@@ -165,6 +166,7 @@ async function safeJson<T>(url: string): Promise<T | null> {
 }
 
 export default function SalesforceCompleteDashboard(): JSX.Element {
+  const { toggleNav } = useNav();
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -330,10 +332,19 @@ export default function SalesforceCompleteDashboard(): JSX.Element {
         <header className="relative border-b border-[#d6deea] bg-gradient-to-r from-[#0d4f8c] via-[#275f9f] to-[#3f5ea8] px-5 py-4 text-white">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.28),transparent_45%)]" />
           <div className="relative flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/25 bg-white/15 px-4 py-4 backdrop-blur-lg">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-100">Shield Assurance CRM</p>
-              <h1 className="text-2xl font-semibold tracking-tight">Welcome back, Chance</h1>
-              <p className="mt-1 text-xs text-blue-100">{new Date().toLocaleDateString()} · Your agency at a glance</p>
+            <div className="flex items-start gap-3">
+              <button
+                type="button"
+                onClick={toggleNav}
+                className="mt-0.5 inline-flex items-center rounded-md border border-white/25 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/20"
+              >
+                Menu
+              </button>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-100">Shield Assurance CRM</p>
+                <h1 className="text-2xl font-semibold tracking-tight">Welcome back, Chance</h1>
+                <p className="mt-1 text-xs text-blue-100">{new Date().toLocaleDateString()} · Your agency at a glance</p>
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-2">

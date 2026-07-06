@@ -14,6 +14,9 @@ interface Client {
   email_consent?: boolean | null;
   sms_consent?: boolean | null;
   preferred_channel?: string | null;
+  policy_effective_at?: string | null;
+  last_viewed_at?: string | null;
+  last_activity_at?: string | null;
   created_at: string;
 }
 
@@ -26,6 +29,47 @@ interface NewClientForm {
   email_consent: boolean;
   sms_consent: boolean;
   preferred_channel: 'email' | 'sms' | 'both';
+}
+
+function parseDateOrNull(value: string | null | undefined): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function getClientPendingCount(client: Client): number {
+  const lastViewedAt = parseDateOrNull(client.last_viewed_at);
+  const lastActivityAt = parseDateOrNull(client.last_activity_at) ?? parseDateOrNull(client.created_at);
+  const policyEffectiveAt = parseDateOrNull(client.policy_effective_at);
+  const now = Date.now();
+
+  let count = 0;
+
+  if (lastActivityAt && lastActivityAt.getTime() > (lastViewedAt?.getTime() ?? 0)) {
+    count += 1;
+  }
+
+  if (policyEffectiveAt) {
+    const milestone30 = policyEffectiveAt.getTime() + 30 * 24 * 60 * 60 * 1000;
+    const milestone45 = policyEffectiveAt.getTime() + 45 * 24 * 60 * 60 * 1000;
+
+    if (now >= milestone30 && (!lastViewedAt || lastViewedAt.getTime() < milestone30)) {
+      count += 1;
+    }
+
+    if (now >= milestone45 && (!lastViewedAt || lastViewedAt.getTime() < milestone45)) {
+      count += 1;
+    }
+  }
+
+  return count;
 }
 
 export default function ClientsPage(): JSX.Element {
@@ -173,9 +217,19 @@ export default function ClientsPage(): JSX.Element {
                 {clients.map((client) => (
                   <tr key={client.id} className="border-t border-[#f3f2f1]">
                     <td className="px-3 py-2 font-semibold text-[#0176d3]">
-                      <Link href={`/clients/${client.id}`} className="hover:underline">
-                        {client.full_name}
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link href={`/clients/${client.id}`} className="hover:underline">
+                          {client.full_name}
+                        </Link>
+                        {(() => {
+                          const pendingCount = getClientPendingCount(client);
+                          return pendingCount > 0 ? (
+                            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white">
+                              {pendingCount > 9 ? '9+' : pendingCount}
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
                     </td>
                     <td className="px-3 py-2">{client.phone || '--'}</td>
                     <td className="px-3 py-2">{client.email || '--'}</td>

@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import React, { useEffect, useMemo, useState } from 'react';
 import SectionLayout from '../../../components/crm/SectionLayout';
+import { useNotifications } from '../../../context/NotificationContext';
 
 interface Client {
   id: string;
@@ -15,6 +16,9 @@ interface Client {
   email_consent?: boolean | null;
   sms_consent?: boolean | null;
   preferred_channel?: string | null;
+  policy_effective_at?: string | null;
+  last_viewed_at?: string | null;
+  last_activity_at?: string | null;
   created_at: string;
 }
 
@@ -40,6 +44,8 @@ interface LeadItem {
   line_of_business?: string | null;
   source?: string | null;
   status?: string | null;
+  last_viewed_at?: string | null;
+  last_activity_at?: string | null;
   created_at?: string | null;
 }
 
@@ -290,6 +296,58 @@ function normalize(value?: string | null): string {
   return (value ?? '').trim().toLowerCase();
 }
 
+function parseDateOrNull(value?: string | null): Date | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+function getLeadNotificationCount(lead: LeadItem): number {
+  const lastViewedAt = parseDateOrNull(lead.last_viewed_at);
+  const lastActivityAt = parseDateOrNull(lead.last_activity_at) ?? parseDateOrNull(lead.created_at);
+  let count = 0;
+
+  if (!lastViewedAt) {
+    count += 1;
+  } else {
+    if (lastActivityAt && lastActivityAt.getTime() > lastViewedAt.getTime()) {
+      count += 1;
+    }
+    if (lastViewedAt.getTime() <= Date.now() - 24 * 60 * 60 * 1000) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
+function getClientNotificationCount(client: Client): number {
+  const lastViewedAt = parseDateOrNull(client.last_viewed_at);
+  const lastActivityAt = parseDateOrNull(client.last_activity_at) ?? parseDateOrNull(client.created_at);
+  const policyEffectiveAt = parseDateOrNull(client.policy_effective_at);
+  const now = Date.now();
+  let count = 0;
+
+  if (lastActivityAt && lastActivityAt.getTime() > (lastViewedAt?.getTime() ?? 0)) {
+    count += 1;
+  }
+
+  if (policyEffectiveAt) {
+    const milestone30 = policyEffectiveAt.getTime() + 30 * 24 * 60 * 60 * 1000;
+    const milestone45 = policyEffectiveAt.getTime() + 45 * 24 * 60 * 60 * 1000;
+
+    if (now >= milestone30 && (!lastViewedAt || lastViewedAt.getTime() < milestone30)) {
+      count += 1;
+    }
+    if (now >= milestone45 && (!lastViewedAt || lastViewedAt.getTime() < milestone45)) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
 async function readFileAsBase64(file: File): Promise<string> {
   return await new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -402,7 +460,10 @@ async function safeJson<T>(url: string): Promise<T | null> {
 
 export default function ClientWorkspacePage(): JSX.Element {
   const params = useParams<{ clientId: string }>();
+  const searchParams = useSearchParams();
+  const { refresh: refreshNotificationCounts } = useNotifications();
   const clientId = params.clientId;
+  const leadIdFromQuery = searchParams.get('lead');
 
   const [client, setClient] = useState<Client | null>(null);
   const [policies, setPolicies] = useState<PolicyItem[]>([]);
@@ -1074,6 +1135,93 @@ export default function ClientWorkspacePage(): JSX.Element {
     setProfileTab('tasks');
   };
 
+  const selectedLeadForNotification = useMemo(() => {
+    if (!leadIdFromQuery) {
+      return leads[0] ?? null;
+    }
+
+    return leads.find((lead) => lead.id === leadIdFromQuery) ?? leads[0] ?? null;
+  }, [leadIdFromQuery, leads]);
+
+  const leadNotificationCount = selectedLeadForNotification ? getLeadNotificationCount(selectedLeadForNotification) : 0;
+  const clientNotificationCount = client ? getClientNotificationCount(client) : 0;
+  const totalNotificationCount = leadNotificationCount + clientNotificationCount;
+
+  const notificationReasons = useMemo(() => {
+    const reasons: string[] = [];
+
+    if (selectedLeadForNotification) {
+      const lastViewed = parseDateOrNull(selectedLeadForNotification.last_viewed_at);
+      const lastActivity = parseDateOrNull(selectedLeadForNotification.last_activity_at) ?? parseDateOrNull(selectedLeadForNotification.created_at);
+
+      if (!lastViewed) {
+        reasons.push('Lead has not been reviewed yet.');
+      } else {
+        if (lastActivity && lastActivity.getTime() > lastViewed.getTime()) {
+          reasons.push('Lead has new activity since last review.');
+        }
+        if (lastViewed.getTime() <= Date.now() - 24 * 60 * 60 * 1000) {
+          reasons.push('Lead review cycle exceeded 24 hours.');
+        }
+      }
+    }
+
+    if (client) {
+      const lastViewed = parseDateOrNull(client.last_viewed_at);
+      const lastActivity = parseDateOrNull(client.last_activity_at) ?? parseDateOrNull(client.created_at);
+      const policyEffective = parseDateOrNull(client.policy_effective_at);
+
+      if (lastActivity && lastActivity.getTime() > (lastViewed?.getTime() ?? 0)) {
+        reasons.push('Client has unread inbound activity.');
+      }
+
+      if (policyEffective) {
+        const now = Date.now();
+        const day30 = policyEffective.getTime() + 30 * 24 * 60 * 60 * 1000;
+        const day45 = policyEffective.getTime() + 45 * 24 * 60 * 60 * 1000;
+
+        if (now >= day30 && (!lastViewed || lastViewed.getTime() < day30)) {
+          reasons.push('30-day policy review milestone is due.');
+        }
+
+        if (now >= day45 && (!lastViewed || lastViewed.getTime() < day45)) {
+          reasons.push('45-day policy review milestone is due.');
+        }
+      }
+    }
+
+    return reasons;
+  }, [client, selectedLeadForNotification]);
+
+  const markNotificationsComplete = async (): Promise<void> => {
+    const nowIso = new Date().toISOString();
+
+    const updates: Promise<Response>[] = [];
+    if (client) {
+      updates.push(
+        fetch('/api/clients', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: client.id, last_viewed_at: nowIso }),
+        }),
+      );
+    }
+
+    if (selectedLeadForNotification) {
+      updates.push(
+        fetch('/api/leads', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: selectedLeadForNotification.id, last_viewed_at: nowIso }),
+        }),
+      );
+    }
+
+    await Promise.all(updates).catch(() => null);
+    await refreshNotificationCounts();
+    await loadData();
+  };
+
   const draftMessageWithAi = async (): Promise<void> => {
     if (!composer.body.trim()) return;
 
@@ -1134,6 +1282,34 @@ export default function ClientWorkspacePage(): JSX.Element {
           </button>
         </div>
       </div>
+
+      {totalNotificationCount > 0 ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#f4c7c3] bg-[#fff5f4] px-4 py-3">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-rose-600 text-xs font-bold text-white">
+              {totalNotificationCount > 9 ? '9+' : totalNotificationCount}
+            </span>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#9f2f2f]">Notification Center</p>
+              <p className="mt-1 text-sm text-[#5a2f2f]">Action items remain active until they are explicitly marked complete.</p>
+              <div className="mt-1 space-y-0.5 text-xs text-[#7a3a3a]">
+                {notificationReasons.map((reason) => (
+                  <p key={reason}>{reason}</p>
+                ))}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void markNotificationsComplete();
+            }}
+            className="rounded border border-[#cf6a63] bg-white px-3 py-1.5 text-xs font-semibold text-[#7f2d2d] hover:bg-[#fff0ef]"
+          >
+            Mark Action Complete
+          </button>
+        </div>
+      ) : null}
 
       {error ? <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{error}</div> : null}
       {loading ? <div className="text-sm text-[#6a6a6a]">Loading client workspace...</div> : null}

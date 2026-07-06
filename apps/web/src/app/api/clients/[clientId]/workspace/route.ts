@@ -73,19 +73,28 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
 
   const clientQuery = await supabase
     .from('clients')
-    .select('id,full_name,phone,email,address,source,email_consent,sms_consent,preferred_channel,created_at')
+    .select('id,full_name,phone,email,address,source,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at')
     .eq('id', clientId)
     .maybeSingle();
 
-  if (clientQuery.error) {
-    return NextResponse.json({ message: clientQuery.error.message }, { status: 500 });
+  const resolvedClientQuery =
+    clientQuery.error && shouldIgnoreQueryError('client', clientQuery.error.message)
+      ? await supabase
+          .from('clients')
+          .select('id,full_name,phone,email,address,source,email_consent,sms_consent,preferred_channel,created_at')
+          .eq('id', clientId)
+          .maybeSingle()
+      : clientQuery;
+
+  if (resolvedClientQuery.error) {
+    return NextResponse.json({ message: resolvedClientQuery.error.message }, { status: 500 });
   }
 
-  if (!clientQuery.data) {
+  if (!resolvedClientQuery.data) {
     return NextResponse.json({ message: 'Client not found.' }, { status: 404 });
   }
 
-  const client = clientQuery.data;
+  const client = resolvedClientQuery.data;
 
   const [
     policiesRes,
@@ -195,13 +204,13 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
 
   const leadLookups = await Promise.all([
     email
-      ? supabase.from('leads').select('id,full_name,phone,email,line_of_business,source,status,created_at').ilike('email', email).order('created_at', { ascending: false }).limit(50)
+      ? supabase.from('leads').select('id,full_name,phone,email,line_of_business,source,status,created_at,last_viewed_at,last_activity_at').ilike('email', email).order('created_at', { ascending: false }).limit(50)
       : Promise.resolve({ data: [], error: null }),
     phone
-      ? supabase.from('leads').select('id,full_name,phone,email,line_of_business,source,status,created_at').eq('phone', phone).order('created_at', { ascending: false }).limit(50)
+      ? supabase.from('leads').select('id,full_name,phone,email,line_of_business,source,status,created_at,last_viewed_at,last_activity_at').eq('phone', phone).order('created_at', { ascending: false }).limit(50)
       : Promise.resolve({ data: [], error: null }),
     fullName
-      ? supabase.from('leads').select('id,full_name,phone,email,line_of_business,source,status,created_at').ilike('full_name', fullName).order('created_at', { ascending: false }).limit(50)
+      ? supabase.from('leads').select('id,full_name,phone,email,line_of_business,source,status,created_at,last_viewed_at,last_activity_at').ilike('full_name', fullName).order('created_at', { ascending: false }).limit(50)
       : Promise.resolve({ data: [], error: null }),
   ]);
 

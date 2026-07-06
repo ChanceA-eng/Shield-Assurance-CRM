@@ -123,10 +123,6 @@ function InlineMd({ children: text }: { children: string }): JSX.Element {
 export default function RashiWidget(): JSX.Element {
   const pathname = usePathname();
 
-  if (pathname === '/login') {
-    return <></>;
-  }
-
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -207,6 +203,10 @@ export default function RashiWidget(): JSX.Element {
 
     void runProactiveAnalyze();
   }, [open, analyzeKey]);
+
+  if (pathname === '/login') {
+    return <></>;
+  }
 
   const submitMessage = async (): Promise<void> => {
     const message = input.trim();
