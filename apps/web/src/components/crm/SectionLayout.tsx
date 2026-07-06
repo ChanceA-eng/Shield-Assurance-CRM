@@ -1,3 +1,5 @@
+'use client';
+
 import React from 'react';
 import SidebarNav from './SidebarNav';
 import { useNav } from '../../context/NavContext';
