@@ -407,7 +407,7 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                           ul: ({ children }) => <ul className="my-1.5 list-disc space-y-1 pl-5">{children}</ul>,
                           ol: ({ children }) => <ol className="my-1.5 list-decimal space-y-1 pl-5">{children}</ol>,
                           li: ({ children }) => <li>{renderNodeWithHighlights(children, `li-${index}`)}</li>,
-                          strong: ({ children }) => <strong className="rounded bg-blue-100 px-0.5 font-semibold text-[#0f62af]">{renderNodeWithHighlights(children, `strong-${index}`)}</strong>,
+                          strong: ({ children }) => <strong className="font-semibold text-[#0b2545]">{renderNodeWithHighlights(children, `strong-${index}`)}</strong>,
                           h1: ({ children }) => <h3 className="mb-1 mt-2 text-base font-semibold text-[#081a30]">{renderNodeWithHighlights(children, `h1-${index}`)}</h3>,
                           h2: ({ children }) => <h3 className="mb-1 mt-2 text-base font-semibold text-[#081a30]">{renderNodeWithHighlights(children, `h2-${index}`)}</h3>,
                           h3: ({ children }) => <h4 className="mb-1 mt-2 text-sm font-semibold text-[#081a30]">{renderNodeWithHighlights(children, `h3-${index}`)}</h4>,

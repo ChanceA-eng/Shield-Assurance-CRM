@@ -137,16 +137,6 @@ export default function RashiWidget(): JSX.Element {
   const [search, setSearch] = useState('');
   const [lastAnalyzedKey, setLastAnalyzedKey] = useState<string>('');
 
-  const greeting = useMemo<WidgetMessage>(
-    () => ({
-      role: 'assistant',
-      content: 'Ask an underwriting question to get a focused, line-by-line answer.',
-    }),
-    [],
-  );
-
-  const visibleMessages = messages.length > 0 ? messages : [greeting];
-
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
@@ -157,6 +147,23 @@ export default function RashiWidget(): JSX.Element {
 
   const analyzeContext = useMemo(() => parseAnalyzeContext(pathname, search), [pathname, search]);
   const analyzeKey = useMemo(() => JSON.stringify(analyzeContext?.payload ?? {}), [analyzeContext]);
+  const lessonId = useMemo(() => {
+    const params = new URLSearchParams(search);
+    return params.get('lessonId')?.trim() ?? '';
+  }, [search]);
+  const isLearningMode = pathname.startsWith('/learning') && lessonId.length > 0;
+
+  const greeting = useMemo<WidgetMessage>(
+    () => ({
+      role: 'assistant',
+      content: isLearningMode
+        ? 'Ask about this lesson, request examples, or run a simulation prompt.'
+        : 'Ask an underwriting question to get a focused, line-by-line answer.',
+    }),
+    [isLearningMode],
+  );
+
+  const visibleMessages = messages.length > 0 ? messages : [greeting];
 
   const runProactiveAnalyze = async (force = false): Promise<void> => {
     if (!analyzeContext) {
@@ -220,23 +227,30 @@ export default function RashiWidget(): JSX.Element {
     setSending(true);
 
     try {
-      const response = await fetch('/api/rashi/chat', {
+      const response = await fetch(isLearningMode ? '/api/rashi/learn' : '/api/rashi/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          sessionId,
-          pagePath: pathname,
-          contextId: null,
-        }),
+        body: JSON.stringify(
+          isLearningMode
+            ? {
+              message,
+              lessonId,
+            }
+            : {
+              message,
+              sessionId,
+              pagePath: pathname,
+              contextId: null,
+            },
+        ),
       });
 
       if (!response.ok) {
         throw new Error('Failed to chat with Rashi.');
       }
 
-      const payload = (await response.json()) as { answer?: string; sessionId?: string };
-      if (payload.sessionId && payload.sessionId !== sessionId) {
+      const payload = (await response.json()) as { answer?: string; reply?: string; sessionId?: string };
+      if (!isLearningMode && payload.sessionId && payload.sessionId !== sessionId) {
         setSessionId(payload.sessionId);
       }
 
@@ -244,7 +258,7 @@ export default function RashiWidget(): JSX.Element {
         ...current,
         {
           role: 'assistant',
-          content: payload.answer ?? 'I could not generate a response for that request.',
+          content: payload.reply ?? payload.answer ?? 'I could not generate a response for that request.',
         },
       ]);
     } catch {
@@ -275,6 +289,7 @@ export default function RashiWidget(): JSX.Element {
           <header className="flex items-center justify-between border-b border-[#eceef3] bg-[#f5f7fb] px-4 py-3">
             <div>
               <p className="text-sm font-bold text-[#081a30]">Rashi Assistant</p>
+              <p className="text-[10px] text-[#5c667a]">{isLearningMode ? 'Learning Mode' : 'Assistant Mode'}</p>
             </div>
             <button
               type="button"
@@ -291,7 +306,7 @@ export default function RashiWidget(): JSX.Element {
             </button>
           </header>
 
-          {analyzeContext ? (
+          {analyzeContext && !isLearningMode ? (
             <div className="border-b border-[#eceef3] bg-[#f7f9fd] px-3 py-2">
               <div className="mb-1 flex items-center justify-between">
                 <p className="text-[11px] font-semibold text-[#0b2545]">Proactive Insights: {targetLabel || analyzeContext.label}</p>

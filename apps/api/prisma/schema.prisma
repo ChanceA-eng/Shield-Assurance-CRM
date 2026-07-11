@@ -380,3 +380,122 @@ model PersonalAccount {
   @@index([createdAt])
   @@map("personal_accounts")
 }
+
+model LearningCourse {
+  id          String        @id @default(uuid())
+  title       String
+  description String?
+  level       LearningLevel @default(BEGINNER)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  modules     LearningModule[]
+
+  @@map("learning_courses")
+}
+
+model LearningModule {
+  id        String          @id @default(uuid())
+  courseId  String
+  title     String
+  order     Int             @default(0)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  course    LearningCourse  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons   LearningLesson[]
+
+  @@index([courseId])
+  @@unique([courseId, order])
+  @@map("learning_modules")
+}
+
+model LearningLesson {
+  id          String              @id @default(uuid())
+  moduleId    String
+  title       String
+  order       Int                 @default(0)
+  contentType LearningContentType @default(TEXT)
+  contentUrl  String?
+  body        String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  module      LearningModule      @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  quizzes     LearningQuiz[]
+  blocks      LearningLessonBlock[]
+  progress    UserProgress[]
+
+  @@index([moduleId])
+  @@unique([moduleId, order])
+  @@map("learning_lessons")
+}
+
+model LearningLessonBlock {
+  id          String            @id @default(uuid())
+  lessonId    String
+  order       Int               @default(0)
+  type        LearningBlockType
+  title       String?
+  content     Json?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  lesson      LearningLesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId])
+  @@unique([lessonId, order])
+  @@map("learning_lesson_blocks")
+}
+
+model LearningQuiz {
+  id        String          @id @default(uuid())
+  lessonId  String
+  question  String
+  options   Json
+  answer    Int
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  lesson    LearningLesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId])
+  @@map("learning_quizzes")
+}
+
+model UserProgress {
+  id           String         @id @default(uuid())
+  learnerKey   String
+  lessonId     String
+  completed    Boolean        @default(false)
+  score        Int?
+  percent      Int            @default(0)
+  completedAt  DateTime?
+  lastViewedAt DateTime       @default(now())
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  lesson       LearningLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([learnerKey, lessonId])
+  @@index([learnerKey])
+  @@index([lessonId])
+  @@map("learning_user_progress")
+}
+
+enum LearningLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum LearningContentType {
+  VIDEO
+  PDF
+  TEXT
+  INTERACTIVE
+}
+
+enum LearningBlockType {
+  VIDEO
+  PDF
+  TEXT
+  CODE
+  QUIZ
+  EXERCISE
+  SIMULATION
+}

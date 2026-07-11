@@ -26,5 +26,6 @@ export const navItems: NavItem[] = [
 
   { label: 'Rashi', icon: 'briefcase', path: '/rashi' as Route, group: 'Admin' },
   { label: 'Reports', icon: 'bar-chart-2', path: '/reports', group: 'Admin' },
+  { label: 'Learning Center', icon: 'book-open', path: '/learning' as Route, group: 'Admin' },
   { label: 'Settings', icon: 'settings', path: '/settings', group: 'Admin' },
 ];
