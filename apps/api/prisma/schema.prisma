@@ -389,6 +389,7 @@ model LearningCourse {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   modules     LearningModule[]
+  snapshots   LearningCourseSnapshot[]
 
   @@map("learning_courses")
 }
@@ -475,6 +476,18 @@ model UserProgress {
   @@index([learnerKey])
   @@index([lessonId])
   @@map("learning_user_progress")
+}
+
+model LearningCourseSnapshot {
+  id        String         @id @default(uuid())
+  courseId  String
+  label     String
+  payload   Json
+  createdAt DateTime       @default(now())
+  course    LearningCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId, createdAt])
+  @@map("learning_course_snapshots")
 }
 
 enum LearningLevel {
