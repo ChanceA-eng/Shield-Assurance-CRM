@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
+const AUTH_REQUIRED = false;
 const PUBLIC_PATHS = new Set(['/login']);
 const PUBLIC_FILES = new Set(['/favicon.ico', '/robots.txt', '/sitemap.xml']);
 
@@ -28,6 +29,10 @@ function isApiRoute(pathname: string): boolean {
 }
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
+  if (!AUTH_REQUIRED) {
+    return NextResponse.next();
+  }
+
   const pathname = request.nextUrl.pathname;
   const publicRoute = isPublicRoute(pathname);
 

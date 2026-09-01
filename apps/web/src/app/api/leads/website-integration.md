@@ -4,7 +4,8 @@ Use this endpoint from your public website form to push every submission into CR
 
 ## Endpoint
 
-- Production: `https://<your-crm-web-domain>/api/leads`
+- Production: `https://shield-assurance-crm.vercel.app/api/leads`
+- Alias: `https://shield-assurance-crm.vercel.app/api/leads/create`
 - Method: `POST`
 - Accepted encodings: `application/json`, `application/x-www-form-urlencoded`, `multipart/form-data`
 
@@ -24,7 +25,7 @@ All submitted fields are preserved in `form_payload` and request metadata is cap
 ## HTML form example
 
 ```html
-<form action="https://<your-crm-web-domain>/api/leads" method="post">
+<form action="https://shield-assurance-crm.vercel.app/api/leads" method="post">
   <input type="text" name="full_name" placeholder="Full name" required>
   <input type="email" name="email" placeholder="Email">
   <input type="tel" name="phone" placeholder="Phone">
@@ -43,7 +44,7 @@ All submitted fields are preserved in `form_payload` and request metadata is cap
   async function submitLead(formEl) {
     const formData = new FormData(formEl);
 
-    const res = await fetch('https://<your-crm-web-domain>/api/leads', {
+    const res = await fetch('https://shield-assurance-crm.vercel.app/api/leads', {
       method: 'POST',
       body: formData,
     });
@@ -66,3 +67,21 @@ The API already allows:
 - `https://shield-assurance.com`
 
 Add more origins via `LEADS_ALLOWED_ORIGINS` as a comma-separated list.
+
+## Optional automation webhooks
+
+If you want automatic CRM forwarding and AI enrichment, add these environment variables in Vercel for `@crm/web`:
+
+- `CRM_LEAD_WEBHOOK_URL`: Full URL to your CRM intake endpoint.
+- `CRM_LEAD_API_KEY`: Sent as `x-api-key` when posting to `CRM_LEAD_WEBHOOK_URL`.
+- `LEAD_ENRICHMENT_WEBHOOK_URL`: Full URL to your enrichment endpoint.
+- `LEAD_ENRICHMENT_WEBHOOK_TOKEN`: Sent as both `Authorization: Bearer <token>` and `x-webhook-token` when posting to `LEAD_ENRICHMENT_WEBHOOK_URL`.
+
+When either URL is present, every successful `POST /api/leads` submission triggers a webhook payload containing:
+
+- `lead`: persisted lead record metadata (`id`, `full_name`, `status`, `source`, `email`, `phone`, `line_of_business`, `created_at`)
+- `submission`: original inbound form payload
+- `receivedAt`: server timestamp
+- `request`: request metadata (`origin`, `userAgent`, `ip`)
+
+If an external webhook fails, lead creation still succeeds and the failure is logged server-side.

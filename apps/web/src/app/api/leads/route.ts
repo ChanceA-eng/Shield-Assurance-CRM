@@ -22,6 +22,26 @@ interface NewLeadPayload {
   status?: string;
 }
 
+interface LeadAutomationPayload {
+  lead: {
+    id: string;
+    full_name: string;
+    status: string;
+    source: string | null;
+    email: string | null;
+    phone: string | null;
+    line_of_business: string | null;
+    created_at: string | null;
+  };
+  submission: NewLeadPayload;
+  receivedAt: string;
+  request: {
+    origin: string | null;
+    userAgent: string | null;
+    ip: string | null;
+  };
+}
+
 function normalizeText(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -45,6 +65,87 @@ function normalizeBundles(input: string | string[] | undefined): string[] {
   }
 
   return [];
+}
+
+function envValue(name: string): string | null {
+  const value = process.env[name]?.trim();
+  return value ? value : null;
+}
+
+function getRequestIp(request: NextRequest): string | null {
+  const forwarded = request.headers.get('x-forwarded-for');
+  if (!forwarded) {
+    return null;
+  }
+
+  const first = forwarded.split(',')[0]?.trim();
+  return first || null;
+}
+
+async function postWebhook(url: string, payload: LeadAutomationPayload, headers?: Record<string, string>): Promise<void> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(headers ?? {}),
+    },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Webhook request failed (${response.status} ${response.statusText}).`);
+  }
+}
+
+async function triggerLeadAutomation(request: NextRequest, payload: NewLeadPayload, lead: LeadAutomationPayload['lead']): Promise<void> {
+  const crmWebhookUrl = envValue('CRM_LEAD_WEBHOOK_URL');
+  const crmApiKey = envValue('CRM_LEAD_API_KEY');
+  const enrichmentWebhookUrl = envValue('LEAD_ENRICHMENT_WEBHOOK_URL');
+  const enrichmentToken = envValue('LEAD_ENRICHMENT_WEBHOOK_TOKEN');
+
+  if (!crmWebhookUrl && !enrichmentWebhookUrl) {
+    return;
+  }
+
+  const automationPayload: LeadAutomationPayload = {
+    lead,
+    submission: payload,
+    receivedAt: new Date().toISOString(),
+    request: {
+      origin: request.headers.get('origin'),
+      userAgent: request.headers.get('user-agent'),
+      ip: getRequestIp(request),
+    },
+  };
+
+  const jobs: Promise<void>[] = [];
+
+  if (crmWebhookUrl) {
+    const crmHeaders: Record<string, string> = {};
+    if (crmApiKey) {
+      crmHeaders['x-api-key'] = crmApiKey;
+    }
+
+    jobs.push(postWebhook(crmWebhookUrl, automationPayload, crmHeaders));
+  }
+
+  if (enrichmentWebhookUrl) {
+    const enrichmentHeaders: Record<string, string> = {};
+    if (enrichmentToken) {
+      enrichmentHeaders.Authorization = `Bearer ${enrichmentToken}`;
+      enrichmentHeaders['x-webhook-token'] = enrichmentToken;
+    }
+
+    jobs.push(postWebhook(enrichmentWebhookUrl, automationPayload, enrichmentHeaders));
+  }
+
+  const results = await Promise.allSettled(jobs);
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      console.error('[leads] Automation webhook delivery failed.', result.reason);
+    }
+  }
 }
 
 function resolveAllowedOrigins(): string[] {
@@ -159,6 +260,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     leadId: data.id,
     leadName: data.full_name,
     status: data.status,
+  });
+
+  await triggerLeadAutomation(request, payload, {
+    id: data.id,
+    full_name: data.full_name,
+    status: data.status,
+    source: data.source ?? null,
+    email: data.email ?? null,
+    phone: data.phone ?? null,
+    line_of_business: data.line_of_business ?? null,
+    created_at: data.created_at ?? null,
   });
 
   return jsonWithCors(request, data, { status: 201 });
