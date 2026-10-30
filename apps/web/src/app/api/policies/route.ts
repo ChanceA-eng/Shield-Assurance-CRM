@@ -3,21 +3,27 @@ import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { writeCommunicationLog, writeNotification } from '../../../lib/automation';
 import { schedulePolicyRenewalLifecycle } from '../../../lib/automation';
 import { sendEmail } from '../../../lib/messaging';
+import { ACTIVE_LEAD_STATUSES } from '../../../lib/lead-pipeline';
 
 interface NewPolicyPayload {
   client_id?: string;
+  account_id?: string;
   insured_name?: string;
   phone?: string;
   email?: string;
   address?: string;
-  source?: string;
+  source?: 'manual' | 'downloaded' | string;
   carrier?: string;
   line_of_business?: string;
+  sub_type?: string;
   premium?: number | string;
   policy_number?: string;
   policyNumber?: string;
   effective_date?: string;
   renewal_date?: string;
+  expiration_date?: string;
+  billing_type?: string;
+  prior_policy_id?: string | null;
   email_consent?: boolean;
   sms_consent?: boolean;
   status?: string;
@@ -25,12 +31,6 @@ interface NewPolicyPayload {
 
 interface ClientRow {
   id: string;
-}
-
-function isColumnError(message: string | undefined): boolean {
-  if (!message) return false;
-  const value = message.toLowerCase();
-  return value.includes('column') || value.includes('schema cache') || value.includes('does not exist');
 }
 
 function daysFromNowISO(days: number): string {
@@ -71,7 +71,7 @@ async function closeMatchingLeadOnPolicyIssue(input: {
   const { supabase, insuredName, email, phone } = input;
   if (!supabase) return;
 
-  const statuses = ['new', 'working', 'quoted'];
+  const statuses = [...ACTIVE_LEAD_STATUSES];
 
   const tryCloseBy = async (column: 'email' | 'phone' | 'full_name', value: string): Promise<boolean> => {
     if (!value) return false;
@@ -89,7 +89,10 @@ async function closeMatchingLeadOnPolicyIssue(input: {
       return false;
     }
 
-    const update = await supabase.from('leads').update({ status: 'closed' }).eq('id', lookup.data.id);
+    const update = await supabase
+      .from('leads')
+      .update({ status: 'won', stage_changed_at: new Date().toISOString() })
+      .eq('id', lookup.data.id);
     return !update.error;
   };
 
@@ -105,17 +108,23 @@ async function closeMatchingLeadOnPolicyIssue(input: {
 function buildPolicyUpdate(payload: NewPolicyPayload): Record<string, string | number | null> {
   const updates: Record<string, string | number | null> = {};
   if (typeof payload.client_id === 'string') updates.client_id = normalizeText(payload.client_id) || null;
+  if (typeof payload.account_id === 'string') updates.account_id = normalizeText(payload.account_id) || null;
   if (typeof payload.insured_name === 'string') updates.insured_name = normalizeText(payload.insured_name);
   if (typeof payload.phone === 'string') updates.phone = normalizeText(payload.phone) || null;
   if (typeof payload.email === 'string') updates.email = normalizeText(payload.email).toLowerCase() || null;
   if (typeof payload.address === 'string') updates.address = normalizeText(payload.address) || null;
   if (typeof payload.carrier === 'string') updates.carrier = normalizeText(payload.carrier);
   if (typeof payload.line_of_business === 'string') updates.line_of_business = normalizeText(payload.line_of_business);
+  if (typeof payload.sub_type === 'string') updates.sub_type = normalizeText(payload.sub_type) || null;
   if (typeof payload.premium === 'string' || typeof payload.premium === 'number') updates.premium = parsePremium(payload.premium);
   const normalizedPolicyNumber = readPolicyNumber(payload);
   if (normalizedPolicyNumber) updates.policy_number = normalizedPolicyNumber;
   if (typeof payload.effective_date === 'string') updates.effective_date = payload.effective_date;
   if (typeof payload.renewal_date === 'string') updates.renewal_date = payload.renewal_date;
+  if (typeof payload.expiration_date === 'string') updates.expiration_date = payload.expiration_date;
+  if (typeof payload.billing_type === 'string') updates.billing_type = normalizeText(payload.billing_type) || null;
+  if (typeof payload.source === 'string') updates.source = normalizeText(payload.source) || 'manual';
+  if (typeof payload.prior_policy_id === 'string' || payload.prior_policy_id === null) updates.prior_policy_id = payload.prior_policy_id ? normalizeText(payload.prior_policy_id) : null;
   if (typeof payload.status === 'string') updates.status = normalizeText(payload.status);
   return updates;
 }
@@ -131,23 +140,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (!renewalWithinRaw) {
     const policyQuery = await supabase
       .from('policies')
-      .select('id,client_id,insured_name,carrier,line_of_business,premium,policy_number,effective_date,renewal_date,status,created_at')
+      .select('id,client_id,account_id,insured_name,carrier,line_of_business,sub_type,premium,policy_number,effective_date,renewal_date,expiration_date,status,billing_type,source,prior_policy_id,created_at')
       .order('created_at', { ascending: false })
       .limit(100);
-
-    if (policyQuery.error && isColumnError(policyQuery.error.message)) {
-      const fallbackPolicyQuery = await supabase
-        .from('policies')
-        .select('id,client_id,insured_name,carrier,line_of_business,premium,policy_number,effective_date,renewal_date,status,created_at')
-        .order('created_at', { ascending: false })
-        .limit(100);
-
-      if (fallbackPolicyQuery.error) {
-        return NextResponse.json({ message: fallbackPolicyQuery.error.message }, { status: 500 });
-      }
-
-      return NextResponse.json(fallbackPolicyQuery.data ?? [], { status: 200 });
-    }
 
     const { data, error } = policyQuery;
     if (error) {
@@ -162,7 +157,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   let query = supabase
     .from('policies')
-    .select('id,insured_name,line_of_business,renewal_date,premium,status,carrier,clients(full_name)')
+    .select('id,client_id,account_id,insured_name,line_of_business,sub_type,renewal_date,expiration_date,premium,status,carrier,billing_type,source,prior_policy_id,clients(full_name)')
     .in('status', ['active', 'issued'])
     .lte('renewal_date', daysFromNowISO(renewalWithin));
 
@@ -185,6 +180,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const payload = (await request.json()) as NewPolicyPayload;
   const policyNumber = readPolicyNumber(payload);
+  const expirationDate = payload.expiration_date ?? payload.renewal_date;
 
   if (!payload.insured_name || payload.insured_name.trim().length === 0) {
     return NextResponse.json({ message: 'insured_name is required.' }, { status: 400 });
@@ -196,9 +192,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     !payload.line_of_business?.trim() ||
     !policyNumber ||
     !payload.effective_date ||
-    !payload.renewal_date
+    !expirationDate
   ) {
-    return NextResponse.json({ message: 'Missing required policy parameters (Carrier, Line of Business, Policy Number, Effective & Renewal dates).' }, { status: 400 });
+    return NextResponse.json({ message: 'Missing required policy parameters (Carrier, Line of Business, Policy Number, Effective & Expiration dates).' }, { status: 400 });
   }
 
   const insuredName = normalizeText(payload.insured_name);
@@ -206,7 +202,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const phone = normalizeText(payload.phone);
   const address = normalizeText(payload.address);
   const emailConsent = payload.email_consent ?? true;
-  let clientId = normalizeText(payload.client_id);
+  let clientId = normalizeText(payload.account_id) || normalizeText(payload.client_id);
 
   if (!clientId) {
     let matchedClient: ClientRow | null = null;
@@ -269,60 +265,38 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     source: 'Policy Issuance' 
   };
 
-  let clientUpdate = await supabase.from('clients').update(clientUpdatePayload).eq('id', clientId);
-  
-  if (clientUpdate.error && isColumnError(clientUpdate.error.message)) {
-    const { source: _source, ...fallbackPayload } = clientUpdatePayload;
-    clientUpdate = await supabase.from('clients').update(fallbackPayload).eq('id', clientId);
-  }
+  const clientUpdate = await supabase.from('clients').update(clientUpdatePayload).eq('id', clientId);
 
   if (clientUpdate.error) {
     return NextResponse.json({ message: clientUpdate.error.message }, { status: 500 });
   }
 
-  let insertResult = await supabase
+  const insertResult = await supabase
     .from('policies')
     .insert([
       {
         client_id: clientId,
+        account_id: clientId,
         insured_name: insuredName,
         phone: phone || null,
         email: email || null,
         address: address || null,
         carrier: payload.carrier.trim(),
         line_of_business: payload.line_of_business.trim(),
+        sub_type: payload.sub_type?.trim() || payload.line_of_business.trim(),
         premium: parsePremium(payload.premium),
         policy_number: policyNumber,
         effective_date: payload.effective_date,
-        renewal_date: payload.renewal_date,
-        status: payload.status?.trim() || 'issued',
+        renewal_date: expirationDate,
+        expiration_date: expirationDate,
+        status: payload.status?.trim() || 'active',
+        billing_type: payload.billing_type?.trim() || null,
+        source: payload.source?.trim() || 'manual',
+        prior_policy_id: payload.prior_policy_id?.trim() || null,
       },
     ])
     .select('*')
     .single();
-
-  if (insertResult.error && isColumnError(insertResult.error.message)) {
-    insertResult = await supabase
-      .from('policies')
-      .insert([
-        {
-          client_id: clientId,
-          insured_name: insuredName,
-          phone: phone || null,
-          email: email || null,
-          address: address || null,
-          carrier: payload.carrier.trim(),
-          line_of_business: payload.line_of_business.trim(),
-          premium: parsePremium(payload.premium),
-          policy_number: policyNumber,
-          effective_date: payload.effective_date,
-          renewal_date: payload.renewal_date,
-          status: payload.status?.trim() || 'issued',
-        },
-      ])
-      .select('*')
-      .single();
-  }
 
   if (insertResult.error) {
     return NextResponse.json({ message: insertResult.error.message }, { status: 500 });
@@ -331,7 +305,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   await writeNotification({
     client_id: insertResult.data.client_id,
     type: 'renewal',
-    message: `Policy issued for ${insertResult.data.insured_name}. Renewal automation will monitor ${insertResult.data.renewal_date}.`,
+    message: `Policy issued for ${insertResult.data.insured_name}. Renewal automation will monitor ${insertResult.data.expiration_date ?? insertResult.data.renewal_date}.`,
   });
 
   await schedulePolicyRenewalLifecycle({
@@ -341,7 +315,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     carrier: insertResult.data.carrier,
     lineOfBusiness: insertResult.data.line_of_business,
     premium: Number(insertResult.data.premium ?? 0),
-    renewalDate: insertResult.data.renewal_date,
+    renewalDate: insertResult.data.expiration_date ?? insertResult.data.renewal_date,
   });
 
   await closeMatchingLeadOnPolicyIssue({
@@ -357,7 +331,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       await sendEmail({
         to: email,
         subject: `Policy Issued: ${policyNumber}`,
-        body: `Hi ${insuredName}, your ${payload.line_of_business} policy with ${payload.carrier} has been issued. Policy number: ${policyNumber}. Effective ${payload.effective_date}, renewal ${payload.renewal_date}.`,
+        body: `Hi ${insuredName}, your ${payload.line_of_business} policy with ${payload.carrier} has been issued. Policy number: ${policyNumber}. Effective ${payload.effective_date}, expiration ${expirationDate}.`,
       });
       await writeCommunicationLog({
         client_id: clientId,
@@ -396,12 +370,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'No update fields were provided.' }, { status: 400 });
   }
 
-  let updateResult = await supabase.from('policies').update(updates).eq('id', payload.id).select('*').single();
-
-  if (updateResult.error && isColumnError(updateResult.error.message)) {
-    const { policy_number: _policyNumber, ...fallbackUpdates } = updates;
-    updateResult = await supabase.from('policies').update(fallbackUpdates).eq('id', payload.id).select('*').single();
-  }
+  const updateResult = await supabase.from('policies').update(updates).eq('id', payload.id).select('*').single();
 
   if (updateResult.error) {
     return NextResponse.json({ message: updateResult.error.message }, { status: 500 });
@@ -416,10 +385,9 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
       source: 'Policy Issuance'
     };
 
-    let syncUpdate = await supabase.from('clients').update(syncPayload).eq('id', updateResult.data.client_id);
-    if (syncUpdate.error && isColumnError(syncUpdate.error.message)) {
-      const { source: _src, ...fallbackSyncPayload } = syncPayload;
-      await supabase.from('clients').update(fallbackSyncPayload).eq('id', updateResult.data.client_id);
+    const syncUpdate = await supabase.from('clients').update(syncPayload).eq('id', updateResult.data.client_id);
+    if (syncUpdate.error) {
+      return NextResponse.json({ message: syncUpdate.error.message }, { status: 500 });
     }
   }
 

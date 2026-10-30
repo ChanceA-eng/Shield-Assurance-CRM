@@ -104,7 +104,7 @@ export default function UnderwritingPanel({
   }, [initialCompletenessScore]);
 
   const actionButtonClassName =
-    'inline-flex items-center justify-center rounded-md border border-[#d7d3cf] bg-white text-[#1f3f5b] shadow-sm transition hover:border-[#b8c7d8] hover:bg-[#eef4fb] focus:outline-none focus:ring-2 focus:ring-[#9cc3ea] focus:ring-offset-2';
+    'inline-flex items-center justify-center rounded-md border border-[#d7d3cf] bg-white text-[#2f353a] shadow-sm transition hover:border-[#b8c7d8] hover:bg-[#f0f3f5] focus:outline-none focus:ring-2 focus:ring-[#9cc3ea] focus:ring-offset-2';
 
   async function generateQuote(): Promise<void> {
     if (!accountId) {
@@ -171,12 +171,12 @@ export default function UnderwritingPanel({
 
   return (
     <aside
-      className={`flex min-h-full flex-col border-l border-[#dddbda] bg-[#f8f8f7] shadow-sm transition-all duration-300 ease-in-out ${
+      className={`flex min-h-full flex-col border-l border-[#c8ced3] bg-[#f8f9fa] shadow-sm transition-all duration-300 ease-in-out ${
         isActionsOpen ? 'w-full max-w-[380px] p-4' : 'w-[72px] items-center px-2 py-4'
       }`}
     >
       <div className={`flex w-full items-center ${isActionsOpen ? 'justify-between' : 'justify-center'}`}>
-        {isActionsOpen ? <h3 className="text-base font-bold text-[#080707]">Underwriting Summary</h3> : <span className="sr-only">Underwriting Summary</span>}
+        {isActionsOpen ? <h3 className="text-base font-bold text-[#23282c]">Underwriting Summary</h3> : <span className="sr-only">Underwriting Summary</span>}
         <button
           type="button"
           onClick={() => setIsActionsOpen((current) => !current)}
@@ -204,21 +204,21 @@ export default function UnderwritingPanel({
               type="button"
               onClick={() => void convertToClient()}
               disabled={isConverting || !accountId}
-              className="flex-1 rounded border border-[#0163b3] bg-[#0176d3] px-4 py-2 text-sm font-semibold text-white hover:bg-[#015ba1] disabled:cursor-not-allowed disabled:opacity-70"
+              className="flex-1 rounded border border-[#1b8eb7] bg-[#20a8d8] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:cursor-not-allowed disabled:opacity-70"
             >
               {isConverting ? 'Converting...' : 'Convert To Client'}
             </button>
           </div>
 
           {convertedClientId ? (
-            <div className="mb-4 rounded border border-[#dddbda] bg-white p-3">
-              <h4 className="mb-2 text-sm font-semibold text-[#080707]">Client Conversion</h4>
-              <p className="text-sm text-[#3e3e3c]">Converted client id: {convertedClientId}</p>
+            <div className="mb-4 rounded border border-[#c8ced3] bg-white p-3">
+              <h4 className="mb-2 text-sm font-semibold text-[#23282c]">Client Conversion</h4>
+              <p className="text-sm text-[#5c6873]">Converted client id: {convertedClientId}</p>
               <div className="mt-2 flex gap-2">
-                <Link href={'/clients' as Route} className="rounded border border-[#0f62af] px-2 py-1 text-xs font-semibold text-[#0f62af] hover:bg-[#eef4fb]">
+                <Link href={'/clients' as Route} className="rounded border border-[#167495] px-2 py-1 text-xs font-semibold text-[#167495] hover:bg-[#f0f3f5]">
                   Open Clients
                 </Link>
-                <Link href={'/policies' as Route} className="rounded border border-[#0f62af] px-2 py-1 text-xs font-semibold text-[#0f62af] hover:bg-[#eef4fb]">
+                <Link href={'/policies' as Route} className="rounded border border-[#167495] px-2 py-1 text-xs font-semibold text-[#167495] hover:bg-[#f0f3f5]">
                   Add Policy
                 </Link>
               </div>
@@ -228,70 +228,70 @@ export default function UnderwritingPanel({
           {error ? <p className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p> : null}
 
           {snapshot ? (
-            <div className="mb-4 rounded border border-[#dddbda] bg-white p-3">
-              <h4 className="mb-2 text-sm font-semibold text-[#080707]">Risk Snapshot</h4>
-              <pre className="max-h-40 overflow-auto text-xs text-[#3e3e3c]">{JSON.stringify(snapshot, null, 2)}</pre>
+            <div className="mb-4 rounded border border-[#c8ced3] bg-white p-3">
+              <h4 className="mb-2 text-sm font-semibold text-[#23282c]">Risk Snapshot</h4>
+              <pre className="max-h-40 overflow-auto text-xs text-[#5c6873]">{JSON.stringify(snapshot, null, 2)}</pre>
             </div>
           ) : null}
 
-          <div className="mb-4 rounded border border-[#dddbda] bg-white p-3">
-            <h4 className="mb-2 text-sm font-semibold text-[#080707]">Completeness Score</h4>
-            <p className="text-sm text-[#1f3f5b]">Score: {score?.score ?? initialCompletenessScore}</p>
+          <div className="mb-4 rounded border border-[#c8ced3] bg-white p-3">
+            <h4 className="mb-2 text-sm font-semibold text-[#23282c]">Completeness Score</h4>
+            <p className="text-sm text-[#2f353a]">Score: {score?.score ?? initialCompletenessScore}</p>
             <p className="text-xs text-rose-700">Missing: {score?.missing.length ? score.missing.join(', ') : 'None'}</p>
           </div>
 
-          <div className="mb-4 rounded border border-[#dddbda] bg-white p-3">
-            <h4 className="mb-2 text-sm font-semibold text-[#080707]">Carrier Compatibility</h4>
+          <div className="mb-4 rounded border border-[#c8ced3] bg-white p-3">
+            <h4 className="mb-2 text-sm font-semibold text-[#23282c]">Carrier Compatibility</h4>
             <ul className="space-y-2 text-sm">
               {Object.entries(carriers).length ? (
                 Object.entries(carriers).map(([carrier, result]) => (
-                  <li key={carrier} className="rounded border border-[#ecebea] px-2 py-1">
-                    <p className="font-semibold text-[#080707]">{carrier}</p>
+                  <li key={carrier} className="rounded border border-[#e4e5e6] px-2 py-1">
+                    <p className="font-semibold text-[#23282c]">{carrier}</p>
                     <p className={result.eligible ? 'text-emerald-700' : 'text-rose-700'}>{result.eligible ? 'Eligible' : 'Ineligible'}</p>
-                    {!result.eligible && result.reasons.length > 0 ? <p className="text-xs text-[#6a6a6a]">{result.reasons.join(' ')}</p> : null}
+                    {!result.eligible && result.reasons.length > 0 ? <p className="text-xs text-[#73818f]">{result.reasons.join(' ')}</p> : null}
                   </li>
                 ))
               ) : (
-                <li className="text-xs text-[#6a6a6a]">Complete intake fields to evaluate carriers.</li>
+                <li className="text-xs text-[#73818f]">Complete intake fields to evaluate carriers.</li>
               )}
             </ul>
           </div>
 
-          <div className="mb-4 rounded border border-[#dddbda] bg-white p-3">
-            <h4 className="mb-2 text-sm font-semibold text-[#080707]">Underwriting Flags</h4>
+          <div className="mb-4 rounded border border-[#c8ced3] bg-white p-3">
+            <h4 className="mb-2 text-sm font-semibold text-[#23282c]">Underwriting Flags</h4>
             {underwritingFlags.length ? (
-              <ul className="space-y-1 text-sm text-[#3e3e3c]">
+              <ul className="space-y-1 text-sm text-[#5c6873]">
                 {underwritingFlags.map((flag) => (
                   <li key={flag}>• {flag}</li>
                 ))}
               </ul>
             ) : (
-              <p className="text-xs text-[#6a6a6a]">No active flags.</p>
+              <p className="text-xs text-[#73818f]">No active flags.</p>
             )}
           </div>
 
           {quote ? (
-            <div className="mb-4 rounded border border-[#dddbda] bg-white p-3">
-              <h4 className="mb-2 text-sm font-semibold text-[#080707]">Quote Status</h4>
-              <p className="text-sm text-[#3e3e3c]">Carrier: {quote.carrier}</p>
-              <p className="text-sm text-[#3e3e3c]">Status: {quote.status}</p>
+            <div className="mb-4 rounded border border-[#c8ced3] bg-white p-3">
+              <h4 className="mb-2 text-sm font-semibold text-[#23282c]">Quote Status</h4>
+              <p className="text-sm text-[#5c6873]">Carrier: {quote.carrier}</p>
+              <p className="text-sm text-[#5c6873]">Status: {quote.status}</p>
             </div>
           ) : null}
 
-          <div className="rounded border border-[#dddbda] bg-white p-3">
-            <h4 className="mb-2 text-sm font-semibold text-[#080707]">Quote History</h4>
+          <div className="rounded border border-[#c8ced3] bg-white p-3">
+            <h4 className="mb-2 text-sm font-semibold text-[#23282c]">Quote History</h4>
             {quoteHistory.length ? (
-              <ul className="space-y-2 text-xs text-[#3e3e3c]">
+              <ul className="space-y-2 text-xs text-[#5c6873]">
                 {quoteHistory.map((row) => (
-                  <li key={row.id} className="rounded border border-[#ecebea] px-2 py-1">
-                    <p className="font-semibold text-[#080707]">{row.carrier}</p>
+                  <li key={row.id} className="rounded border border-[#e4e5e6] px-2 py-1">
+                    <p className="font-semibold text-[#23282c]">{row.carrier}</p>
                     <p>Status: {row.status}</p>
                     <p>Created: {new Date(row.createdAt).toLocaleString()}</p>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-xs text-[#6a6a6a]">No quotes generated yet.</p>
+              <p className="text-xs text-[#73818f]">No quotes generated yet.</p>
             )}
           </div>
         </div>

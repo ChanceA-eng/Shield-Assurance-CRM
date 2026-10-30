@@ -1,11 +1,9 @@
-"use client";
+'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, Circle, Clock, Flag, Plus, User } from 'lucide-react';
 import SectionLayout from '../../components/crm/SectionLayout';
-
-type TaskStatusFilter = 'all' | 'open' | 'completed' | 'overdue';
-type TaskSort = 'due_asc' | 'due_desc' | 'priority' | 'created_desc';
-type TaskPriority = 'low' | 'medium' | 'high';
+import LeadWorkspace, { type WorkspaceLead } from '../leads/LeadWorkspace';
 
 interface Task {
   id: string;
@@ -16,305 +14,386 @@ interface Task {
   priority?: string | null;
   related_type?: string | null;
   related_id?: string | null;
+  related_name?: string | null;
+  related_status?: string | null;
   created_at: string;
 }
 
-interface NewTaskForm {
-  subject: string;
-  description: string;
-  due_date: string;
-  priority: TaskPriority;
-  status: 'open';
-  related_type: string;
-  related_id: string;
+type Scope = 'all' | 'lead' | 'client' | 'none';
+
+interface Bucket {
+  key: string;
+  label: string;
+  tone: string;
+  tasks: Task[];
 }
 
-function isOverdue(task: Task): boolean {
-  if (!task.due_date) return false;
-  if ((task.status ?? 'open') === 'completed') return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const due = new Date(task.due_date);
-  due.setHours(0, 0, 0, 0);
-  return due.getTime() < today.getTime();
+function endOf(date: Date): number {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
 }
 
-function priorityBadge(priority: string | null | undefined): string {
-  const value = (priority ?? 'medium').toLowerCase();
-  if (value === 'high') return 'bg-rose-100 text-rose-700';
-  if (value === 'low') return 'bg-emerald-100 text-emerald-700';
-  return 'bg-amber-100 text-amber-700';
+function bucketize(tasks: Task[]): Bucket[] {
+  const now = Date.now();
+  const today = endOf(new Date());
+  const tomorrow = endOf(new Date(Date.now() + 86400000));
+  const week = endOf(new Date(Date.now() + 7 * 86400000));
+
+  const buckets: Bucket[] = [
+    { key: 'overdue', label: 'Overdue', tone: 'text-cui-danger', tasks: [] },
+    { key: 'today', label: 'Today', tone: 'text-amber-700', tasks: [] },
+    { key: 'tomorrow', label: 'Tomorrow', tone: 'text-cui-primary', tasks: [] },
+    { key: 'week', label: 'This week', tone: 'text-cui-text', tasks: [] },
+    { key: 'later', label: 'Later', tone: 'text-cui-muted', tasks: [] },
+    { key: 'nodate', label: 'No due date', tone: 'text-cui-muted', tasks: [] },
+  ];
+
+  for (const task of tasks) {
+    if (!task.due_date) {
+      buckets[5].tasks.push(task);
+      continue;
+    }
+    const due = new Date(task.due_date).getTime();
+    if (due < now) buckets[0].tasks.push(task);
+    else if (due <= today) buckets[1].tasks.push(task);
+    else if (due <= tomorrow) buckets[2].tasks.push(task);
+    else if (due <= week) buckets[3].tasks.push(task);
+    else buckets[4].tasks.push(task);
+  }
+
+  return buckets.filter((bucket) => bucket.tasks.length > 0);
+}
+
+function dueLabel(value: string | null | undefined): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 export default function TasksPage(): JSX.Element {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showNewTask, setShowNewTask] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<TaskStatusFilter>('all');
-  const [sort, setSort] = useState<TaskSort>('due_asc');
-  const [newTask, setNewTask] = useState<NewTaskForm>({
-    subject: '',
-    description: '',
-    due_date: '',
-    priority: 'medium',
-    status: 'open',
-    related_type: '',
-    related_id: '',
-  });
+  const [scope, setScope] = useState<Scope>('all');
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [completed, setCompleted] = useState<Task[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [drawerLead, setDrawerLead] = useState<WorkspaceLead | null>(null);
 
-  const fetchTasks = async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
+  // Quick add
+  const [quickSubject, setQuickSubject] = useState('');
+  const [quickDue, setQuickDue] = useState('');
+  const [quickPriority, setQuickPriority] = useState<'low' | 'medium' | 'high'>('medium');
+  const [isAdding, setIsAdding] = useState(false);
 
-    const query = new URLSearchParams({ status: statusFilter, sort }).toString();
-    const res = await fetch(`/api/tasks?${query}`, { cache: 'no-store' });
-    if (!res.ok) {
-      setError('Failed to load tasks.');
+  const fetchTasks = useCallback(async (): Promise<void> => {
+    try {
+      const [openRes, doneRes] = await Promise.all([
+        fetch('/api/tasks?status=open&sort=due_asc&limit=200&include=related', { cache: 'no-store' }),
+        fetch('/api/tasks?status=completed&sort=created_desc&limit=30&include=related', { cache: 'no-store' }),
+      ]);
+      if (!openRes.ok) {
+        setError('Failed to load tasks.');
+        return;
+      }
+      setTasks((await openRes.json()) as Task[]);
+      setCompleted(doneRes.ok ? ((await doneRes.json()) as Task[]) : []);
+      setError(null);
+    } catch {
+      setError('Network error while loading tasks.');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const data = (await res.json()) as Task[];
-    setTasks(data);
-    setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     void fetchTasks();
-  }, [statusFilter, sort]);
+    const interval = window.setInterval(() => void fetchTasks(), 30000);
+    return () => window.clearInterval(interval);
+  }, [fetchTasks]);
 
-  const handleCreateTask = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
-    e.preventDefault();
-    setIsSaving(true);
-    setError(null);
+  const scoped = useMemo(() => {
+    if (scope === 'all') return tasks;
+    if (scope === 'none') return tasks.filter((task) => !task.related_type);
+    return tasks.filter((task) => task.related_type === scope);
+  }, [tasks, scope]);
 
-    const res = await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newTask),
-    });
+  const buckets = useMemo(() => bucketize(scoped), [scoped]);
 
-    if (!res.ok) {
-      const payload = (await res.json().catch(() => ({ message: 'Failed to create task.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to create task.');
-      setIsSaving(false);
-      return;
+  const updateTask = async (taskId: string, patch: Record<string, unknown>): Promise<void> => {
+    setBusyId(taskId);
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: taskId, ...patch }),
+      });
+      if (!res.ok) {
+        setError('Failed to update task.');
+        return;
+      }
+      await fetchTasks();
+    } finally {
+      setBusyId(null);
     }
-
-    setNewTask({
-      subject: '',
-      description: '',
-      due_date: '',
-      priority: 'medium',
-      status: 'open',
-      related_type: '',
-      related_id: '',
-    });
-    setShowNewTask(false);
-    setIsSaving(false);
-    await fetchTasks();
   };
 
-  const toggleTaskStatus = async (task: Task): Promise<void> => {
-    const nextStatus = (task.status ?? 'open') === 'completed' ? 'open' : 'completed';
-    const res = await fetch('/api/tasks', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: task.id, status: nextStatus }),
-    });
-
-    if (!res.ok) {
-      const payload = (await res.json().catch(() => ({ message: 'Failed to update task.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to update task.');
-      return;
+  const snooze = (task: Task, option: 'later' | 'tomorrow' | 'nextweek'): void => {
+    const due = new Date();
+    if (option === 'later') due.setHours(due.getHours() + 4);
+    else if (option === 'tomorrow') {
+      due.setDate(due.getDate() + 1);
+      due.setHours(16, 0, 0, 0);
+    } else {
+      due.setDate(due.getDate() + 7);
+      due.setHours(16, 0, 0, 0);
     }
-
-    await fetchTasks();
+    void updateTask(task.id, { due_date: due.toISOString() });
   };
 
-  const totalOpen = tasks.filter((task) => (task.status ?? 'open') === 'open').length;
-  const totalCompleted = tasks.filter((task) => (task.status ?? 'open') === 'completed').length;
-  const totalOverdue = tasks.filter((task) => isOverdue(task)).length;
+  const quickAdd = async (): Promise<void> => {
+    const subject = quickSubject.trim();
+    if (!subject) return;
+    setIsAdding(true);
+    try {
+      let dueIso: string;
+      if (quickDue) {
+        dueIso = new Date(quickDue).toISOString();
+      } else {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(16, 0, 0, 0);
+        dueIso = tomorrow.toISOString();
+      }
+      const res = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject, due_date: dueIso, priority: quickPriority }),
+      });
+      if (!res.ok) {
+        setError('Failed to add task.');
+        return;
+      }
+      setQuickSubject('');
+      setQuickDue('');
+      setQuickPriority('medium');
+      await fetchTasks();
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const openRecord = async (task: Task): Promise<void> => {
+    if (task.related_type === 'lead' && task.related_id) {
+      try {
+        const res = await fetch(`/api/leads/${encodeURIComponent(task.related_id)}`, { cache: 'no-store' });
+        if (res.ok) {
+          setDrawerLead((await res.json()) as WorkspaceLead);
+          return;
+        }
+      } catch {
+        // fall through
+      }
+    }
+    if (task.related_type === 'client' && task.related_id) {
+      window.location.assign(`/clients/${task.related_id}`);
+    }
+  };
+
+  const openCount = scoped.length;
 
   return (
     <SectionLayout title="Tasks">
-      <div className="mb-4 rounded-2xl border border-[#d6deea] bg-gradient-to-r from-[#f5f9ff] via-white to-[#f4f6ff] p-4 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#54739e]">Productivity Center</p>
-            <h2 className="mt-1 text-xl font-semibold text-[#10273f]">Agency Tasks</h2>
-            <p className="mt-1 text-sm text-[#5f738c]">Track work by priority, due date, and related record.</p>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setShowNewTask(true)}
-            className="rounded-full bg-[#0f63b4] px-4 py-2 text-xs font-semibold text-white shadow transition hover:-translate-y-0.5 hover:bg-[#0b4f92]"
+      {/* Quick add */}
+      <div className="mb-4 flex flex-wrap items-end gap-2 rounded border border-cui-border/60 bg-white p-3 shadow-card">
+        <div className="min-w-56 flex-1">
+          <label className="mb-1 block text-xs font-semibold text-cui-muted">New task</label>
+          <input
+            type="text"
+            value={quickSubject}
+            onChange={(event) => setQuickSubject(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void quickAdd();
+            }}
+            placeholder="What needs doing? (Enter to add — defaults to tomorrow 4 PM)"
+            className="w-full rounded border border-cui-border px-3 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-semibold text-cui-muted">Due</label>
+          <input
+            type="datetime-local"
+            value={quickDue}
+            onChange={(event) => setQuickDue(event.target.value)}
+            className="rounded border border-cui-border px-2 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-semibold text-cui-muted">Priority</label>
+          <select
+            value={quickPriority}
+            onChange={(event) => setQuickPriority(event.target.value as 'low' | 'medium' | 'high')}
+            className="rounded border border-cui-border px-2 py-2 text-sm"
           >
-            + New Task
-          </button>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
         </div>
-
-        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
-          <div className="rounded-xl bg-[#e9f4ff] px-3 py-2 text-sm font-semibold text-[#0e4f8b]">Open {totalOpen}</div>
-          <div className="rounded-xl bg-[#eaf8ef] px-3 py-2 text-sm font-semibold text-[#1e7a49]">Completed {totalCompleted}</div>
-          <div className="rounded-xl bg-[#fff2e2] px-3 py-2 text-sm font-semibold text-[#8d4f0f]">Overdue {totalOverdue}</div>
-        </div>
+        <button
+          type="button"
+          onClick={() => void quickAdd()}
+          disabled={isAdding || quickSubject.trim().length === 0}
+          className="inline-flex items-center gap-1.5 rounded bg-cui-primary px-3 py-2 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
+        >
+          <Plus className="h-4 w-4" />
+          {isAdding ? 'Adding…' : 'Add'}
+        </button>
       </div>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <select
-          className="rounded border border-[#d6deea] bg-white px-3 py-2 text-sm"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as TaskStatusFilter)}
+      {/* Scope filters */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+        {(
+          [
+            ['all', `All (${tasks.length})`],
+            ['lead', `Leads (${tasks.filter((t) => t.related_type === 'lead').length})`],
+            ['client', `Clients (${tasks.filter((t) => t.related_type === 'client').length})`],
+            ['none', `Unlinked (${tasks.filter((t) => !t.related_type).length})`],
+          ] as Array<[Scope, string]>
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setScope(key)}
+            className={`rounded border px-3 py-1.5 font-semibold ${
+              scope === key ? 'border-[#167495] bg-[#167495] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setShowCompleted((value) => !value)}
+          className="ml-auto rounded border border-[#d5dde5] bg-white px-3 py-1.5 font-semibold text-[#73818f] hover:bg-cui-light"
         >
-          <option value="all">All Statuses</option>
-          <option value="open">Open</option>
-          <option value="completed">Completed</option>
-          <option value="overdue">Overdue</option>
-        </select>
-
-        <select
-          className="rounded border border-[#d6deea] bg-white px-3 py-2 text-sm"
-          value={sort}
-          onChange={(e) => setSort(e.target.value as TaskSort)}
-        >
-          <option value="due_asc">Due Date (Soonest)</option>
-          <option value="due_desc">Due Date (Latest)</option>
-          <option value="priority">Priority</option>
-          <option value="created_desc">Newest</option>
-        </select>
+          {showCompleted ? 'Hide completed' : `Completed (${completed.length})`}
+        </button>
       </div>
 
       {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
-      {loading ? <div className="text-sm text-[#60748a]">Loading tasks...</div> : null}
+      {loading ? <p className="text-sm text-cui-muted">Loading tasks…</p> : null}
 
-      {!loading ? (
-        <div className="space-y-2">
-          {tasks.length === 0 ? (
-            <div className="rounded-xl border border-[#d6deea] bg-white p-4 text-sm text-[#60748a]">No tasks found for this filter.</div>
-          ) : (
-            tasks.map((task) => (
-              <div
-                key={task.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#dce6f3] bg-white p-3 shadow-sm transition hover:border-[#c4d7ef]"
-              >
-                <div className="flex min-w-0 flex-1 items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={(task.status ?? 'open') === 'completed'}
-                    onChange={() => void toggleTaskStatus(task)}
-                    className="mt-1 h-4 w-4 rounded border-[#a9b8cc]"
-                  />
-
-                  <div className="min-w-0">
-                    <p className={`truncate text-sm font-semibold ${(task.status ?? 'open') === 'completed' ? 'text-[#7e8b9b] line-through' : 'text-[#10273f]'}`}>
-                      {task.subject}
-                    </p>
-                    <p className="mt-0.5 text-xs text-[#647b94]">
-                      Due: {task.due_date ? new Date(task.due_date).toLocaleDateString() : 'No date'}
-                      {task.related_type ? ` · Related: ${task.related_type}` : ''}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {isOverdue(task) ? <span className="rounded-full bg-rose-100 px-2 py-1 text-[10px] font-semibold text-rose-700">Overdue</span> : null}
-                  <span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase ${priorityBadge(task.priority)}`}>
-                    {task.priority ?? 'medium'}
-                  </span>
-                  <span
-                    className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase ${(task.status ?? 'open') === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}
-                  >
-                    {task.status ?? 'open'}
-                  </span>
-                </div>
-              </div>
-            ))
-          )}
+      {!loading && openCount === 0 ? (
+        <div className="rounded border border-dashed border-cui-border bg-white p-10 text-center">
+          <CheckCircle2 className="mx-auto h-8 w-8 text-cui-success" />
+          <p className="mt-2 text-sm font-semibold text-cui-text">All clear</p>
+          <p className="text-xs text-cui-muted">No open tasks in this view.</p>
         </div>
       ) : null}
 
-      {showNewTask ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/45 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-xl">
-            <h3 className="mb-3 text-lg font-semibold text-[#10273f]">New Task</h3>
+      {/* Buckets */}
+      <div className="space-y-5">
+        {buckets.map((bucket) => (
+          <section key={bucket.key}>
+            <h2 className={`mb-2 text-sm font-bold uppercase tracking-wide ${bucket.tone}`}>
+              {bucket.label} <span className="font-normal opacity-70">({bucket.tasks.length})</span>
+            </h2>
+            <div className="divide-y divide-cui-light rounded border border-cui-border/60 bg-white shadow-card">
+              {bucket.tasks.map((task) => {
+                const isHigh = (task.priority ?? '').toLowerCase() === 'high';
+                return (
+                  <div key={task.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <button
+                      type="button"
+                      onClick={() => void updateTask(task.id, { status: 'completed' })}
+                      disabled={busyId === task.id}
+                      className="shrink-0 text-cui-muted transition hover:text-cui-success disabled:opacity-50"
+                      title="Mark complete"
+                    >
+                      <Circle className="h-5 w-5" />
+                    </button>
 
-            <form onSubmit={handleCreateTask} className="space-y-2">
-              <input
-                required
-                type="text"
-                placeholder="Task title"
-                value={newTask.subject}
-                onChange={(e) => setNewTask((prev) => ({ ...prev, subject: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
-              />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        {isHigh ? <Flag className="h-3.5 w-3.5 shrink-0 text-cui-danger" /> : null}
+                        <p className="truncate text-sm font-semibold text-cui-text">{task.subject}</p>
+                      </div>
+                      {task.description ? <p className="truncate text-xs text-cui-muted">{task.description}</p> : null}
+                    </div>
 
-              <textarea
-                placeholder="Description"
-                value={newTask.description}
-                onChange={(e) => setNewTask((prev) => ({ ...prev, description: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
-              />
+                    {task.related_name ? (
+                      <button
+                        type="button"
+                        onClick={() => void openRecord(task)}
+                        className="hidden shrink-0 items-center gap-1 rounded-full border border-cui-primary/30 bg-cui-primary/5 px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/15 sm:inline-flex"
+                        title={`Open ${task.related_name}`}
+                      >
+                        <User className="h-3 w-3" />
+                        <span className="max-w-36 truncate">{task.related_name}</span>
+                      </button>
+                    ) : null}
 
-              <input
-                type="date"
-                value={newTask.due_date}
-                onChange={(e) => setNewTask((prev) => ({ ...prev, due_date: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
-              />
+                    <span className="hidden shrink-0 items-center gap-1 text-xs text-cui-muted md:inline-flex">
+                      <Clock className="h-3.5 w-3.5" />
+                      {dueLabel(task.due_date) || 'No due date'}
+                    </span>
 
-              <select
-                value={newTask.priority}
-                onChange={(e) => setNewTask((prev) => ({ ...prev, priority: e.target.value as TaskPriority }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
-              >
-                <option value="low">Low Priority</option>
-                <option value="medium">Medium Priority</option>
-                <option value="high">High Priority</option>
-              </select>
+                    <select
+                      defaultValue=""
+                      disabled={busyId === task.id}
+                      onChange={(event) => {
+                        const option = event.target.value as 'later' | 'tomorrow' | 'nextweek' | '';
+                        event.target.value = '';
+                        if (option) snooze(task, option);
+                      }}
+                      className="shrink-0 rounded border border-cui-border bg-white px-2 py-1 text-xs text-cui-muted"
+                    >
+                      <option value="" disabled>Snooze…</option>
+                      <option value="later">Later today</option>
+                      <option value="tomorrow">Tomorrow 4 PM</option>
+                      <option value="nextweek">Next week</option>
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ))}
 
-              <select
-                value={newTask.related_type}
-                onChange={(e) => setNewTask((prev) => ({ ...prev, related_type: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
-              >
-                <option value="">Related Type (Optional)</option>
-                <option value="lead">Lead</option>
-                <option value="client">Client</option>
-                <option value="policy">Policy</option>
-                <option value="claim">Claim</option>
-                <option value="endorsement">Endorsement</option>
-                <option value="certificate">Certificate</option>
-              </select>
+        {showCompleted && completed.length > 0 ? (
+          <section>
+            <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-cui-success">
+              Completed <span className="font-normal opacity-70">({completed.length})</span>
+            </h2>
+            <div className="divide-y divide-cui-light rounded border border-cui-border/60 bg-white shadow-card">
+              {completed.map((task) => (
+                <div key={task.id} className="flex items-center gap-3 px-4 py-2.5 opacity-70">
+                  <CheckCircle2 className="h-5 w-5 shrink-0 text-cui-success" />
+                  <p className="min-w-0 flex-1 truncate text-sm text-cui-muted line-through">{task.subject}</p>
+                  {task.related_name ? <span className="shrink-0 text-xs text-cui-muted">{task.related_name}</span> : null}
+                  <button
+                    type="button"
+                    onClick={() => void updateTask(task.id, { status: 'open' })}
+                    className="shrink-0 text-xs font-semibold text-cui-primary hover:underline"
+                  >
+                    Reopen
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+      </div>
 
-              <input
-                type="text"
-                placeholder="Related ID (Optional)"
-                value={newTask.related_id}
-                onChange={(e) => setNewTask((prev) => ({ ...prev, related_id: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
-              />
-
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="w-full rounded bg-[#0f63b4] px-3 py-2 text-sm font-semibold text-white hover:bg-[#0b4f92] disabled:opacity-60"
-              >
-                {isSaving ? 'Saving Task...' : 'Save Task'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowNewTask(false)}
-                className="w-full rounded bg-[#e7edf5] px-3 py-2 text-sm font-semibold text-[#3d4f65] hover:bg-[#d8e1ec]"
-              >
-                Cancel
-              </button>
-            </form>
-          </div>
-        </div>
+      {drawerLead ? (
+        <LeadWorkspace
+          lead={drawerLead}
+          onClose={() => setDrawerLead(null)}
+          onChanged={() => void fetchTasks()}
+        />
       ) : null}
     </SectionLayout>
   );

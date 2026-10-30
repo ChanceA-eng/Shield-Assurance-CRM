@@ -1,67 +1,26 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
+import { requireApiSession } from '../../../../../lib/api-auth';
 
 interface RouteContext {
   params: Promise<{ clientId: string }>;
-}
-
-interface QueryResult<T> {
-  data: T[] | null;
-  error: { message?: string } | null;
 }
 
 function normalize(value?: string | null): string {
   return (value ?? '').trim();
 }
 
-function isMissingRelationError(message: string | undefined): boolean {
-  if (!message) return false;
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("could not find the table") ||
-    lower.includes('relation') ||
-    lower.includes('schema cache') ||
-    lower.includes('does not exist')
-  );
-}
+export async function GET(request: NextRequest, context: RouteContext): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
 
-function shouldIgnoreQueryError(key: string, message: string | undefined): boolean {
-  if (!isMissingRelationError(message)) return false;
-
-  const optionalKeys = new Set([
-    'claims',
-    'endorsements',
-    'certificates',
-    'assets',
-    'clientTasks',
-    'files',
-    'tags',
-    'activities',
-    'timelineTasks',
-    'events',
-    'leadsByEmail',
-    'leadsByPhone',
-    'leadsByName',
-  ]);
-
-  return optionalKeys.has(key);
-}
-
-function safeData<T>(key: string, result: QueryResult<T>): T[] {
-  if (result.error && shouldIgnoreQueryError(key, result.error.message)) {
-    return [];
-  }
-  return (result.data ?? []) as T[];
-}
-
-export async function GET(_request: Request, context: RouteContext): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
   }
 
   const { clientId } = await context.params;
-  const requestUrl = new URL(_request.url);
+  const requestUrl = new URL(request.url);
   const timelineLimitParam = Number(requestUrl.searchParams.get('timelineLimit') ?? '120');
   const activityLimitParam = Number(requestUrl.searchParams.get('activityLimit') ?? '80');
   const timelineLimit = Number.isFinite(timelineLimitParam)
@@ -73,28 +32,19 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
 
   const clientQuery = await supabase
     .from('clients')
-    .select('id,full_name,phone,email,address,source,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at')
+    .select('id,full_name,phone,email,address,source,account_type,assigned_producer,csr,since_date,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at')
     .eq('id', clientId)
     .maybeSingle();
 
-  const resolvedClientQuery =
-    clientQuery.error && shouldIgnoreQueryError('client', clientQuery.error.message)
-      ? await supabase
-          .from('clients')
-          .select('id,full_name,phone,email,address,source,email_consent,sms_consent,preferred_channel,created_at')
-          .eq('id', clientId)
-          .maybeSingle()
-      : clientQuery;
-
-  if (resolvedClientQuery.error) {
-    return NextResponse.json({ message: resolvedClientQuery.error.message }, { status: 500 });
+  if (clientQuery.error) {
+    return NextResponse.json({ message: clientQuery.error.message }, { status: 500 });
   }
 
-  if (!resolvedClientQuery.data) {
+  if (!clientQuery.data) {
     return NextResponse.json({ message: 'Client not found.' }, { status: 404 });
   }
 
-  const client = resolvedClientQuery.data;
+  const client = clientQuery.data;
 
   const [
     policiesRes,
@@ -106,6 +56,8 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
     claimsRes,
     endorsementsRes,
     certificatesRes,
+    applicationsRes,
+    campaignsRes,
     assetsRes,
     clientTasksRes,
     filesRes,
@@ -114,7 +66,7 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
   ] = await Promise.all([
     supabase
       .from('policies')
-      .select('id,client_id,insured_name,carrier,line_of_business,premium,policy_number,effective_date,renewal_date,status,created_at')
+      .select('id,client_id,account_id,insured_name,carrier,line_of_business,sub_type,premium,policy_number,effective_date,renewal_date,expiration_date,status,billing_type,source,prior_policy_id,created_at')
       .eq('client_id', clientId)
       .order('created_at', { ascending: false })
       .limit(200),
@@ -150,7 +102,7 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
       .eq('related_id', clientId)
       .order('event_date', { ascending: false })
       .limit(timelineLimit),
-    supabase.from('claims').select('id,client_id,type,status,description,date_of_loss,created_at').eq('client_id', clientId).order('created_at', { ascending: false }).limit(100),
+    supabase.from('claims').select('id,client_id,account_id,policy_id,claim_number,type,status,description,date_of_loss,adjuster_name,adjuster_contact,reserve_amount,payout_amount,created_at').eq('client_id', clientId).order('created_at', { ascending: false }).limit(100),
     supabase
       .from('endorsements')
       .select('id,client_id,type,status,description,effective_date,created_at')
@@ -159,8 +111,20 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
       .limit(100),
     supabase
       .from('certificates')
-      .select('id,client_id,certificate_holder,status,description,issue_date,created_at')
+      .select('id,client_id,account_id,policy_id,certificate_holder,holder_name,holder_address,status,description,issue_date,issued_date,expiration_date,coverage_summary,file_path,is_master,master_template_id,created_at')
       .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+      .limit(100),
+    supabase
+      .from('applications')
+      .select('id,account_id,line_of_business,status,created_at,updated_at')
+      .eq('account_id', clientId)
+      .order('created_at', { ascending: false })
+      .limit(100),
+    supabase
+      .from('campaigns')
+      .select('id,name,status,account_id,list_name,scheduled_at,sent_at,created_at,updated_at')
+      .or(`account_id.eq.${clientId},account_id.is.null`)
       .order('created_at', { ascending: false })
       .limit(100),
     supabase.from('client_assets').select('id,client_id,title,asset_type,value,metadata,created_at,updated_at').eq('client_id', clientId).order('updated_at', { ascending: false }).limit(200),
@@ -175,7 +139,7 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
       .limit(activityLimit),
   ]);
 
-  const namedResponses: Record<string, QueryResult<unknown>> = {
+  const namedResponses = {
     policies: policiesRes,
     communications: communicationsRes,
     scheduledMessages: scheduledRes,
@@ -185,6 +149,8 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
     claims: claimsRes,
     endorsements: endorsementsRes,
     certificates: certificatesRes,
+    applications: applicationsRes,
+    campaigns: campaignsRes,
     assets: assetsRes,
     clientTasks: clientTasksRes,
     files: filesRes,
@@ -193,7 +159,7 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
   };
 
   for (const [key, result] of Object.entries(namedResponses)) {
-    if (result.error && !shouldIgnoreQueryError(key, result.error.message)) {
+    if (result.error) {
       return NextResponse.json({ message: result.error.message ?? 'Failed to load client workspace data.' }, { status: 500 });
     }
   }
@@ -221,7 +187,7 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
   ];
 
   for (const entry of leadEntries) {
-    if (entry.result.error && !shouldIgnoreQueryError(entry.key, entry.result.error.message)) {
+    if (entry.result.error) {
       return NextResponse.json({ message: entry.result.error.message ?? 'Failed to load leads for this client.' }, { status: 500 });
     }
   }
@@ -236,21 +202,23 @@ export async function GET(_request: Request, context: RouteContext): Promise<Nex
   return NextResponse.json(
     {
       client,
-      policies: safeData('policies', policiesRes),
+      policies: policiesRes.data ?? [],
       leads: Array.from(leadMap.values()),
-      communications: safeData('communications', communicationsRes),
-      scheduledMessages: safeData('scheduledMessages', scheduledRes),
-      notifications: safeData('notifications', notificationsRes),
-      timelineTasks: safeData('timelineTasks', tasksRes),
-      events: safeData('events', eventsRes),
-      claims: safeData('claims', claimsRes),
-      endorsements: safeData('endorsements', endorsementsRes),
-      certificates: safeData('certificates', certificatesRes),
-      assets: safeData('assets', assetsRes),
-      clientTasks: safeData('clientTasks', clientTasksRes),
-      files: safeData('files', filesRes),
-      tags: safeData('tags', tagsRes),
-      activities: safeData('activities', activitiesRes),
+      communications: communicationsRes.data ?? [],
+      scheduledMessages: scheduledRes.data ?? [],
+      notifications: notificationsRes.data ?? [],
+      timelineTasks: tasksRes.data ?? [],
+      events: eventsRes.data ?? [],
+      claims: claimsRes.data ?? [],
+      endorsements: endorsementsRes.data ?? [],
+      certificates: certificatesRes.data ?? [],
+      applications: applicationsRes.data ?? [],
+      campaigns: campaignsRes.data ?? [],
+      assets: assetsRes.data ?? [],
+      clientTasks: clientTasksRes.data ?? [],
+      files: filesRes.data ?? [],
+      tags: tagsRes.data ?? [],
+      activities: activitiesRes.data ?? [],
     },
     { status: 200 },
   );

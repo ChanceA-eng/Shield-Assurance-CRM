@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
+import { requireApiSession } from '../../../lib/api-auth';
 
 interface InteractionPayload {
   id?: string;
@@ -32,6 +33,9 @@ function normalizeIsoDate(input: unknown): string | null {
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -90,6 +94,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -139,6 +146,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function PATCH(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });

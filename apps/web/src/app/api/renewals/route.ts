@@ -2,16 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 
 type RenewalWindow = '30' | '60' | '90' | 'overdue';
-
-function isoDate(value: Date): string {
-  return value.toISOString().slice(0, 10);
-}
-
-function daysFromNowISO(days: number): string {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() + days);
-  return isoDate(date);
-}
+type RenewalBucket = '0-30' | '31-60' | '61-90' | 'overdue';
 
 function normalizePremium(value: unknown): number {
   if (typeof value === 'number') {
@@ -30,18 +21,19 @@ async function getWindowCount(window: RenewalWindow): Promise<number> {
   const supabase = getSupabaseServerClient();
   if (!supabase) return 0;
 
-  const today = isoDate(new Date());
-  let query = supabase.from('policies').select('id', { count: 'exact', head: true }).in('status', ['active', 'issued']);
-  if (window === 'overdue') {
-    query = query.lt('renewal_date', today);
-  } else {
-    const withinDays = Number(window);
-    query = query.gte('renewal_date', today).lte('renewal_date', daysFromNowISO(withinDays));
-  }
+  const bucket = windowToBucket(window);
+  const query = supabase.from('renewals').select('id', { count: 'exact', head: true }).eq('renewal_bucket', bucket);
 
   const { count, error } = await query;
   if (error) return 0;
   return count ?? 0;
+}
+
+function windowToBucket(window: RenewalWindow): RenewalBucket {
+  if (window === '60') return '31-60';
+  if (window === '90') return '61-90';
+  if (window === 'overdue') return 'overdue';
+  return '0-30';
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -52,21 +44,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const rawWindow = request.nextUrl.searchParams.get('window') ?? '30';
   const window: RenewalWindow = rawWindow === '60' || rawWindow === '90' || rawWindow === 'overdue' ? rawWindow : '30';
-  const today = isoDate(new Date());
+  const bucket = windowToBucket(window);
 
-  let query = supabase
-    .from('policies')
-    .select('id,client_id,insured_name,carrier,line_of_business,premium,renewal_date,status')
-    .in('status', ['active', 'issued'])
-    .order('renewal_date', { ascending: true })
+  const query = supabase
+    .from('renewals')
+    .select('id,client_id,account_id,insured_name,carrier,line_of_business,sub_type,premium,renewal_date,expiration_date,status,billing_type,prior_policy_id,renewal_bucket')
+    .eq('renewal_bucket', bucket)
+    .order('expiration_date', { ascending: true })
     .limit(250);
-
-  if (window === 'overdue') {
-    query = query.lt('renewal_date', today);
-  } else {
-    const withinDays = Number(window);
-    query = query.gte('renewal_date', today).lte('renewal_date', daysFromNowISO(withinDays));
-  }
 
   const [{ data, error }, count30, count60, count90, countOverdue] = await Promise.all([
     query,

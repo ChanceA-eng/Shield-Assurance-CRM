@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
+import { requireApiSession } from '../../../../lib/api-auth';
 import { parse as parseCsv } from 'csv-parse/sync';
 import pdf from 'pdf-parse';
 import * as XLSX from 'xlsx';
@@ -301,8 +303,11 @@ async function parseFileToLeads(file: File): Promise<LeadInsert[]> {
   throw new Error('Unsupported file type. Upload CSV, Excel (.xlsx/.xls), or PDF.');
 }
 
-export async function POST(request: Request): Promise<NextResponse> {
+export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
+    const authError = await requireApiSession(request);
+    if (authError) return authError;
+
     const supabase = getSupabaseServerClient();
     if (!supabase) {
       return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });

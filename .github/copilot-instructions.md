@@ -5,3 +5,4 @@
 - Keep backend architecture modular and testable (feature modules, thin controllers, service orchestration).
 - Favor optimistic UX in the web app and resilient async processing in the worker.
 - Keep external integrations behind adapter services (Twilio, SendGrid, Microsoft Graph).
+- For web UI work, follow `.github/instructions/coreui-design.instructions.md`: CoreUI-style admin look built natively in Tailwind (EzLynx parity is retired).

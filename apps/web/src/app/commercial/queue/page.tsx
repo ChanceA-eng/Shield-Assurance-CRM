@@ -57,22 +57,22 @@ export default function CommercialQueuePage(): JSX.Element {
   return (
     <SectionLayout title="Commercial Queue">
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-[#3e3e3c]">Monitor pre-client commercial intake accounts and launch underwriting workflows.</p>
-        <Link href={'/commercial/intake' as Route} className="rounded border border-[#0163b3] bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1]">
+        <p className="text-sm text-[#5c6873]">Monitor pre-client commercial intake accounts and launch underwriting workflows.</p>
+        <Link href={'/commercial/intake' as Route} className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7]">
           + New Intake
         </Link>
       </div>
 
       {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
-      {loading ? <div className="text-sm text-[#6a6a6a]">Loading commercial queue...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading commercial queue...</div> : null}
 
       {!loading ? (
-        <div className="rounded border border-[#dddbda] bg-white shadow-sm">
+        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
           {rows.length === 0 ? (
-            <div className="p-4 text-sm text-[#6a6a6a]">No intake records yet.</div>
+            <div className="p-4 text-sm text-[#73818f]">No intake records yet.</div>
           ) : (
             <table className="w-full text-left text-sm">
-              <thead className="bg-[#f8f8f7] text-[#6a6a6a]">
+              <thead className="bg-[#f8f9fa] text-[#73818f]">
                 <tr>
                   <th className="px-3 py-2">Business</th>
                   <th className="px-3 py-2">Industry</th>
@@ -83,14 +83,14 @@ export default function CommercialQueuePage(): JSX.Element {
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <tr key={row.id} className="border-t border-[#f3f2f1]">
-                    <td className="px-3 py-2 font-semibold text-[#0176d3]">{row.legalName}</td>
+                  <tr key={row.id} className="border-t border-[#f0f3f5]">
+                    <td className="px-3 py-2 font-semibold text-[#20a8d8]">{row.legalName}</td>
                     <td className="px-3 py-2">{row.industryGroup}</td>
                     <td className="px-3 py-2">{row.riskCompletenessScore ?? 0}%</td>
                     <td className="px-3 py-2">{new Date(row.createdAt).toLocaleString()}</td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-3">
-                        <Link href={`/commercial/intake?id=${row.id}` as Route} className="font-semibold text-[#0f62af] hover:underline">
+                        <Link href={`/commercial/intake?id=${row.id}` as Route} className="font-semibold text-[#167495] hover:underline">
                           Open Intake
                         </Link>
                         <button

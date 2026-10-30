@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
+import { requireApiSession } from '../../../../../lib/api-auth';
 
 interface LeadRow {
   id: string;
@@ -14,9 +15,12 @@ interface RouteContext {
 }
 
 export async function GET(
-  _request: Request,
+  request: NextRequest,
   context: RouteContext,
 ): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });

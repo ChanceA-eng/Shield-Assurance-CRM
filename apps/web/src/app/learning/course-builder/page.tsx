@@ -119,17 +119,17 @@ export default function CourseBuilderPage(): JSX.Element {
   return (
     <SectionLayout title="Course Builder">
       <div className="space-y-4">
-        <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+        <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center gap-2">
-            <a href="/learning" className="rounded-md border border-[#c9c7c5] px-3 py-1.5 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Back to Learning Center</a>
-            <a href="/" className="rounded-md border border-[#c9c7c5] px-3 py-1.5 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Exit Studio</a>
+            <a href="/learning" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Learning Center</a>
+            <a href="/" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Exit Studio</a>
             <button
               type="button"
               onClick={() => {
                 void importFlagshipNow();
               }}
               disabled={importingFlagship}
-              className="rounded-md border border-[#0f62af] px-3 py-1.5 text-xs font-semibold text-[#0f62af] hover:bg-[#eef5ff] disabled:opacity-60"
+              className="rounded-md border border-[#167495] px-3 py-1.5 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff] disabled:opacity-60"
             >
               {importingFlagship ? 'Importing...' : 'Import Contractor Master Course'}
             </button>
@@ -155,23 +155,23 @@ export default function CourseBuilderPage(): JSX.Element {
           </div>
         </section>
 
-        <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
-          <h2 className="text-base font-bold text-[#080707]">Create Course</h2>
+        <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+          <h2 className="text-base font-bold text-[#23282c]">Create Course</h2>
           <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
             <input
-              className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm"
+              className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="Course title"
             />
             <input
-              className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm md:col-span-2"
+              className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Description"
             />
             <select
-              className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm"
+              className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm"
               value={level}
               onChange={(event) => {
                 const value = event.target.value;
@@ -190,7 +190,7 @@ export default function CourseBuilderPage(): JSX.Element {
             onClick={() => {
               void createCourse();
             }}
-            className="mt-3 rounded-md bg-[#0b2545] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#133a6b]"
+            className="mt-3 rounded-md bg-[#23282c] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#133a6b]"
           >
             + Create Course
           </button>
@@ -201,9 +201,9 @@ export default function CourseBuilderPage(): JSX.Element {
 
         <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {courses.map((course) => (
-            <a key={course.id} href={`/learning/course-builder/${course.id}`} className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm transition hover:border-[#0f62af]">
+            <a key={course.id} href={`/learning/course-builder/${course.id}`} className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm transition hover:border-[#167495]">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[#706e6b]">{course.level}</p>
-              <h3 className="mt-1 text-sm font-bold text-[#080707]">{course.title}</h3>
+              <h3 className="mt-1 text-sm font-bold text-[#23282c]">{course.title}</h3>
               <p className="mt-1 text-xs text-[#514f4d]">{course.modules.length} modules</p>
             </a>
           ))}

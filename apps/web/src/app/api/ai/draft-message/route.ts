@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
+import { draftOutreach } from '../../../../lib/outreach-ai';
 
 interface DraftPayload {
   prompt?: string;
@@ -60,13 +61,34 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!active) return '';
     const carrier = normalize(active.carrier);
     const lob = normalize(active.line_of_business);
-    return [carrier, lob].filter(Boolean).join(' · ');
+    const renewal = normalize(active.renewal_date);
+    return [carrier, lob, renewal ? `renews ${renewal}` : ''].filter(Boolean).join(' · ');
   })();
 
   const channel = payload.channel ?? 'email';
-  const subject = normalize(payload.subject) || (channel === 'sms' ? `Quick Follow-up for ${clientName}` : `Follow-up for ${clientName}`);
+  const fallbackSubject = normalize(payload.subject) || (channel === 'sms' ? `Quick Follow-up for ${clientName}` : `Follow-up for ${clientName}`);
 
-  const text = [
+  // Real AI drafting grounded on the client's policies and conversation history.
+  const aiDraft = await draftOutreach(
+    {
+      full_name: clientName,
+      line_of_business: policyHint || null,
+      form_payload: {
+        profile: {
+          kind: 'generic',
+          extras: {
+            'Account context': policyHint || 'No active policy on file',
+            'Conversation history': recentContext,
+            'Channel': channel,
+          },
+        },
+      },
+    },
+    prompt,
+  );
+
+  const subject = aiDraft?.subject ?? fallbackSubject;
+  const text = aiDraft?.body ?? [
     `Hi ${clientName},`,
     '',
     `${prompt.charAt(0).toUpperCase()}${prompt.slice(1)}.`,

@@ -14,9 +14,9 @@ export default function CommercialIntakeClient(): JSX.Element {
   return (
     <SectionLayout title="Commercial Intake">
       <div className="flex h-full min-h-[70vh] gap-4">
-        <div className="flex-1 overflow-y-auto rounded border border-[#dddbda] bg-white p-4 shadow-sm">
-          <h2 className="mb-1 text-lg font-bold text-[#080707]">Commercial Intake Workspace</h2>
-          <p className="mb-4 text-sm text-[#3e3e3c]">Capture underwriting-ready risk intake before moving prospects into client and policy workflows.</p>
+        <div className="flex-1 overflow-y-auto rounded border border-[#c8ced3] bg-white p-4 shadow-sm">
+          <h2 className="mb-1 text-lg font-bold text-[#23282c]">Commercial Intake Workspace</h2>
+          <p className="mb-4 text-sm text-[#5c6873]">Capture underwriting-ready risk intake before moving prospects into client and policy workflows.</p>
           <IntakeForm onInsightsChange={setInsights} />
         </div>
         <UnderwritingPanel

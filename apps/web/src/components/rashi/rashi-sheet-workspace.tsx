@@ -254,10 +254,10 @@ export default function RashiSheetWorkspace(): JSX.Element {
   };
 
   return (
-    <section className="rounded-2xl border border-[#dddbda] bg-white p-5 shadow-sm">
+    <section className="rounded-2xl border border-[#c8ced3] bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-4 border-b border-[#e2e8f0] pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#0f62af]">Knowledge Sheets</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#167495]">Knowledge Sheets</p>
           <h3 className="mt-1 text-xl font-semibold text-[#081a30]">Interactive ledgers inside the Knowledge Center</h3>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[#475569]">
             Build flexible expense boards, carrier login sheets, or freeform operating notes. Uploaded files stay in Supabase Storage,
@@ -268,18 +268,18 @@ export default function RashiSheetWorkspace(): JSX.Element {
           type="button"
           onClick={() => void handleCreateSheet()}
           disabled={creating}
-          className="rounded-xl bg-[#0b2545] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#13335c] disabled:cursor-not-allowed disabled:bg-[#56708b]"
+          className="rounded-xl bg-[#23282c] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#13335c] disabled:cursor-not-allowed disabled:bg-[#56708b]"
         >
           {creating ? 'Creating Sheet...' : 'Create Blank Sheet'}
         </button>
       </div>
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[260px_1fr]">
-        <aside className="rounded-2xl border border-[#e2e8f0] bg-[#f8fbff] p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#64748b]">Directory</p>
-          {loadingList ? <p className="mt-3 text-sm text-[#64748b]">Loading sheets...</p> : null}
+        <aside className="rounded-2xl border border-[#e2e8f0] bg-[#f8f9fa] p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#73818f]">Directory</p>
+          {loadingList ? <p className="mt-3 text-sm text-[#73818f]">Loading sheets...</p> : null}
           {!loadingList && sheets.length === 0 ? (
-            <p className="mt-3 text-sm text-[#64748b]">No sheets yet. Create one to start a ledger or note grid.</p>
+            <p className="mt-3 text-sm text-[#73818f]">No sheets yet. Create one to start a ledger or note grid.</p>
           ) : null}
           <div className="mt-3 space-y-4">
             {Object.entries(groupedSheets)
@@ -298,12 +298,12 @@ export default function RashiSheetWorkspace(): JSX.Element {
                         }}
                         className={`w-full rounded-xl border px-3 py-2 text-left transition ${
                           activeSheetId === sheet.id
-                            ? 'border-[#0176d3] bg-white shadow-sm'
+                            ? 'border-[#20a8d8] bg-white shadow-sm'
                             : 'border-transparent bg-white/60 hover:border-[#cbd5e1]'
                         }`}
                       >
                         <p className="truncate text-sm font-semibold text-[#081a30]">{sheet.title}</p>
-                        <p className="mt-1 text-xs text-[#64748b]">{sheet.rowCount} rows · {sheet.columnCount} columns</p>
+                        <p className="mt-1 text-xs text-[#73818f]">{sheet.rowCount} rows · {sheet.columnCount} columns</p>
                       </button>
                     ))}
                   </div>
@@ -313,7 +313,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
         </aside>
 
         <div className="rounded-2xl border border-[#e2e8f0] bg-[#fcfdff] p-4">
-          {loadingSheet ? <p className="text-sm text-[#64748b]">Loading selected sheet...</p> : null}
+          {loadingSheet ? <p className="text-sm text-[#73818f]">Loading selected sheet...</p> : null}
 
           {!loadingSheet && !activeSheet ? (
             <div className="rounded-2xl border border-dashed border-[#cbd5e1] bg-white p-6 text-sm text-[#475569]">
@@ -331,7 +331,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
                       type="text"
                       value={activeSheet.title}
                       onChange={(event) => setActiveSheet({ ...activeSheet, title: event.target.value })}
-                      className="mt-1 w-full rounded-xl border border-[#c9c7c5] bg-white px-3 py-2.5 text-sm"
+                      className="mt-1 w-full rounded-xl border border-[#c8ced3] bg-white px-3 py-2.5 text-sm"
                     />
                   </label>
                   <label className="text-sm font-medium text-[#334155]">
@@ -340,7 +340,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
                       type="text"
                       value={activeSheet.category}
                       onChange={(event) => setActiveSheet({ ...activeSheet, category: event.target.value })}
-                      className="mt-1 w-full rounded-xl border border-[#c9c7c5] bg-white px-3 py-2.5 text-sm"
+                      className="mt-1 w-full rounded-xl border border-[#c8ced3] bg-white px-3 py-2.5 text-sm"
                     />
                   </label>
                 </div>
@@ -349,7 +349,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
                   <button
                     type="button"
                     onClick={handleAddRow}
-                    className="rounded-xl border border-[#cbd5e1] bg-white px-3 py-2 text-sm font-semibold text-[#0b2545] transition hover:border-[#94a3b8]"
+                    className="rounded-xl border border-[#cbd5e1] bg-white px-3 py-2 text-sm font-semibold text-[#23282c] transition hover:border-[#94a3b8]"
                   >
                     Add Row
                   </button>
@@ -357,7 +357,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
                     type="button"
                     onClick={() => void handleSaveSheet()}
                     disabled={saving}
-                    className="rounded-xl bg-[#0176d3] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#015ba1] disabled:cursor-not-allowed disabled:bg-[#8eb9df]"
+                    className="rounded-xl bg-[#20a8d8] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#1b8eb7] disabled:cursor-not-allowed disabled:bg-[#8eb9df]"
                   >
                     {saving ? 'Saving...' : 'Save Sheet'}
                   </button>
@@ -370,12 +370,12 @@ export default function RashiSheetWorkspace(): JSX.Element {
                   value={newColumnLabel}
                   onChange={(event) => setNewColumnLabel(event.target.value)}
                   placeholder="New column name"
-                  className="rounded-xl border border-[#c9c7c5] px-3 py-2.5 text-sm"
+                  className="rounded-xl border border-[#c8ced3] px-3 py-2.5 text-sm"
                 />
                 <select
                   value={newColumnType}
                   onChange={(event) => setNewColumnType(event.target.value as SheetColumnType)}
-                  className="rounded-xl border border-[#c9c7c5] px-3 py-2.5 text-sm"
+                  className="rounded-xl border border-[#c8ced3] px-3 py-2.5 text-sm"
                 >
                   <option value="text">Text</option>
                   <option value="number">Number</option>
@@ -385,7 +385,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
                 <button
                   type="button"
                   onClick={handleAddColumn}
-                  className="rounded-xl border border-[#0f62af] bg-[#f6fbff] px-3 py-2.5 text-sm font-semibold text-[#0f62af] transition hover:bg-[#eaf4fd]"
+                  className="rounded-xl border border-[#167495] bg-[#f6fbff] px-3 py-2.5 text-sm font-semibold text-[#167495] transition hover:bg-[#eaf4fd]"
                 >
                   Add Column
                 </button>
@@ -393,15 +393,15 @@ export default function RashiSheetWorkspace(): JSX.Element {
 
               <div className="grid gap-3 md:grid-cols-3">
                 <div className="rounded-2xl border border-[#d8e6f6] bg-[#f6fbff] p-4">
-                  <p className="text-xs uppercase tracking-[0.14em] text-[#64748b]">Rows</p>
+                  <p className="text-xs uppercase tracking-[0.14em] text-[#73818f]">Rows</p>
                   <p className="mt-1 text-2xl font-bold text-[#081a30]">{activeSheet.rows.length}</p>
                 </div>
                 <div className="rounded-2xl border border-[#d8e6f6] bg-[#f6fbff] p-4">
-                  <p className="text-xs uppercase tracking-[0.14em] text-[#64748b]">Columns</p>
+                  <p className="text-xs uppercase tracking-[0.14em] text-[#73818f]">Columns</p>
                   <p className="mt-1 text-2xl font-bold text-[#081a30]">{activeSheet.columns.length}</p>
                 </div>
                 <div className="rounded-2xl border border-[#d8e6f6] bg-[#f6fbff] p-4">
-                  <p className="text-xs uppercase tracking-[0.14em] text-[#64748b]">Grand Total</p>
+                  <p className="text-xs uppercase tracking-[0.14em] text-[#73818f]">Grand Total</p>
                   <p className="mt-1 text-2xl font-bold text-[#081a30]">{formatMoney(grandTotal)}</p>
                 </div>
               </div>
@@ -419,7 +419,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
                             className="w-full rounded-lg border border-[#cbd5e1] bg-white px-2 py-1.5 text-sm font-semibold text-[#081a30]"
                           />
                           {column.formula ? (
-                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#0f62af]">Auto: Unit Cost × Quantity</p>
+                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#167495]">Auto: Unit Cost × Quantity</p>
                           ) : (
                             <select
                               value={column.type}
@@ -442,7 +442,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
                         {activeSheet.columns.map((column) => (
                           <td key={`${row.id}-${column.key}`} className="border-b border-r border-[#e2e8f0] px-3 py-2 align-top last:border-r-0">
                             {column.formula ? (
-                              <div className="rounded-lg border border-dashed border-[#cbd5e1] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#0b2545]">
+                              <div className="rounded-lg border border-dashed border-[#cbd5e1] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#23282c]">
                                 {formatMoney(computeSheetFormulaValue(row, column))}
                               </div>
                             ) : (
@@ -452,7 +452,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
                                 step={column.type === 'number' || column.type === 'currency' ? '0.01' : undefined}
                                 value={typeof row[column.key] === 'number' ? String(row[column.key]) : (row[column.key] ?? '')}
                                 onChange={(event) => handleUpdateCell(row.id, column.key, event.target.value)}
-                                className="w-full rounded-lg border border-transparent bg-transparent px-2 py-2 text-sm text-[#0f172a] outline-none transition focus:border-[#93c5fd] focus:bg-[#f8fbff]"
+                                className="w-full rounded-lg border border-transparent bg-transparent px-2 py-2 text-sm text-[#0f172a] outline-none transition focus:border-[#93c5fd] focus:bg-[#f8f9fa]"
                               />
                             )}
                           </td>
@@ -463,7 +463,7 @@ export default function RashiSheetWorkspace(): JSX.Element {
                 </table>
               </div>
 
-              <p className="text-xs leading-5 text-[#64748b]">
+              <p className="text-xs leading-5 text-[#73818f]">
                 Formula columns stay read-only. The default line total column multiplies the Unit Cost and Quantity keys, while all other columns remain open-ended for notes, URLs, credentials, and tracking fields.
               </p>
             </div>

@@ -1,9 +1,12 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import SectionLayout from '../../components/crm/SectionLayout';
 import NewLeadModal from './NewLeadModal';
+import PipelineBoard from './PipelineBoard';
+import LeadWorkspace from './LeadWorkspace';
+import { LEAD_STATUS_LABELS, type LeadStatus, type LostReason } from '../../lib/lead-pipeline';
 
 interface Lead {
   id: string;
@@ -21,6 +24,9 @@ interface Lead {
   est_employees?: string | null;
   est_revenue?: string | null;
   risk_exposure?: string | null;
+  estimated_premium?: number | string | null;
+  stage_changed_at?: string | null;
+  lost_reason?: string | null;
   form_payload?: Record<string, unknown> | null;
   last_viewed_at?: string | null;
   last_activity_at?: string | null;
@@ -35,89 +41,60 @@ interface NewLeadForm {
   status: 'new';
 }
 
-interface Interaction {
-  id: string;
-  lead_id: string;
-  content: string;
-  follow_up_at: string | null;
-  follow_up_completed: boolean;
-  created_at: string;
-}
-
 type PipelineFilter = 'all' | 'prospects' | 'leads';
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+type ListSortKey = 'name' | 'status' | 'premium' | 'followup' | 'created';
+
+const STATUS_PILL_TONES: Record<string, string> = {
+  new: 'bg-[#63c2de]/20 text-[#167495]',
+  contacted: 'bg-[#20a8d8]/15 text-[#167495]',
+  quoted: 'bg-[#ffc107]/25 text-amber-800',
+  won: 'bg-[#4dbd74]/20 text-green-700',
+  lost: 'bg-[#f86c6b]/15 text-[#f86c6b]',
+  inactive: 'bg-[#f0f3f5] text-[#73818f]',
+};
+
+function premiumOf(lead: { estimated_premium?: number | string | null }): number {
+  const raw = lead.estimated_premium;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+  if (typeof raw === 'string') {
+    const parsed = Number(raw.replace(/[$,]/g, ''));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
-function renderPayloadValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    return value.map((item) => renderPayloadValue(item)).join(', ');
-  }
-
-  if (value === null || typeof value === 'undefined') {
-    return '--';
-  }
-
-  if (typeof value === 'object') {
-    return JSON.stringify(value);
-  }
-
-  return String(value);
-}
-
-function parseDateOrNull(value: string | null | undefined): Date | null {
-  if (!value) {
-    return null;
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-
-  return parsed;
-}
-
-function getLeadPendingCount(lead: Lead): number {
-  const lastViewedAt = parseDateOrNull(lead.last_viewed_at);
-  const lastActivityAt = parseDateOrNull(lead.last_activity_at) ?? parseDateOrNull(lead.created_at);
-
-  let count = 0;
-
-  if (!lastViewedAt) {
-    count += 1;
-  } else {
-    if (lastActivityAt && lastActivityAt.getTime() > lastViewedAt.getTime()) {
-      count += 1;
-    }
-
-    if (lastViewedAt.getTime() <= Date.now() - 24 * 60 * 60 * 1000) {
-      count += 1;
-    }
-  }
-
-  return count;
+interface LeadTaskRow {
+  id: string;
+  subject: string;
+  due_date: string | null;
+  status: string;
+  related_id: string | null;
 }
 
 export default function LeadsPage(): JSX.Element {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [isDragOver, setIsDragOver] = useState(false);
   const [showNewLead, setShowNewLead] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [pipelineFilter, setPipelineFilter] = useState<PipelineFilter>('all');
-  const [interactions, setInteractions] = useState<Interaction[]>([]);
-  const [interactionNote, setInteractionNote] = useState('');
-  const [interactionFollowUpAt, setInteractionFollowUpAt] = useState('');
-  const [interactionDrafts, setInteractionDrafts] = useState<Record<string, string>>({});
-  const [isLoadingInteractions, setIsLoadingInteractions] = useState(false);
-  const [isSavingInteraction, setIsSavingInteraction] = useState(false);
+  const [viewMode, setViewMode] = useState<'queue' | 'board' | 'list'>('board');
+  const [outcomeFilter, setOutcomeFilter] = useState<'active' | 'won' | 'lost' | 'inactive'>('active');
+  const outcomeRef = React.useRef<'active' | 'won' | 'lost' | 'inactive'>('active');
+  outcomeRef.current = outcomeFilter;
+  const [stats, setStats] = useState<{ active: number; won: number; lost: number; inactive: number }>({ active: 0, won: 0, lost: 0, inactive: 0 });
+  const [listSearch, setListSearch] = useState('');
+  const [listSort, setListSort] = useState<{ key: ListSortKey; dir: 'asc' | 'desc' }>({ key: 'created', dir: 'desc' });
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkFollowUpAt, setBulkFollowUpAt] = useState('');
+  const [leadTasks, setLeadTasks] = useState<LeadTaskRow[]>([]);
+  const [unreadByLead, setUnreadByLead] = useState<Record<string, number>>({});
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [pendingLeadId, setPendingLeadId] = useState<string | null>(null);
   const [newLead, setNewLead] = useState<NewLeadForm>({
     full_name: '',
     phone: '',
@@ -126,8 +103,6 @@ export default function LeadsPage(): JSX.Element {
     source: '',
     status: 'new',
   });
-
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const isProspect = (lead: Lead): boolean => {
     const source = lead.source?.toLowerCase() ?? '';
@@ -149,71 +124,213 @@ export default function LeadsPage(): JSX.Element {
   const prospectCount = leads.filter((lead) => isProspect(lead)).length;
   const leadCount = leads.length - prospectCount;
 
-  const toDateTimeLocalValue = (iso: string | null): string => {
-    if (!iso) {
-      return '';
-    }
-
-    const parsed = new Date(iso);
-    if (Number.isNaN(parsed.getTime())) {
-      return '';
-    }
-
-    const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000);
-    return local.toISOString().slice(0, 16);
-  };
-
-  const fromDateTimeLocalValue = (value: string): string | null => {
-    if (!value) {
-      return null;
-    }
-
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) {
-      return null;
-    }
-
-    return parsed.toISOString();
-  };
-
-  const openLeadDetails = (lead: Lead): void => {
-    setSelectedLead(lead);
-  };
-
-  const fetchInteractions = async (leadId: string): Promise<void> => {
-    setIsLoadingInteractions(true);
+  const fetchLeadTasks = async (): Promise<void> => {
     try {
-      const response = await fetch(`/api/interactions?leadId=${encodeURIComponent(leadId)}`, { cache: 'no-store' });
-      if (!response.ok) {
-        setInteractions([]);
-        return;
+      const [tasksRes, unreadRes, statsRes] = await Promise.all([
+        fetch('/api/tasks?status=open&related_type=lead&sort=due_asc&limit=200', { cache: 'no-store' }),
+        fetch('/api/communication-log/unread-by-lead', { cache: 'no-store' }),
+        fetch('/api/leads/stats', { cache: 'no-store' }),
+      ]);
+      setLeadTasks(tasksRes.ok ? ((await tasksRes.json()) as LeadTaskRow[]) : []);
+      setUnreadByLead(unreadRes.ok ? ((await unreadRes.json()) as Record<string, number>) : {});
+      if (statsRes.ok) {
+        setStats((await statsRes.json()) as { active: number; won: number; lost: number; inactive: number });
       }
-
-      const items = (await response.json()) as Interaction[];
-      setInteractions(items);
-      setInteractionDrafts(
-        Object.fromEntries(
-          items.map((item) => [item.id, toDateTimeLocalValue(item.follow_up_at)]),
-        ),
-      );
     } catch {
-      setInteractions([]);
-    } finally {
-      setIsLoadingInteractions(false);
+      setLeadTasks([]);
+      setUnreadByLead({});
     }
   };
 
-  useEffect(() => {
-    if (!selectedLead) {
-      setInteractions([]);
-      setInteractionNote('');
-      setInteractionFollowUpAt('');
-      setInteractionDrafts({});
+  // lead_id -> earliest open task due date (board chips)
+  const taskDueByLead = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const task of leadTasks) {
+      if (!task.related_id || !task.due_date) continue;
+      if (!map[task.related_id] || task.due_date < map[task.related_id]) {
+        map[task.related_id] = task.due_date;
+      }
+    }
+    return map;
+  }, [leadTasks]);
+
+  const leadById = useMemo(() => new Map(leads.map((lead) => [lead.id, lead])), [leads]);
+
+  // Work queue: open lead tasks due today or overdue, worst first.
+  // Scoped to currently-loaded active leads so stale or foreign tasks never clutter the queue.
+  const queueTasks = useMemo(() => {
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+    return leadTasks
+      .filter(
+        (task) =>
+          task.due_date &&
+          task.related_id &&
+          leadById.has(task.related_id) &&
+          new Date(task.due_date).getTime() <= endOfToday.getTime(),
+      )
+      .sort((a, b) => new Date(a.due_date ?? 0).getTime() - new Date(b.due_date ?? 0).getTime());
+  }, [leadTasks, leadById]);
+
+  // List view: search + sort over the pipeline-filtered leads.
+  const listLeads = useMemo(() => {
+    const query = listSearch.trim().toLowerCase();
+    const matched = query
+      ? filteredLeads.filter((lead) =>
+          [lead.full_name, lead.email, lead.phone, lead.line_of_business, lead.source, lead.status]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(query)),
+        )
+      : filteredLeads;
+
+    const dir = listSort.dir === 'asc' ? 1 : -1;
+    return [...matched].sort((a, b) => {
+      switch (listSort.key) {
+        case 'name':
+          return a.full_name.localeCompare(b.full_name) * dir;
+        case 'status':
+          return a.status.localeCompare(b.status) * dir;
+        case 'premium':
+          return (premiumOf(a) - premiumOf(b)) * dir;
+        case 'followup': {
+          const aDue = taskDueByLead[a.id] ?? '9999';
+          const bDue = taskDueByLead[b.id] ?? '9999';
+          return aDue.localeCompare(bDue) * dir;
+        }
+        default:
+          return (new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) * dir;
+      }
+    });
+  }, [filteredLeads, listSearch, listSort, taskDueByLead]);
+
+  const toggleListSort = (key: ListSortKey): void => {
+    setListSort((current) =>
+      current.key === key ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' },
+    );
+  };
+
+  const toggleSelected = (leadId: string): void => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(leadId)) {
+        next.delete(leadId);
+      } else {
+        next.add(leadId);
+      }
+      return next;
+    });
+  };
+
+  const allVisibleSelected = listLeads.length > 0 && listLeads.every((lead) => selectedIds.has(lead.id));
+
+  const toggleSelectAll = (): void => {
+    setSelectedIds(allVisibleSelected ? new Set() : new Set(listLeads.map((lead) => lead.id)));
+  };
+
+  const selectedLeads = listLeads.filter((lead) => selectedIds.has(lead.id));
+  const selectedPremium = selectedLeads.reduce((sum, lead) => sum + premiumOf(lead), 0);
+
+  const runBulk = async (operation: (leadId: string) => Promise<Response>): Promise<void> => {
+    setBulkBusy(true);
+    setError(null);
+    try {
+      const results = await Promise.allSettled([...selectedIds].map((leadId) => operation(leadId)));
+      const failures = results.filter(
+        (result) => result.status === 'rejected' || (result.status === 'fulfilled' && !result.value.ok),
+      ).length;
+      if (failures > 0) {
+        setError(`${failures} of ${results.length} bulk updates failed.`);
+      }
+      setSelectedIds(new Set());
+      await Promise.all([fetchLeads(false), fetchLeadTasks()]);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const bulkSetStatus = async (status: string): Promise<void> => {
+    if (!status) return;
+    await runBulk((leadId) =>
+      fetch(`/api/leads/${encodeURIComponent(leadId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(status === 'lost' ? { status, lost_reason: 'other' } : { status }),
+      }),
+    );
+  };
+
+  const bulkDelete = async (): Promise<void> => {
+    const confirmed = window.confirm(`Remove ${selectedIds.size} selected lead(s)? This cannot be undone.`);
+    if (!confirmed) return;
+    await runBulk((leadId) =>
+      fetch('/api/leads', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: leadId }),
+      }),
+    );
+  };
+
+  const bulkScheduleFollowUp = async (): Promise<void> => {
+    if (!bulkFollowUpAt) return;
+    const dueIso = new Date(bulkFollowUpAt).toISOString();
+    await runBulk((leadId) => {
+      const lead = leadById.get(leadId);
+      return fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subject: `Follow up with ${lead?.full_name ?? 'lead'}`,
+          due_date: dueIso,
+          related_type: 'lead',
+          related_id: leadId,
+        }),
+      });
+    });
+    setBulkFollowUpAt('');
+  };
+
+  const completeQueueTask = async (task: LeadTaskRow, advance: boolean): Promise<void> => {
+    const res = await fetch('/api/tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: task.id, status: 'completed' }),
+    });
+    if (!res.ok) {
+      setError('Failed to complete task.');
       return;
     }
+    await fetchLeadTasks();
+    if (advance) {
+      const next = queueTasks.find((candidate) => candidate.id !== task.id && candidate.related_id);
+      const nextLead = next?.related_id ? leadById.get(next.related_id) : null;
+      setSelectedLead(nextLead ?? null);
+    }
+  };
 
-    void fetchInteractions(selectedLead.id);
-  }, [selectedLead]);
+  const snoozeQueueTask = async (task: LeadTaskRow, option: 'later' | 'tomorrow' | 'nextweek'): Promise<void> => {
+    const due = new Date();
+    if (option === 'later') {
+      due.setHours(due.getHours() + 4);
+    } else if (option === 'tomorrow') {
+      due.setDate(due.getDate() + 1);
+      due.setHours(9, 0, 0, 0);
+    } else {
+      due.setDate(due.getDate() + 7);
+      due.setHours(9, 0, 0, 0);
+    }
+
+    const res = await fetch('/api/tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: task.id, due_date: due.toISOString() }),
+    });
+    if (!res.ok) {
+      setError('Failed to snooze task.');
+      return;
+    }
+    await fetchLeadTasks();
+  };
 
   const fetchLeads = async (showLoader = true): Promise<void> => {
     if (showLoader) {
@@ -222,7 +339,8 @@ export default function LeadsPage(): JSX.Element {
     setError(null);
 
     try {
-      const res = await fetch('/api/leads?owner=me&status=open', { cache: 'no-store' });
+      const statusParam = outcomeRef.current === 'active' ? 'open' : outcomeRef.current;
+      const res = await fetch(`/api/leads?owner=me&status=${statusParam}`, { cache: 'no-store' });
       if (!res.ok) {
         setError('Failed to load leads.');
         return;
@@ -239,14 +357,60 @@ export default function LeadsPage(): JSX.Element {
     }
   };
 
+  const handlePipelineStatusChange = async (
+    leadId: string,
+    status: LeadStatus,
+    lostReason?: LostReason,
+  ): Promise<void> => {
+    // Optimistic: move the card immediately, roll back on failure.
+    const previous = leads;
+    setLeads((current) =>
+      current.map((lead) =>
+        lead.id === leadId ? { ...lead, status, stage_changed_at: new Date().toISOString() } : lead,
+      ),
+    );
+
+    try {
+      const res = await fetch(`/api/leads/${encodeURIComponent(leadId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lostReason ? { status, lost_reason: lostReason } : { status }),
+      });
+
+      if (!res.ok) {
+        const payload = (await res.json().catch(() => ({ message: 'Failed to update lead stage.' }))) as { message?: string };
+        setError(payload.message ?? 'Failed to update lead stage.');
+        setLeads(previous);
+        return;
+      }
+
+      // Terminal statuses drop out of the open-leads query on next refresh.
+      await fetchLeads(false);
+    } catch {
+      setError('Network error while updating lead stage.');
+      setLeads(previous);
+    }
+  };
+
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get('view');
+    if (view === 'queue' || view === 'board' || view === 'list') {
+      setViewMode(view);
+    }
+    const leadParam = params.get('lead');
+    if (leadParam) {
+      setPendingLeadId(leadParam);
+    }
+
     void (async () => {
-      await fetchLeads(true);
+      await Promise.all([fetchLeads(true), fetchLeadTasks()]);
     })();
 
     const refreshInterval = window.setInterval(() => {
       void fetchLeads(false);
-    }, 10000);
+      void fetchLeadTasks();
+    }, 30000);
 
     const refreshOnFocus = (): void => {
       void fetchLeads(false);
@@ -259,6 +423,41 @@ export default function LeadsPage(): JSX.Element {
       window.removeEventListener('focus', refreshOnFocus);
     };
   }, []);
+
+  // Refetch when switching between active pipeline and terminal outcomes.
+  useEffect(() => {
+    void fetchLeads(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outcomeFilter]);
+
+  // Deep link: /leads?lead=<id> opens the workspace drawer once leads load.
+  useEffect(() => {
+    if (!pendingLeadId) return;
+    const target = leads.find((lead) => lead.id === pendingLeadId);
+    if (target) {
+      setSelectedLead(target);
+      setPendingLeadId(null);
+      return;
+    }
+    if (loading) return;
+    // Not in the active list (won/lost/inactive or filtered out) — fetch it directly.
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/leads/${encodeURIComponent(pendingLeadId)}`, { cache: 'no-store' });
+        if (res.ok && !cancelled) {
+          setSelectedLead((await res.json()) as Lead);
+        }
+      } catch {
+        // Lead no longer exists; nothing to open.
+      } finally {
+        if (!cancelled) setPendingLeadId(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingLeadId, leads, loading]);
 
   const handleCreateLead = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
@@ -334,156 +533,22 @@ export default function LeadsPage(): JSX.Element {
     await fetchLeads();
   };
 
-  const handleProspectUpload = async (file: File): Promise<void> => {
-    setIsUploading(true);
-    setError(null);
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      const res = await fetch('/api/leads/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const payload = (await res.json().catch(() => ({}))) as { success?: boolean; count?: number; message?: string };
-      if (!res.ok || !payload.success) {
-        setError(payload.message ?? 'Failed to import prospects.');
-        return;
-      }
-
-      window.alert(`Successfully imported ${payload.count ?? 0} prospects.`);
-      await fetchLeads();
-    } catch {
-      setError('Upload failed. Please try again.');
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const handleFileInputChange = async (event: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    await handleProspectUpload(file);
-    event.target.value = '';
-  };
-
-  const handleSaveInteraction = async (): Promise<void> => {
-    if (!selectedLead || !interactionNote.trim()) {
-      return;
-    }
-
-    setIsSavingInteraction(true);
-    try {
-      const response = await fetch('/api/interactions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lead_id: selectedLead.id,
-          content: interactionNote,
-          follow_up_at: fromDateTimeLocalValue(interactionFollowUpAt),
-        }),
-      });
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({ message: 'Failed to save follow-up.' }))) as { message?: string };
-        setError(payload.message ?? 'Failed to save follow-up.');
-        return;
-      }
-
-      setInteractionNote('');
-      setInteractionFollowUpAt('');
-      await fetchInteractions(selectedLead.id);
-    } catch {
-      setError('Failed to save follow-up.');
-    } finally {
-      setIsSavingInteraction(false);
-    }
-  };
-
-  const handleUpdateInteraction = async (interactionId: string, patch: Record<string, unknown>): Promise<void> => {
-    if (!selectedLead) {
-      return;
-    }
-
-    setIsSavingInteraction(true);
-    try {
-      const response = await fetch('/api/interactions', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: interactionId, ...patch }),
-      });
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({ message: 'Failed to update follow-up.' }))) as { message?: string };
-        setError(payload.message ?? 'Failed to update follow-up.');
-        return;
-      }
-
-      await fetchInteractions(selectedLead.id);
-    } catch {
-      setError('Failed to update follow-up.');
-    } finally {
-      setIsSavingInteraction(false);
-    }
-  };
-
-  const payloadEntries = selectedLead?.form_payload
-    ? Object.entries(selectedLead.form_payload).filter(([key]) => key !== '_request')
-    : [];
-  const requestContext = selectedLead?.form_payload && isRecord(selectedLead.form_payload._request) ? selectedLead.form_payload._request : null;
-  const requestQuery = requestContext && isRecord(requestContext.query) ? Object.entries(requestContext.query) : [];
-  const refererQuery = requestContext && isRecord(requestContext.referer_query) ? Object.entries(requestContext.referer_query) : [];
-
   return (
     <SectionLayout title="Leads">
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-[#3e3e3c]">Manage open insurance leads and intake.</p>
+        <p className="text-sm text-[#5c6873]">Manage open insurance leads and intake.</p>
         <div className="flex items-center gap-2">
-          <div
-            onDragOver={(event) => {
-              event.preventDefault();
-              setIsDragOver(true);
-            }}
-            onDragLeave={() => setIsDragOver(false)}
-            onDrop={(event) => {
-              event.preventDefault();
-              setIsDragOver(false);
-              const droppedFile = event.dataTransfer.files?.[0];
-              if (droppedFile) {
-                void handleProspectUpload(droppedFile);
-              }
-            }}
-            className={`rounded border px-3 py-2 text-xs font-semibold transition ${
-              isDragOver
-                ? 'border-[#0f62af] bg-[#e7f3ff] text-[#0f62af]'
-                : 'border-[#a8d4ff] bg-[#f5fbff] text-[#0f62af] hover:bg-[#e7f3ff]'
-            }`}
+          <Link
+            href="/leads/import"
+            className="rounded border border-[#a8d4ff] bg-[#f5fbff] px-3 py-2 text-xs font-semibold text-[#167495] transition hover:bg-[#e7f3ff]"
           >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,.xlsx,.xls,.pdf,text/csv,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              className="hidden"
-              onChange={(event) => {
-                void handleFileInputChange(event);
-              }}
-            />
-            <button
-              type="button"
-              className="cursor-pointer"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-            >
-              {isUploading ? 'Processing Import...' : 'Drop CSV/Excel/PDF to Bulk Import'}
-            </button>
-          </div>
+            Import Center
+          </Link>
 
           <button
             type="button"
             onClick={() => setShowNewLead(true)}
-            className="rounded border border-[#0163b3] bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1]"
+            className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7]"
           >
             + New Lead
           </button>
@@ -495,16 +560,16 @@ export default function LeadsPage(): JSX.Element {
           type="button"
           onClick={() => setPipelineFilter('all')}
           className={`rounded border px-3 py-1.5 font-semibold ${
-            pipelineFilter === 'all' ? 'border-[#0f62af] bg-[#0f62af] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
+            pipelineFilter === 'all' ? 'border-[#167495] bg-[#167495] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
           }`}
         >
-          All Active ({leads.length})
+          {outcomeFilter === 'active' ? `All Active (${leads.length})` : `All ${outcomeFilter} (${leads.length})`}
         </button>
         <button
           type="button"
           onClick={() => setPipelineFilter('prospects')}
           className={`rounded border px-3 py-1.5 font-semibold ${
-            pipelineFilter === 'prospects' ? 'border-[#0f62af] bg-[#0f62af] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
+            pipelineFilter === 'prospects' ? 'border-[#167495] bg-[#167495] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
           }`}
         >
           Prospects ({prospectCount})
@@ -513,94 +578,388 @@ export default function LeadsPage(): JSX.Element {
           type="button"
           onClick={() => setPipelineFilter('leads')}
           className={`rounded border px-3 py-1.5 font-semibold ${
-            pipelineFilter === 'leads' ? 'border-[#0f62af] bg-[#0f62af] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
+            pipelineFilter === 'leads' ? 'border-[#167495] bg-[#167495] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
           }`}
         >
           Leads ({leadCount})
         </button>
+
+        <span className="mx-1 h-5 w-px bg-[#d5dde5]" />
+
+        {(
+          [
+            ['won', 'Won', stats.won, 'text-green-700 border-[#4dbd74]/50', 'bg-[#4dbd74] text-white border-[#4dbd74]'],
+            ['lost', 'Lost', stats.lost, 'text-[#f86c6b] border-[#f86c6b]/50', 'bg-[#f86c6b] text-white border-[#f86c6b]'],
+            ['inactive', 'Inactive', stats.inactive, 'text-[#73818f] border-[#c8ced3]', 'bg-[#73818f] text-white border-[#73818f]'],
+          ] as Array<['won' | 'lost' | 'inactive', string, number, string, string]>
+        ).map(([key, label, count, idle, selected]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => {
+              if (outcomeFilter === key) {
+                setOutcomeFilter('active');
+              } else {
+                setOutcomeFilter(key);
+                setViewMode('list');
+              }
+            }}
+            className={`rounded border bg-white px-3 py-1.5 font-semibold ${outcomeFilter === key ? selected : idle}`}
+            title={`View ${label.toLowerCase()} leads`}
+          >
+            {label} ({count})
+          </button>
+        ))}
+
+        <div className="ml-auto flex items-center overflow-hidden rounded border border-[#d5dde5]">
+          <button
+            type="button"
+            onClick={() => {
+              setOutcomeFilter('active');
+              setViewMode('queue');
+            }}
+            className={`px-3 py-1.5 font-semibold ${viewMode === 'queue' ? 'bg-[#167495] text-white' : 'bg-white text-[#28557f]'}`}
+          >
+            Queue ({queueTasks.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOutcomeFilter('active');
+              setViewMode('board');
+            }}
+            className={`px-3 py-1.5 font-semibold ${viewMode === 'board' ? 'bg-[#167495] text-white' : 'bg-white text-[#28557f]'}`}
+          >
+            Board
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('list')}
+            className={`px-3 py-1.5 font-semibold ${viewMode === 'list' ? 'bg-[#167495] text-white' : 'bg-white text-[#28557f]'}`}
+          >
+            List
+          </button>
+        </div>
       </div>
+
+      {outcomeFilter !== 'active' ? (
+        <div className="mb-3 flex items-center gap-2 rounded border border-[#c8ced3] bg-[#f0f3f5] px-3 py-2 text-sm text-[#5c6873]">
+          Viewing <span className="font-bold uppercase">{outcomeFilter}</span> leads.
+          <button type="button" onClick={() => setOutcomeFilter('active')} className="font-semibold text-[#167495] hover:underline">
+            Back to active pipeline
+          </button>
+        </div>
+      ) : null}
 
       {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
 
-      {loading ? <div className="text-sm text-[#6a6a6a]">Loading leads...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading leads...</div> : null}
 
-      {!loading ? (
-        <div className="overflow-x-auto rounded border border-[#dddbda] bg-white shadow-sm">
-          {filteredLeads.length === 0 ? (
-            <div className="p-4 text-sm text-[#6a6a6a]">No leads found.</div>
+      {!loading && viewMode === 'queue' ? (
+        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-[#f0f3f5] bg-[#f8f9fa] px-4 py-2.5">
+            <p className="text-sm font-bold text-[#23282c]">
+              Work Queue <span className="font-normal text-[#73818f]">— follow-ups due today or overdue</span>
+            </p>
+            <p className="text-xs font-semibold text-[#73818f]">{queueTasks.length} to work</p>
+          </div>
+          {queueTasks.length === 0 ? (
+            <p className="p-6 text-center text-sm text-[#73818f]">Queue is clear. Nothing due today — nice work.</p>
           ) : (
-            <table className="w-full text-left text-sm">
-              <thead className="bg-[#f8f8f7] text-[#6a6a6a]">
-                <tr>
-                  <th className="px-3 py-2">Name</th>
-                  <th className="px-3 py-2">Industry</th>
-                  <th className="px-3 py-2">Category</th>
-                  <th className="px-3 py-2">Phone</th>
-                  <th className="px-3 py-2">Email</th>
-                  <th className="px-3 py-2">Address</th>
-                  <th className="px-3 py-2">Line of Business</th>
-                  <th className="px-3 py-2">Source</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Website</th>
-                  <th className="px-3 py-2">Est. Employees</th>
-                  <th className="px-3 py-2">Est. Revenue</th>
-                  <th className="px-3 py-2">Risk Exposure</th>
-                  <th className="px-3 py-2">Created</th>
-                  <th className="px-3 py-2">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredLeads.map((lead) => (
-                  <tr key={lead.id} className="border-t border-[#f3f2f1]">
-                    <td className="px-3 py-2 font-semibold text-[#0176d3]">
-                      {(() => {
-                        const pendingCount = getLeadPendingCount(lead);
-                        return (
-                      <div className="flex items-center gap-2">
-                        <Link href={`/clients/workspace?lead=${lead.id}`} className="hover:underline">
-                          {lead.full_name}
-                        </Link>
-                        {pendingCount > 0 ? (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white">
-                            {pendingCount > 9 ? '9+' : pendingCount}
-                          </span>
-                        ) : null}
-                      </div>
-                        );
-                      })()}
-                    </td>
-                    <td className="px-3 py-2">{lead.industry || '--'}</td>
-                    <td className="px-3 py-2">{lead.category || '--'}</td>
-                    <td className="px-3 py-2">{lead.phone || '--'}</td>
-                    <td className="px-3 py-2">{lead.email || '--'}</td>
-                    <td className="px-3 py-2">{lead.address || '--'}</td>
-                    <td className="px-3 py-2">{lead.line_of_business}</td>
-                    <td className="px-3 py-2">{lead.source}</td>
-                    <td className="px-3 py-2">{lead.status}</td>
-                    <td className="px-3 py-2">{lead.website || '--'}</td>
-                    <td className="px-3 py-2">{lead.est_employees || '--'}</td>
-                    <td className="px-3 py-2">{lead.est_revenue || '--'}</td>
-                    <td className="max-w-60 px-3 py-2">{lead.risk_exposure || '--'}</td>
-                    <td className="px-3 py-2">{new Date(lead.created_at).toLocaleDateString()}</td>
-                    <td className="px-3 py-2 text-xs">
-                      <button
-                        type="button"
-                        className="mr-2 font-semibold text-[#1f3f5b] hover:underline"
-                        onClick={() => openLeadDetails(lead)}
-                      >
-                        Details
-                      </button>
-                      <button type="button" className="mr-2 font-semibold text-[#0f62af] hover:underline" onClick={() => setEditingLead(lead)}>
-                        Edit
-                      </button>
-                      <button type="button" className="font-semibold text-[#c23934] hover:underline" onClick={() => void handleRemoveLead(lead.id)}>
-                        Remove
-                      </button>
-                    </td>
+            <ul className="divide-y divide-[#f0f3f5]">
+              {queueTasks.map((task) => {
+                const lead = task.related_id ? leadById.get(task.related_id) : undefined;
+                const due = task.due_date ? new Date(task.due_date) : null;
+                const overdue = due ? due.getTime() < Date.now() : false;
+                return (
+                  <li key={task.id} className="flex items-center gap-3 px-4 py-3">
+                    <span
+                      className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
+                        overdue ? 'bg-[#f86c6b] text-white' : 'bg-[#ffc107]/25 text-amber-800'
+                      }`}
+                    >
+                      {overdue ? 'Overdue' : 'Today'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => lead && setSelectedLead(lead)}
+                      disabled={!lead}
+                      className="min-w-0 flex-1 text-left disabled:cursor-default"
+                    >
+                      <p className="truncate text-sm font-semibold text-[#167495] hover:underline">
+                        {lead?.full_name ?? 'Unknown lead'}
+                      </p>
+                      <p className="truncate text-xs text-[#73818f]">{task.subject}</p>
+                    </button>
+                    <span className="shrink-0 text-xs text-[#73818f]">
+                      {due ? due.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '--'}
+                    </span>
+                    <select
+                      defaultValue=""
+                      onChange={(event) => {
+                        const option = event.target.value as 'later' | 'tomorrow' | 'nextweek' | '';
+                        event.target.value = '';
+                        if (option) void snoozeQueueTask(task, option);
+                      }}
+                      className="shrink-0 rounded border border-[#c8ced3] px-2 py-1 text-xs text-[#5c6873]"
+                    >
+                      <option value="" disabled>Snooze…</option>
+                      <option value="later">Later today</option>
+                      <option value="tomorrow">Tomorrow 9 AM</option>
+                      <option value="nextweek">Next week</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => void completeQueueTask(task, true)}
+                      className="shrink-0 rounded bg-[#4dbd74] px-2.5 py-1.5 text-xs font-bold text-white hover:brightness-95"
+                    >
+                      Complete & Next
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      ) : null}
+
+      {!loading && viewMode === 'board' ? (
+        <PipelineBoard
+          leads={filteredLeads}
+          taskDueByLead={taskDueByLead}
+          unreadByLead={unreadByLead}
+          terminalCounts={{ won: stats.won, lost: stats.lost, inactive: stats.inactive }}
+          onStatusChange={handlePipelineStatusChange}
+          onSelectLead={(lead) => setSelectedLead(leads.find((candidate) => candidate.id === lead.id) ?? null)}
+        />
+      ) : null}
+
+      {!loading && viewMode === 'list' ? (
+        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
+          <div className="flex flex-wrap items-center gap-3 border-b border-[#f0f3f5] bg-[#f8f9fa] px-4 py-2.5">
+            <input
+              type="search"
+              value={listSearch}
+              onChange={(event) => setListSearch(event.target.value)}
+              placeholder="Search name, email, phone, line, source?"
+              className="w-72 max-w-full rounded border border-[#c8ced3] bg-white px-3 py-1.5 text-sm"
+            />
+            <p className="ml-auto text-xs font-semibold text-[#73818f]">
+              {listLeads.length} of {filteredLeads.length} leads
+            </p>
+          </div>
+
+          {selectedIds.size > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 border-b border-[#1b8eb7]/30 bg-[#20a8d8]/10 px-4 py-2">
+              <p className="text-sm font-bold text-[#167495]">
+                {selectedIds.size} selected
+                {selectedPremium > 0 ? (
+                  <span className="ml-1 font-semibold text-[#4dbd74]">(${selectedPremium.toLocaleString()} est.)</span>
+                ) : null}
+              </p>
+              <select
+                defaultValue=""
+                disabled={bulkBusy}
+                onChange={(event) => {
+                  const status = event.target.value;
+                  event.target.value = '';
+                  if (status) void bulkSetStatus(status);
+                }}
+                className="rounded border border-[#c8ced3] bg-white px-2 py-1 text-xs font-semibold text-[#5c6873]"
+              >
+                <option value="" disabled>Set status…</option>
+                <option value="new">New</option>
+                <option value="contacted">Contacted</option>
+                <option value="quoted">Quoted</option>
+                <option value="won">Won</option>
+                <option value="lost">Lost</option>
+                <option value="inactive">Inactive</option>
+              </select>
+              <div className="flex items-center gap-1">
+                <input
+                  type="datetime-local"
+                  value={bulkFollowUpAt}
+                  onChange={(event) => setBulkFollowUpAt(event.target.value)}
+                  disabled={bulkBusy}
+                  className="rounded border border-[#c8ced3] bg-white px-2 py-1 text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => void bulkScheduleFollowUp()}
+                  disabled={bulkBusy || !bulkFollowUpAt}
+                  className="rounded bg-[#167495] px-2.5 py-1 text-xs font-bold text-white disabled:opacity-50"
+                >
+                  Schedule follow-up
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => void bulkDelete()}
+                disabled={bulkBusy}
+                className="rounded border border-[#f86c6b]/50 bg-white px-2.5 py-1 text-xs font-bold text-[#f86c6b] hover:bg-[#f86c6b]/10 disabled:opacity-50"
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                disabled={bulkBusy}
+                className="ml-auto text-xs font-semibold text-[#73818f] hover:underline"
+              >
+                Clear selection
+              </button>
+              {bulkBusy ? <span className="text-xs font-semibold text-[#167495]">Working…</span> : null}
+            </div>
+          ) : null}
+
+          {listLeads.length === 0 ? (
+            <div className="p-6 text-center text-sm text-[#73818f]">
+              {listSearch ? 'No leads match your search.' : 'No leads found.'}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full table-fixed text-left text-sm">
+                <thead className="border-b border-[#e1e6ea] bg-[#f8f9fa] text-xs uppercase tracking-wide text-[#73818f]">
+                  <tr>
+                    <th className="w-10 px-4 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={toggleSelectAll}
+                        aria-label="Select all leads"
+                        className="h-4 w-4 cursor-pointer accent-[#20a8d8]"
+                      />
+                    </th>
+                    {(
+                      [
+                        ['name', 'Lead', true, ''],
+                        ['contact', 'Contact', false, 'w-44'],
+                        ['status', 'Status', true, 'w-28'],
+                        ['premium', 'Premium', true, 'w-24'],
+                        ['followup', 'Follow-Up', true, 'w-28'],
+                        ['source', 'Source', false, 'w-24'],
+                        ['created', 'Created', true, 'w-24'],
+                        ['actions', '', false, 'w-36'],
+                      ] as Array<[string, string, boolean, string]>
+                    ).map(([key, label, sortable, width]) => (
+                      <th key={key} className={`px-3 py-2.5 font-bold ${width} ${key === 'premium' ? 'text-right' : ''}`}>
+                        {sortable ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleListSort(key as ListSortKey)}
+                            className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-[#167495]"
+                          >
+                            {label}
+                            {listSort.key === key ? <span>{listSort.dir === 'asc' ? '\u25B2' : '\u25BC'}</span> : null}
+                          </button>
+                        ) : (
+                          label
+                        )}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-[#f0f3f5]">
+                  {listLeads.map((lead) => {
+                    const premium = premiumOf(lead);
+                    const dueAt = taskDueByLead[lead.id];
+                    const due = dueAt ? new Date(dueAt) : null;
+                    const overdue = due ? due.getTime() < Date.now() : false;
+                    const dueToday =
+                      due && !overdue
+                        ? due.getTime() <= new Date(new Date().setHours(23, 59, 59, 999)).getTime()
+                        : false;
+
+                    return (
+                      <tr
+                        key={lead.id}
+                        onClick={() => setSelectedLead(lead)}
+                        className="cursor-pointer transition hover:bg-[#f0f3f5]/70"
+                      >
+                        <td className="px-3 py-2.5" onClick={(event) => event.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(lead.id)}
+                            onChange={() => toggleSelected(lead.id)}
+                            aria-label={`Select ${lead.full_name}`}
+                            className="h-4 w-4 cursor-pointer accent-[#20a8d8]"
+                          />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="truncate font-semibold text-[#167495]">{lead.full_name}</p>
+                          <p className="truncate text-xs text-[#73818f]">{lead.line_of_business || 'No line of business'}</p>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="max-w-40 truncate text-[#23282c]">{lead.phone || '--'}</p>
+                          <p className="max-w-40 truncate text-xs text-[#73818f]">{lead.email || '--'}</p>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span
+                            className={`rounded px-2 py-0.5 text-[11px] font-bold uppercase ${
+                              STATUS_PILL_TONES[lead.status] ?? STATUS_PILL_TONES.new
+                            }`}
+                          >
+                            {LEAD_STATUS_LABELS[lead.status as LeadStatus] ?? lead.status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-semibold text-[#23282c]">
+                          {premium > 0 ? `$${premium.toLocaleString()}` : <span className="font-normal text-[#c8ced3]">--</span>}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {due ? (
+                            <span
+                              className={`rounded px-2 py-0.5 text-[11px] font-bold ${
+                                overdue
+                                  ? 'bg-[#f86c6b] text-white'
+                                  : dueToday
+                                    ? 'bg-[#ffc107]/25 text-amber-800'
+                                    : 'bg-[#f0f3f5] text-[#73818f]'
+                              }`}
+                            >
+                              {overdue
+                                ? 'Overdue'
+                                : due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-[#c8ced3]">--</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className="rounded bg-[#f0f3f5] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#73818f]">
+                            {lead.source || 'unknown'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-xs text-[#73818f]">
+                          {new Date(lead.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-xs" onClick={(event) => event.stopPropagation()}>
+                          <Link
+                            href={`/clients/workspace?lead=${lead.id}`}
+                            className="mr-2 font-semibold text-[#2f353a] hover:underline"
+                          >
+                            Client
+                          </Link>
+                          <button
+                            type="button"
+                            className="mr-2 font-semibold text-[#167495] hover:underline"
+                            onClick={() => setEditingLead(lead)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="font-semibold text-[#c23934] hover:underline"
+                            onClick={() => void handleRemoveLead(lead.id)}
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       ) : null}
@@ -617,62 +976,73 @@ export default function LeadsPage(): JSX.Element {
 
       {editingLead ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded border border-[#dddbda] bg-white p-4 shadow-xl">
-            <h2 className="mb-3 text-lg font-bold text-[#080707]">Edit Lead</h2>
+          <div className="w-full max-w-md rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
+            <h2 className="mb-3 text-lg font-bold text-[#23282c]">Edit Lead</h2>
             <form onSubmit={handleUpdateLead} className="space-y-2">
               <input
                 required
                 type="text"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingLead.full_name}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, full_name: e.target.value } : prev))}
               />
               <input
                 type="text"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingLead.phone || ''}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, phone: e.target.value } : prev))}
               />
               <input
                 type="email"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingLead.email || ''}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, email: e.target.value } : prev))}
               />
               <input
                 type="text"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingLead.line_of_business || ''}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, line_of_business: e.target.value } : prev))}
               />
               <input
                 type="text"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingLead.source || ''}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, source: e.target.value } : prev))}
               />
               <select
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingLead.status}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, status: e.target.value } : prev))}
               >
                 <option value="new">New</option>
-                <option value="working">Working</option>
+                <option value="contacted">Contacted</option>
                 <option value="quoted">Quoted</option>
-                <option value="closed">Closed</option>
+                <option value="won">Won</option>
+                <option value="lost">Lost</option>
+                <option value="inactive">Inactive</option>
               </select>
+              <input
+                type="number"
+                min="0"
+                step="50"
+                placeholder="Estimated premium ($)"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                value={editingLead.estimated_premium != null && editingLead.estimated_premium !== '' ? String(editingLead.estimated_premium) : ''}
+                onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, estimated_premium: e.target.value } : prev))}
+              />
 
               <button
                 type="submit"
                 disabled={isSavingEdit}
-                className="w-full rounded bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1] disabled:opacity-60"
+                className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:opacity-60"
               >
                 {isSavingEdit ? 'Saving Changes...' : 'Save Changes'}
               </button>
               <button
                 type="button"
                 onClick={() => setEditingLead(null)}
-                className="w-full rounded bg-[#e5e5e5] px-3 py-2 text-sm font-semibold text-[#3e3e3c] hover:bg-[#d9d9d9]"
+                className="w-full rounded bg-[#e4e5e6] px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#c8ced3]"
               >
                 Cancel
               </button>
@@ -682,185 +1052,14 @@ export default function LeadsPage(): JSX.Element {
       ) : null}
 
       {selectedLead ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded border border-[#dddbda] bg-white p-4 shadow-xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-[#080707]">Lead Submission Details</h2>
-              <button
-                type="button"
-                onClick={() => setSelectedLead(null)}
-                className="rounded bg-[#e5e5e5] px-3 py-1.5 text-xs font-semibold text-[#3e3e3c] hover:bg-[#d9d9d9]"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="mb-4 grid gap-2 text-sm text-[#2f2f2f] md:grid-cols-3">
-              <div><span className="font-semibold">Name:</span> {selectedLead.full_name}</div>
-              <div><span className="font-semibold">Line:</span> {selectedLead.line_of_business || '--'}</div>
-              <div><span className="font-semibold">Source:</span> {selectedLead.source || '--'}</div>
-            </div>
-
-            <div className="mb-4 rounded border border-[#dddbda]">
-              <div className="border-b border-[#f3f2f1] bg-[#f8f8f7] px-3 py-2 text-sm font-semibold text-[#3e3e3c]">Submitted Fields</div>
-              {payloadEntries.length === 0 ? (
-                <div className="p-3 text-sm text-[#6a6a6a]">No stored payload fields for this lead.</div>
-              ) : (
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-[#fcfcfc] text-[#6a6a6a]">
-                    <tr>
-                      <th className="px-3 py-2">Field</th>
-                      <th className="px-3 py-2">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {payloadEntries.map(([key, value]) => (
-                      <tr key={key} className="border-t border-[#f3f2f1]">
-                        <td className="px-3 py-2 font-semibold text-[#0f62af]">{key}</td>
-                        <td className="px-3 py-2 break-all">{renderPayloadValue(value)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-
-            <div className="mb-4 rounded border border-[#dddbda]">
-              <div className="border-b border-[#f3f2f1] bg-[#f8f8f7] px-3 py-2 text-sm font-semibold text-[#3e3e3c]">Request Context</div>
-              <div className="p-3 text-sm text-[#2f2f2f]">
-                <div className="mb-2"><span className="font-semibold">Referrer:</span> {requestContext ? renderPayloadValue(requestContext.referer) : '--'}</div>
-                <div className="mb-2"><span className="font-semibold">User Agent:</span> {requestContext ? renderPayloadValue(requestContext.user_agent) : '--'}</div>
-
-                <div className="mb-1 font-semibold text-[#3e3e3c]">Request Query</div>
-                {requestQuery.length === 0 ? (
-                  <div className="mb-3 text-[#6a6a6a]">No request query values captured.</div>
-                ) : (
-                  <ul className="mb-3 list-disc pl-5">
-                    {requestQuery.map(([key, value]) => (
-                      <li key={`rq-${key}`}>
-                        {key}: {renderPayloadValue(value)}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                <div className="mb-1 font-semibold text-[#3e3e3c]">Referrer Query</div>
-                {refererQuery.length === 0 ? (
-                  <div className="text-[#6a6a6a]">No referrer query values captured.</div>
-                ) : (
-                  <ul className="list-disc pl-5">
-                    {refererQuery.map(([key, value]) => (
-                      <li key={`ref-${key}`}>
-                        {key}: {renderPayloadValue(value)}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded border border-[#dddbda]">
-              <div className="border-b border-[#f3f2f1] bg-[#f8f8f7] px-3 py-2 text-sm font-semibold text-[#3e3e3c]">
-                Conversation and Follow-Up Tracker
-              </div>
-              <div className="p-3">
-                <textarea
-                  value={interactionNote}
-                  onChange={(event) => setInteractionNote(event.target.value)}
-                  placeholder="Log the latest call summary, objection notes, or underwriting context."
-                  className="mb-2 min-h-24 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
-                />
-                <div className="mb-3 grid gap-2 md:grid-cols-[1fr_auto] md:items-end">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-[#3e3e3c]">Next Follow-Up Target (optional)</label>
-                    <input
-                      type="datetime-local"
-                      value={interactionFollowUpAt}
-                      onChange={(event) => setInteractionFollowUpAt(event.target.value)}
-                      className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleSaveInteraction();
-                    }}
-                    disabled={isSavingInteraction || interactionNote.trim().length === 0}
-                    className="rounded bg-[#0f62af] px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
-                  >
-                    {isSavingInteraction ? 'Saving...' : 'Log Interaction'}
-                  </button>
-                </div>
-
-                <div className="rounded border border-[#edf1f5]">
-                  <div className="border-b border-[#edf1f5] bg-[#fbfcfe] px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#486987]">
-                    Scheduled Follow-Ups
-                  </div>
-                  {isLoadingInteractions ? <div className="p-3 text-sm text-[#6a6a6a]">Loading follow-ups...</div> : null}
-                  {!isLoadingInteractions && interactions.length === 0 ? (
-                    <div className="p-3 text-sm text-[#6a6a6a]">No interactions logged yet.</div>
-                  ) : null}
-                  {!isLoadingInteractions && interactions.length > 0 ? (
-                    <div className="max-h-72 overflow-y-auto">
-                      {interactions.map((item) => (
-                        <div key={item.id} className="border-b border-[#f2f5f8] px-3 py-3 last:border-b-0">
-                          <div className="mb-1 flex items-center justify-between gap-2">
-                            <p className="text-sm font-semibold text-[#20476e]">
-                              {item.follow_up_completed ? 'Completed' : 'Open'} follow-up
-                            </p>
-                            <p className="text-xs text-[#6a6a6a]">{new Date(item.created_at).toLocaleString()}</p>
-                          </div>
-                          <p className="mb-2 text-sm text-[#2f2f2f]">{item.content}</p>
-                          <div className="grid gap-2 md:grid-cols-[1fr_auto_auto] md:items-end">
-                            <div>
-                              <label className="mb-1 block text-xs font-semibold text-[#3e3e3c]">Reschedule</label>
-                              <input
-                                type="datetime-local"
-                                value={interactionDrafts[item.id] ?? ''}
-                                onChange={(event) =>
-                                  setInteractionDrafts((prev) => ({
-                                    ...prev,
-                                    [item.id]: event.target.value,
-                                  }))
-                                }
-                                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void handleUpdateInteraction(item.id, {
-                                  follow_up_at: fromDateTimeLocalValue(interactionDrafts[item.id] ?? ''),
-                                  follow_up_completed: false,
-                                });
-                              }}
-                              disabled={isSavingInteraction}
-                              className="rounded border border-[#b8d4ec] bg-[#eef6fd] px-3 py-2 text-xs font-semibold text-[#0f62af] disabled:opacity-60"
-                            >
-                              Save Date
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void handleUpdateInteraction(item.id, {
-                                  follow_up_completed: !item.follow_up_completed,
-                                });
-                              }}
-                              disabled={isSavingInteraction}
-                              className="rounded border border-[#d1d5db] bg-white px-3 py-2 text-xs font-semibold text-[#334155] disabled:opacity-60"
-                            >
-                              {item.follow_up_completed ? 'Mark Open' : 'Mark Complete'}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <LeadWorkspace
+          lead={selectedLead}
+          onClose={() => setSelectedLead(null)}
+          onChanged={() => {
+            void fetchLeads(false);
+            void fetchLeadTasks();
+          }}
+        />
       ) : null}
     </SectionLayout>
   );

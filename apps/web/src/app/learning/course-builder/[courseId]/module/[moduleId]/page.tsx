@@ -172,25 +172,25 @@ function SortableLessonItem({ lesson }: { lesson: LessonItem }): JSX.Element {
   const style = { transform: CSS.Transform.toString(transform), transition };
 
   return (
-    <article ref={setNodeRef} style={style} className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+    <article ref={setNodeRef} style={style} className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <button
             type="button"
             {...attributes}
             {...listeners}
-            className="cursor-grab rounded border border-[#c9c7c5] px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
+            className="cursor-grab rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
           >
             Drag
           </button>
           <div>
-            <h4 className="text-sm font-semibold text-[#080707]">{lesson.title}</h4>
+            <h4 className="text-sm font-semibold text-[#23282c]">{lesson.title}</h4>
             <p className="text-xs text-[#514f4d]">
               Type: {lesson.contentType.toLowerCase()} | Quizzes: {lesson.quizzes.length} | Blocks: {lesson.blocks.length}
             </p>
           </div>
         </div>
-        <a href={`/learning/lesson/${lesson.id}?lessonId=${lesson.id}`} className="text-xs font-semibold text-[#0f62af] hover:text-[#0c4e8a]">
+        <a href={`/learning/lesson/${lesson.id}?lessonId=${lesson.id}`} className="text-xs font-semibold text-[#167495] hover:text-[#0c4e8a]">
           Open Lesson
         </a>
       </div>
@@ -209,7 +209,7 @@ function SortableBlockItem({ blockId, children }: { blockId: string; children: J
           type="button"
           {...attributes}
           {...listeners}
-          className="cursor-grab rounded border border-[#c9c7c5] px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
+          className="cursor-grab rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
         >
           Drag Block
         </button>
@@ -222,12 +222,12 @@ function SortableBlockItem({ blockId, children }: { blockId: string; children: J
 function EditorToolbar({ onApply }: { onApply: (snippet: string) => void }): JSX.Element {
   return (
     <div className="mb-1 flex flex-wrap gap-1">
-      <button type="button" onClick={() => onApply('## Heading')} className="rounded border border-[#c9c7c5] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">H2</button>
-      <button type="button" onClick={() => onApply('**bold**')} className="rounded border border-[#c9c7c5] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Bold</button>
-      <button type="button" onClick={() => onApply('- bullet item')} className="rounded border border-[#c9c7c5] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Bullet</button>
-      <button type="button" onClick={() => onApply('> key point')} className="rounded border border-[#c9c7c5] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Quote</button>
-      <button type="button" onClick={() => onApply('`term`')} className="rounded border border-[#c9c7c5] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Inline Code</button>
-      <button type="button" onClick={() => onApply('```\ncode\n```')} className="rounded border border-[#c9c7c5] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Code Block</button>
+      <button type="button" onClick={() => onApply('## Heading')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">H2</button>
+      <button type="button" onClick={() => onApply('**bold**')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Bold</button>
+      <button type="button" onClick={() => onApply('- bullet item')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Bullet</button>
+      <button type="button" onClick={() => onApply('> key point')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Quote</button>
+      <button type="button" onClick={() => onApply('`term`')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Inline Code</button>
+      <button type="button" onClick={() => onApply('```\ncode\n```')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Code Block</button>
     </div>
   );
 }
@@ -606,22 +606,22 @@ export default function ModuleEditorPage(): JSX.Element {
 
       {module ? (
         <div className="space-y-4">
-          <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <a href={`/learning/course-builder/${courseId}`} className="rounded-md border border-[#c9c7c5] px-3 py-1.5 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Back to Course Editor</a>
-              <a href="/learning/course-builder" className="rounded-md border border-[#c9c7c5] px-3 py-1.5 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Back to Studio Courses</a>
-              <a href="/learning" className="rounded-md border border-[#c9c7c5] px-3 py-1.5 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Back to Learning Center</a>
-              <a href="/" className="rounded-md border border-[#c9c7c5] px-3 py-1.5 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Exit Studio</a>
+              <a href={`/learning/course-builder/${courseId}`} className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Course Editor</a>
+              <a href="/learning/course-builder" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Studio Courses</a>
+              <a href="/learning" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Learning Center</a>
+              <a href="/" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Exit Studio</a>
             </div>
           </section>
 
-          <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
-            <h2 className="text-lg font-bold text-[#080707]">{module.title}</h2>
+          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+            <h2 className="text-lg font-bold text-[#23282c]">{module.title}</h2>
             <p className="mt-1 text-xs text-[#514f4d]">Create and edit lessons, knowledge checks, and interactive blocks.</p>
 
             <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-              <input className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm md:col-span-2" placeholder="Lesson title" value={lessonTitle} onChange={(event) => setLessonTitle(event.target.value)} />
-              <select className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm" value={contentType} onChange={(event) => {
+              <input className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2" placeholder="Lesson title" value={lessonTitle} onChange={(event) => setLessonTitle(event.target.value)} />
+              <select className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={contentType} onChange={(event) => {
                 const value = event.target.value;
                 if (value === LearningContentType.TEXT || value === LearningContentType.INTERACTIVE || value === LearningContentType.VIDEO || value === LearningContentType.PDF) {
                   setContentType(value);
@@ -632,35 +632,35 @@ export default function ModuleEditorPage(): JSX.Element {
                 <option value={LearningContentType.VIDEO}>Video</option>
                 <option value={LearningContentType.PDF}>PDF</option>
               </select>
-              <button type="button" onClick={() => { void addLesson(); }} className="rounded-md bg-[#0b2545] px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]">+ Add Lesson</button>
+              <button type="button" onClick={() => { void addLesson(); }} className="rounded-md bg-[#23282c] px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]">+ Add Lesson</button>
             </div>
 
             {(contentType === LearningContentType.VIDEO || contentType === LearningContentType.PDF) ? (
-              <input className="mt-2 w-full rounded-md border border-[#c9c7c5] px-3 py-2 text-sm" placeholder="Media URL" value={contentUrl} onChange={(event) => setContentUrl(event.target.value)} />
+              <input className="mt-2 w-full rounded-md border border-[#c8ced3] px-3 py-2 text-sm" placeholder="Media URL" value={contentUrl} onChange={(event) => setContentUrl(event.target.value)} />
             ) : null}
 
             {(contentType === LearningContentType.TEXT || contentType === LearningContentType.INTERACTIVE) ? (
               <>
                 <EditorToolbar onApply={(snippet) => setBody((current) => appendSnippet(current, snippet))} />
-                <textarea className="h-28 w-full rounded-md border border-[#c9c7c5] px-3 py-2 text-sm" placeholder="Lesson body" value={body} onChange={(event) => setBody(event.target.value)} />
+                <textarea className="h-28 w-full rounded-md border border-[#c8ced3] px-3 py-2 text-sm" placeholder="Lesson body" value={body} onChange={(event) => setBody(event.target.value)} />
               </>
             ) : null}
           </section>
 
-          <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
-            <h3 className="text-sm font-semibold text-[#080707]">Quiz Builder (with answer explanations)</h3>
+          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+            <h3 className="text-sm font-semibold text-[#23282c]">Quiz Builder (with answer explanations)</h3>
             <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-              <select className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm" value={quizLessonId} onChange={(event) => setQuizLessonId(event.target.value)}>
+              <select className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={quizLessonId} onChange={(event) => setQuizLessonId(event.target.value)}>
                 <option value="">Select lesson</option>
                 {sortedLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.title}</option>)}
               </select>
-              <input className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm" value={quizQuestion} onChange={(event) => setQuizQuestion(event.target.value)} placeholder="Question" />
+              <input className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={quizQuestion} onChange={(event) => setQuizQuestion(event.target.value)} placeholder="Question" />
             </div>
             <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
               {quizOptions.map((option, index) => (
-                <div key={`new-opt-${index}`} className="rounded border border-[#ecebea] p-2">
+                <div key={`new-opt-${index}`} className="rounded border border-[#e4e5e6] p-2">
                   <input
-                    className="w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                    className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                     value={option.text}
                     onChange={(event) => {
                       setQuizOptions((current) => {
@@ -672,7 +672,7 @@ export default function ModuleEditorPage(): JSX.Element {
                     placeholder={`Option ${index + 1}`}
                   />
                   <input
-                    className="mt-1 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                    className="mt-1 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                     value={option.explanation ?? ''}
                     onChange={(event) => {
                       setQuizOptions((current) => {
@@ -688,27 +688,27 @@ export default function ModuleEditorPage(): JSX.Element {
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <label className="text-xs text-[#514f4d]" htmlFor="answer-index">Correct option index:</label>
-              <input id="answer-index" type="number" min={0} max={3} value={quizAnswer} onChange={(event) => setQuizAnswer(Number(event.target.value) || 0)} className="w-20 rounded-md border border-[#c9c7c5] px-2 py-1 text-sm" />
-              <button type="button" onClick={() => { void addQuiz(); }} className="rounded-md border border-[#0f62af] px-3 py-1 text-xs font-semibold text-[#0f62af] hover:bg-[#eef5ff]">+ Add Quiz</button>
+              <input id="answer-index" type="number" min={0} max={3} value={quizAnswer} onChange={(event) => setQuizAnswer(Number(event.target.value) || 0)} className="w-20 rounded-md border border-[#c8ced3] px-2 py-1 text-sm" />
+              <button type="button" onClick={() => { void addQuiz(); }} className="rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]">+ Add Quiz</button>
             </div>
           </section>
 
-          <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-[#080707]">Interactive Block Builder</h3>
+              <h3 className="text-sm font-semibold text-[#23282c]">Interactive Block Builder</h3>
               <div className="flex flex-wrap gap-1">
-                <button type="button" className="rounded border border-[#c9c7c5] px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('UNDERWRITING_SCENARIO')}>Template: Scenario</button>
-                <button type="button" className="rounded border border-[#c9c7c5] px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('CODE_DRILL')}>Template: Code Drill</button>
-                <button type="button" className="rounded border border-[#c9c7c5] px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('PDF_BRIEF')}>Template: PDF Brief</button>
+                <button type="button" className="rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('UNDERWRITING_SCENARIO')}>Template: Scenario</button>
+                <button type="button" className="rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('CODE_DRILL')}>Template: Code Drill</button>
+                <button type="button" className="rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('PDF_BRIEF')}>Template: PDF Brief</button>
               </div>
             </div>
 
             <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-              <select className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm" value={blockLessonId} onChange={(event) => setBlockLessonId(event.target.value)}>
+              <select className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={blockLessonId} onChange={(event) => setBlockLessonId(event.target.value)}>
                 <option value="">Select lesson</option>
                 {sortedLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.title}</option>)}
               </select>
-              <select className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm" value={blockType} onChange={(event) => {
+              <select className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={blockType} onChange={(event) => {
                 const value = event.target.value;
                 if (
                   value === LearningBlockType.TEXT || value === LearningBlockType.CODE || value === LearningBlockType.EXERCISE || value === LearningBlockType.SIMULATION || value === LearningBlockType.VIDEO || value === LearningBlockType.PDF || value === LearningBlockType.QUIZ
@@ -722,12 +722,12 @@ export default function ModuleEditorPage(): JSX.Element {
                 <option value={LearningBlockType.PDF}>PDF</option>
                 <option value={LearningBlockType.QUIZ}>Quiz Prompt</option>
               </select>
-              <input className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm md:col-span-2" value={blockTitle} onChange={(event) => setBlockTitle(event.target.value)} placeholder="Block title" />
+              <input className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2" value={blockTitle} onChange={(event) => setBlockTitle(event.target.value)} placeholder="Block title" />
               <EditorToolbar onApply={(snippet) => setBlockBody((current) => appendSnippet(current, snippet))} />
-              <textarea className="h-28 rounded-md border border-[#c9c7c5] px-3 py-2 text-sm md:col-span-2" value={blockBody} onChange={(event) => setBlockBody(event.target.value)} placeholder="Block body / instructions" />
-              <input className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm md:col-span-2" value={blockUrl} onChange={(event) => setBlockUrl(event.target.value)} placeholder="Optional media URL" />
+              <textarea className="h-28 rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2" value={blockBody} onChange={(event) => setBlockBody(event.target.value)} placeholder="Block body / instructions" />
+              <input className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2" value={blockUrl} onChange={(event) => setBlockUrl(event.target.value)} placeholder="Optional media URL" />
             </div>
-            <button type="button" onClick={() => { void addBlock(); }} className="mt-3 rounded-md border border-[#0f62af] px-3 py-1 text-xs font-semibold text-[#0f62af] hover:bg-[#eef5ff]">+ Add Block</button>
+            <button type="button" onClick={() => { void addBlock(); }} className="mt-3 rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]">+ Add Block</button>
           </section>
 
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onLessonDragEnd}>
@@ -747,31 +747,31 @@ export default function ModuleEditorPage(): JSX.Element {
                     <div key={lesson.id} className="space-y-2">
                       <SortableLessonItem lesson={lesson} />
 
-                      <div className="rounded border border-[#e5e5e5] bg-white p-3">
+                      <div className="rounded border border-[#e4e5e6] bg-white p-3">
                         <div className="flex flex-wrap items-center gap-2">
-                          <input value={lessonDraft.title} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, title: event.target.value } }))} className="min-w-[16rem] flex-1 rounded border border-[#c9c7c5] px-2 py-1 text-xs" placeholder="Lesson title" />
+                          <input value={lessonDraft.title} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, title: event.target.value } }))} className="min-w-[16rem] flex-1 rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Lesson title" />
                           <select value={lessonDraft.contentType} onChange={(event) => {
                             const value = event.target.value;
                             if (value === LearningContentType.TEXT || value === LearningContentType.INTERACTIVE || value === LearningContentType.VIDEO || value === LearningContentType.PDF) {
                               setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, contentType: value } }));
                             }
-                          }} className="rounded border border-[#c9c7c5] px-2 py-1 text-xs">
+                          }} className="rounded border border-[#c8ced3] px-2 py-1 text-xs">
                             <option value={LearningContentType.TEXT}>Text</option>
                             <option value={LearningContentType.INTERACTIVE}>Interactive</option>
                             <option value={LearningContentType.VIDEO}>Video</option>
                             <option value={LearningContentType.PDF}>PDF</option>
                           </select>
-                          <button type="button" onClick={() => { void saveLesson(lesson.id); }} className="rounded border border-[#0f62af] px-2 py-1 text-[11px] font-semibold text-[#0f62af] hover:bg-[#eef5ff]">Save Lesson</button>
+                          <button type="button" onClick={() => { void saveLesson(lesson.id); }} className="rounded border border-[#167495] px-2 py-1 text-[11px] font-semibold text-[#167495] hover:bg-[#eef5ff]">Save Lesson</button>
                           <button type="button" onClick={() => { void duplicateLesson(lesson.id); }} className="rounded border border-[#5c667a] px-2 py-1 text-[11px] font-semibold text-[#5c667a] hover:bg-[#f5f7fb]">Duplicate Lesson</button>
                           <button type="button" onClick={() => { void removeLesson(lesson.id); }} className="rounded border border-[#a61b1b] px-2 py-1 text-[11px] font-semibold text-[#a61b1b] hover:bg-[#fff4f4]">Delete Lesson</button>
                         </div>
 
                         {(lessonDraft.contentType === LearningContentType.VIDEO || lessonDraft.contentType === LearningContentType.PDF) ? (
-                          <input value={lessonDraft.contentUrl} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, contentUrl: event.target.value } }))} className="mt-2 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs" placeholder="Lesson media URL" />
+                          <input value={lessonDraft.contentUrl} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, contentUrl: event.target.value } }))} className="mt-2 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Lesson media URL" />
                         ) : null}
 
                         {(lessonDraft.contentType === LearningContentType.TEXT || lessonDraft.contentType === LearningContentType.INTERACTIVE) ? (
-                          <div className="mt-2 space-y-2 rounded border border-[#dbe5f2] bg-[#f8fbff] p-3">
+                          <div className="mt-2 space-y-2 rounded border border-[#dbe5f2] bg-[#f8f9fa] p-3">
                             <p className="text-[11px] font-semibold uppercase tracking-wide text-[#244368]">Structured Lesson Experience Editor</p>
                             {(() => {
                               const structureDraft = lessonStructureDrafts[lesson.id] ?? toStructureDraft(createDefaultLessonExperience(lessonDraft.title));
@@ -786,7 +786,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                         ...current,
                                         [lesson.id]: { ...structureDraft, readingTimeMinutes: Number(event.target.value) || 10 },
                                       }))}
-                                      className="rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                      className="rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                       placeholder="Reading time (minutes)"
                                     />
                                     <select
@@ -800,7 +800,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                           }));
                                         }
                                       }}
-                                      className="rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                      className="rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     >
                                       <option value="Beginner">Beginner</option>
                                       <option value="Intermediate">Intermediate</option>
@@ -811,58 +811,58 @@ export default function ModuleEditorPage(): JSX.Element {
                                   <textarea
                                     value={structureDraft.introduction}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, introduction: event.target.value } }))}
-                                    className="h-16 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                    className="h-16 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     placeholder="Introduction"
                                   />
 
                                   <textarea
                                     value={structureDraft.objectives}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, objectives: event.target.value } }))}
-                                    className="h-20 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                    className="h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     placeholder="Learning objectives (one per line)"
                                   />
 
                                   <textarea
                                     value={structureDraft.lexicon}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, lexicon: event.target.value } }))}
-                                    className="h-20 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                    className="h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     placeholder="Lexicon lines: Term: Definition"
                                   />
 
                                   <input
                                     value={structureDraft.deepDiveHeading}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, deepDiveHeading: event.target.value } }))}
-                                    className="w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                    className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     placeholder="Technical deep dive heading"
                                   />
                                   <input
                                     value={structureDraft.caseLawCitation}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, caseLawCitation: event.target.value } }))}
-                                    className="w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                    className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     placeholder="Case law citation"
                                   />
                                   <textarea
                                     value={structureDraft.coreDoctrine}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, coreDoctrine: event.target.value } }))}
-                                    className="h-20 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                    className="h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     placeholder="Core doctrine"
                                   />
                                   <textarea
                                     value={structureDraft.scenarios}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, scenarios: event.target.value } }))}
-                                    className="h-20 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                    className="h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     placeholder="Scenario lines: Lane Name: Description"
                                   />
                                   <input
                                     value={structureDraft.strategyName}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, strategyName: event.target.value } }))}
-                                    className="w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                    className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     placeholder="Field execution strategy name"
                                   />
                                   <textarea
                                     value={structureDraft.script}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, script: event.target.value } }))}
-                                    className="h-24 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                    className="h-24 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                     placeholder="Field execution script"
                                   />
                                 </div>
@@ -870,7 +870,7 @@ export default function ModuleEditorPage(): JSX.Element {
                             })()}
 
                             <EditorToolbar onApply={(snippet) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, body: appendSnippet(lessonDraft.body, snippet) } }))} />
-                            <textarea value={lessonDraft.body} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, body: event.target.value } }))} className="mt-1 h-20 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs" placeholder="Raw lesson body (legacy/plain text fallback)" />
+                            <textarea value={lessonDraft.body} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, body: event.target.value } }))} className="mt-1 h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Raw lesson body (legacy/plain text fallback)" />
                           </div>
                         ) : null}
 
@@ -881,11 +881,11 @@ export default function ModuleEditorPage(): JSX.Element {
                               const draft = quizDrafts[quiz.id] ?? { question: quiz.question, answer: quiz.answer, options: normalizeQuizOptions(quiz.options) };
 
                               return (
-                                <div key={quiz.id} className="rounded border border-[#ecebea] p-2">
-                                  <input value={draft.question} onChange={(event) => setQuizDrafts((current) => ({ ...current, [quiz.id]: { ...draft, question: event.target.value } }))} className="w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs" placeholder="Quiz question" />
+                                <div key={quiz.id} className="rounded border border-[#e4e5e6] p-2">
+                                  <input value={draft.question} onChange={(event) => setQuizDrafts((current) => ({ ...current, [quiz.id]: { ...draft, question: event.target.value } }))} className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Quiz question" />
                                   <div className="mt-2 grid grid-cols-1 gap-1 md:grid-cols-2">
                                     {draft.options.map((option, index) => (
-                                      <div key={`${quiz.id}-opt-${index}`} className="rounded border border-[#ecebea] p-1">
+                                      <div key={`${quiz.id}-opt-${index}`} className="rounded border border-[#e4e5e6] p-1">
                                         <input
                                           value={option.text}
                                           onChange={(event) => {
@@ -895,7 +895,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                               return { ...current, [quiz.id]: { ...draft, options: next } };
                                             });
                                           }}
-                                          className="w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                          className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                           placeholder={`Option ${index + 1}`}
                                         />
                                         <input
@@ -907,7 +907,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                               return { ...current, [quiz.id]: { ...draft, options: next } };
                                             });
                                           }}
-                                          className="mt-1 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                                          className="mt-1 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
                                           placeholder="Explanation"
                                         />
                                       </div>
@@ -915,8 +915,8 @@ export default function ModuleEditorPage(): JSX.Element {
                                   </div>
                                   <div className="mt-2 flex flex-wrap items-center gap-2">
                                     <label className="text-[11px] text-[#514f4d]" htmlFor={`ans-${quiz.id}`}>Correct index:</label>
-                                    <input id={`ans-${quiz.id}`} type="number" min={0} max={Math.max(draft.options.length - 1, 0)} value={draft.answer} onChange={(event) => setQuizDrafts((current) => ({ ...current, [quiz.id]: { ...draft, answer: Number(event.target.value) || 0 } }))} className="w-20 rounded border border-[#c9c7c5] px-2 py-1 text-xs" />
-                                    <button type="button" onClick={() => { void saveQuiz(quiz.id); }} className="rounded border border-[#0f62af] px-2 py-1 text-[11px] font-semibold text-[#0f62af] hover:bg-[#eef5ff]">Save Quiz</button>
+                                    <input id={`ans-${quiz.id}`} type="number" min={0} max={Math.max(draft.options.length - 1, 0)} value={draft.answer} onChange={(event) => setQuizDrafts((current) => ({ ...current, [quiz.id]: { ...draft, answer: Number(event.target.value) || 0 } }))} className="w-20 rounded border border-[#c8ced3] px-2 py-1 text-xs" />
+                                    <button type="button" onClick={() => { void saveQuiz(quiz.id); }} className="rounded border border-[#167495] px-2 py-1 text-[11px] font-semibold text-[#167495] hover:bg-[#eef5ff]">Save Quiz</button>
                                     <button type="button" onClick={() => { void removeQuiz(quiz.id); }} className="rounded border border-[#a61b1b] px-2 py-1 text-[11px] font-semibold text-[#a61b1b] hover:bg-[#fff4f4]">Delete Quiz</button>
                                   </div>
                                 </div>
@@ -942,9 +942,9 @@ export default function ModuleEditorPage(): JSX.Element {
 
                                     return (
                                       <SortableBlockItem key={block.id} blockId={block.id}>
-                                        <div className="rounded border border-[#ecebea] p-2">
+                                        <div className="rounded border border-[#e4e5e6] p-2">
                                           <div className="grid grid-cols-1 gap-1 md:grid-cols-3">
-                                            <input value={draft.title} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, title: event.target.value } }))} className="rounded border border-[#c9c7c5] px-2 py-1 text-xs" placeholder="Block title" />
+                                            <input value={draft.title} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, title: event.target.value } }))} className="rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Block title" />
                                             <select value={draft.type} onChange={(event) => {
                                               const value = event.target.value;
                                               if (
@@ -952,7 +952,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                               ) {
                                                 setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, type: value } }));
                                               }
-                                            }} className="rounded border border-[#c9c7c5] px-2 py-1 text-xs">
+                                            }} className="rounded border border-[#c8ced3] px-2 py-1 text-xs">
                                               <option value={LearningBlockType.TEXT}>Text</option>
                                               <option value={LearningBlockType.CODE}>Code</option>
                                               <option value={LearningBlockType.EXERCISE}>Exercise</option>
@@ -961,12 +961,12 @@ export default function ModuleEditorPage(): JSX.Element {
                                               <option value={LearningBlockType.PDF}>PDF</option>
                                               <option value={LearningBlockType.QUIZ}>Quiz Prompt</option>
                                             </select>
-                                            <input value={draft.url} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, url: event.target.value } }))} className="rounded border border-[#c9c7c5] px-2 py-1 text-xs" placeholder="Optional URL" />
+                                            <input value={draft.url} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, url: event.target.value } }))} className="rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Optional URL" />
                                           </div>
                                           <EditorToolbar onApply={(snippet) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, body: appendSnippet(draft.body, snippet) } }))} />
-                                          <textarea value={draft.body} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, body: event.target.value } }))} className="mt-1 h-20 w-full rounded border border-[#c9c7c5] px-2 py-1 text-xs" placeholder="Block body" />
+                                          <textarea value={draft.body} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, body: event.target.value } }))} className="mt-1 h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Block body" />
                                           <div className="mt-1 flex flex-wrap gap-1">
-                                            <button type="button" onClick={() => { void saveBlock(block.id); }} className="rounded border border-[#0f62af] px-2 py-1 text-[11px] font-semibold text-[#0f62af] hover:bg-[#eef5ff]">Save Block</button>
+                                            <button type="button" onClick={() => { void saveBlock(block.id); }} className="rounded border border-[#167495] px-2 py-1 text-[11px] font-semibold text-[#167495] hover:bg-[#eef5ff]">Save Block</button>
                                             <button type="button" onClick={() => { void removeBlock(block.id); }} className="rounded border border-[#a61b1b] px-2 py-1 text-[11px] font-semibold text-[#a61b1b] hover:bg-[#fff4f4]">Delete Block</button>
                                           </div>
                                         </div>

@@ -64,7 +64,7 @@ export default function RenewalsPage(): JSX.Element {
   return (
     <SectionLayout title="Renewals">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-[#3e3e3c]">Automatic renewal detection from active and issued policies.</p>
+        <p className="text-sm text-[#5c6873]">Automatic renewal detection from active and issued policies.</p>
         <div className="flex flex-wrap gap-2">
           {windows.map((window) => (
             <button
@@ -73,8 +73,8 @@ export default function RenewalsPage(): JSX.Element {
               onClick={() => setSelectedWindow(window.value)}
               className={`rounded border px-3 py-2 text-sm font-semibold ${
                 selectedWindow === window.value
-                  ? 'border-[#0163b3] bg-[#0176d3] text-white'
-                  : 'border-[#dddbda] bg-white text-[#3e3e3c] hover:bg-[#f8f8f7]'
+                  ? 'border-[#1b8eb7] bg-[#20a8d8] text-white'
+                  : 'border-[#c8ced3] bg-white text-[#5c6873] hover:bg-[#f8f9fa]'
               }`}
             >
               {window.label} ({counts[window.value] ?? 0})
@@ -84,15 +84,15 @@ export default function RenewalsPage(): JSX.Element {
       </div>
 
       {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
-      {loading ? <div className="text-sm text-[#6a6a6a]">Loading renewals...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading renewals...</div> : null}
 
       {!loading ? (
-        <div className="rounded border border-[#dddbda] bg-white shadow-sm">
+        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
           {renewals.length === 0 ? (
-            <div className="p-4 text-sm text-[#6a6a6a]">No renewals found for this window.</div>
+            <div className="p-4 text-sm text-[#73818f]">No renewals found for this window.</div>
           ) : (
             <table className="w-full text-left text-sm">
-              <thead className="bg-[#f8f8f7] text-[#6a6a6a]">
+              <thead className="bg-[#f8f9fa] text-[#73818f]">
                 <tr>
                   <th className="px-3 py-2">Insured</th>
                   <th className="px-3 py-2">Carrier</th>
@@ -104,8 +104,8 @@ export default function RenewalsPage(): JSX.Element {
               </thead>
               <tbody>
                 {renewals.map((policy) => (
-                  <tr key={policy.id} className="border-t border-[#f3f2f1]">
-                    <td className="px-3 py-2 font-semibold text-[#0176d3]">{policy.insured_name}</td>
+                  <tr key={policy.id} className="border-t border-[#f0f3f5]">
+                    <td className="px-3 py-2 font-semibold text-[#20a8d8]">{policy.insured_name}</td>
                     <td className="px-3 py-2">{policy.carrier}</td>
                     <td className="px-3 py-2">{policy.line_of_business}</td>
                     <td className="px-3 py-2">${policy.premium.toLocaleString()}</td>

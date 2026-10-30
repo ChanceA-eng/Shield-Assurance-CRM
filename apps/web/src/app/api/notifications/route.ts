@@ -22,6 +22,30 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   return NextResponse.json(data ?? [], { status: 200 });
 }
 
+export async function PATCH(request: NextRequest): Promise<NextResponse> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) {
+    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  }
+
+  const payload = (await request.json().catch(() => ({}))) as { ids?: string[]; all?: boolean };
+
+  let query = supabase.from('notifications').update({ read: true }).eq('read', false);
+  if (!payload.all) {
+    if (!Array.isArray(payload.ids) || payload.ids.length === 0) {
+      return NextResponse.json({ message: 'ids or all is required.' }, { status: 400 });
+    }
+    query = query.in('id', payload.ids);
+  }
+
+  const { error } = await query;
+  if (error) {
+    return NextResponse.json({ message: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true }, { status: 200 });
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {

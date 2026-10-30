@@ -383,7 +383,7 @@ function deriveLifecycleStage(input: { policies: PolicyItem[]; leads: LeadItem[]
   if (bound) return 'Bound';
 
   if (input.leads.some((lead) => normalize(lead.status) === 'quoted')) return 'Quoted';
-  if (input.leads.some((lead) => normalize(lead.status) === 'working')) return 'Prospect';
+  if (input.leads.some((lead) => ['working', 'contacted'].includes(normalize(lead.status)))) return 'Prospect';
   return input.leads.length > 0 ? 'Lead' : 'Prospect';
 }
 
@@ -1260,22 +1260,22 @@ export default function ClientWorkspacePage(): JSX.Element {
     <SectionLayout title="Client">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link href="/clients" className="text-sm font-semibold text-[#0176d3] hover:underline">
+          <Link href="/clients" className="text-sm font-semibold text-[#20a8d8] hover:underline">
             Back to Clients
           </Link>
-          <h2 className="mt-1 text-2xl font-bold text-[#080707]">{client?.full_name ?? 'Loading client workspace...'}</h2>
-          <p className="text-sm text-[#3e3e3c]">
+          <h2 className="mt-1 text-2xl font-bold text-[#23282c]">{client?.full_name ?? 'Loading client workspace...'}</h2>
+          <p className="text-sm text-[#5c6873]">
             {client?.email || '--'} · {client?.phone || '--'}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2 text-xs text-[#3e3e3c]">
+        <div className="flex flex-wrap gap-2 text-xs text-[#5c6873]">
           <span className="rounded-full bg-[#e3f2ff] px-3 py-1 font-semibold text-[#0a4f8f]">Email {emailCommunicationOn ? 'On' : 'Off'}</span>
           <span className="rounded-full bg-[#ecf8f1] px-3 py-1 font-semibold text-[#1f7a47]">SMS {smsCommunicationOn ? 'On' : 'Off'}</span>
           <span className="rounded-full bg-[#fff3de] px-3 py-1 font-semibold text-[#8a4d00]">Preferred: {client?.preferred_channel || 'email'}</span>
           <span className="rounded-full bg-[#edf4ff] px-3 py-1 font-semibold text-[#2f5c9f]">Lifecycle: {lifecycleStage}</span>
           <button
             type="button"
-            className="rounded-full bg-[#0f62af] px-3 py-1 font-semibold text-white hover:bg-[#0a4f8f]"
+            className="rounded-full bg-[#167495] px-3 py-1 font-semibold text-white hover:bg-[#0a4f8f]"
             onClick={() => setIsConversationOpen((prev) => !prev)}
           >
             {isConversationOpen ? 'Close Conversation' : 'View Conversation'}
@@ -1312,27 +1312,27 @@ export default function ClientWorkspacePage(): JSX.Element {
       ) : null}
 
       {error ? <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{error}</div> : null}
-      {loading ? <div className="text-sm text-[#6a6a6a]">Loading client workspace...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading client workspace...</div> : null}
 
       {!loading ? (
         <div className={`relative grid grid-cols-1 gap-4 transition-all duration-300 ${isConversationOpen ? 'xl:pr-[26rem]' : ''}`}>
-          <section className="rounded border border-[#dddbda] bg-white shadow-sm">
-            <div className="border-b border-[#f3f2f1] px-4 py-4">
+          <section className="rounded border border-[#c8ced3] bg-white shadow-sm">
+            <div className="border-b border-[#f0f3f5] px-4 py-4">
               <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-                <div className="rounded border border-[#e8eef7] bg-[#f8fbff] p-2">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#60748a]">Policies</p>
+                <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Policies</p>
                   <p className="text-xl font-semibold text-[#14324f]">{policies.length}</p>
                 </div>
-                <div className="rounded border border-[#e8eef7] bg-[#f8fbff] p-2">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#60748a]">Client Tasks</p>
+                <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Client Tasks</p>
                   <p className="text-xl font-semibold text-[#14324f]">{openClientTasks.length}</p>
                 </div>
-                <div className="rounded border border-[#e8eef7] bg-[#f8fbff] p-2">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#60748a]">Files</p>
+                <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Files</p>
                   <p className="text-xl font-semibold text-[#14324f]">{files.length}</p>
                 </div>
-                <div className="rounded border border-[#e8eef7] bg-[#f8fbff] p-2">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#60748a]">Tags</p>
+                <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Tags</p>
                   <p className="text-xl font-semibold text-[#14324f]">{tags.length}</p>
                 </div>
               </div>
@@ -1357,7 +1357,7 @@ export default function ClientWorkspacePage(): JSX.Element {
               </section>
             </div>
 
-            <div className="border-b border-[#f3f2f1] px-3 py-2">
+            <div className="border-b border-[#f0f3f5] px-3 py-2">
               <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
                 {([
                   ['overview', 'Overview'],
@@ -1375,7 +1375,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                     data-tab={value}
                     type="button"
                     className={`w-full rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                      profileTab === value ? 'bg-[#0176d3] text-white' : 'bg-[#f4f8ff] text-[#0f4a85] hover:bg-[#e7f1ff]'
+                      profileTab === value ? 'bg-[#20a8d8] text-white' : 'bg-[#f4f8ff] text-[#0f4a85] hover:bg-[#e7f1ff]'
                     }`}
                     onClick={() => setProfileTab(value)}
                   >
@@ -1388,7 +1388,7 @@ export default function ClientWorkspacePage(): JSX.Element {
             <div className="max-h-[75vh] overflow-y-auto p-4">
               {profileTab === 'overview' ? (
                 <div className="space-y-4">
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-4">
+                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-4">
                     <h4 className="text-sm font-semibold text-[#14324f]">Client Info</h4>
                     <div className="mt-2 grid grid-cols-1 gap-2 text-sm text-[#425468] md:grid-cols-2">
                       <p>Name: {client?.full_name || '--'}</p>
@@ -1400,11 +1400,11 @@ export default function ClientWorkspacePage(): JSX.Element {
                     </div>
                   </section>
 
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-4">
+                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-4">
                     <h4 className="text-sm font-semibold text-[#14324f]">Submission Snapshot</h4>
 
                     {commercialSubmissionAssets.length === 0 && personalSubmissionAssets.length === 0 ? (
-                      <p className="mt-2 text-sm text-[#6a6a6a]">No linked submission data yet.</p>
+                      <p className="mt-2 text-sm text-[#73818f]">No linked submission data yet.</p>
                     ) : null}
 
                     {commercialSubmissionAssets.map((asset) => {
@@ -1412,7 +1412,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                       return (
                         <article key={asset.id} className="mt-3 rounded border border-[#d8e3f0] bg-white p-3">
                           <p className="text-sm font-semibold text-[#14324f]">Commercial Submission</p>
-                          <p className="text-xs text-[#60748a]">{asset.title}</p>
+                          <p className="text-xs text-[#73818f]">{asset.title}</p>
                           <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-[#425468] md:grid-cols-2">
                             <p>Industry: {String(metadata.industry_group ?? '--')}</p>
                             <p>NAICS: {String(metadata.naics_code ?? '--')}</p>
@@ -1428,7 +1428,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                       return (
                         <article key={asset.id} className="mt-3 rounded border border-[#d8e3f0] bg-white p-3">
                           <p className="text-sm font-semibold text-[#14324f]">Personal Submission</p>
-                          <p className="text-xs text-[#60748a]">{asset.title}</p>
+                          <p className="text-xs text-[#73818f]">{asset.title}</p>
                           <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-[#425468] md:grid-cols-2">
                             <p>Current Carrier: {String(metadata.current_carrier ?? '--')}</p>
                             <p>Policy Expiration: {String(metadata.current_policy_expiration ?? '--')}</p>
@@ -1444,12 +1444,12 @@ export default function ClientWorkspacePage(): JSX.Element {
 
               {profileTab === 'policies' ? (
                 <div className="space-y-3">
-                  <p className="text-xs text-[#60748a]">Policy details stay in sync with the Policies page.</p>
-                  {policies.length === 0 ? <p className="text-sm text-[#6a6a6a]">No linked policies.</p> : null}
+                  <p className="text-xs text-[#73818f]">Policy details stay in sync with the Policies page.</p>
+                  {policies.length === 0 ? <p className="text-sm text-[#73818f]">No linked policies.</p> : null}
                   {policies.map((policy) => (
-                    <article key={policy.id} className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                    <article key={policy.id} className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                       <p className="text-sm font-semibold text-[#14324f]">{policy.carrier || '--'} · {policy.line_of_business || 'Policy'}</p>
-                      <p className="text-xs text-[#60748a]">
+                      <p className="text-xs text-[#73818f]">
                         Premium {formatCurrency(policy.premium)} · Status {policy.status || '--'} · Policy # {policy.policy_number || '--'}
                       </p>
                       <p className="mt-1 text-xs text-[#425468]">Effective {safeDateOnly(policy.effective_date)} · Renewal {safeDateOnly(policy.renewal_date)}</p>
@@ -1460,7 +1460,7 @@ export default function ClientWorkspacePage(): JSX.Element {
 
               {profileTab === 'assets' ? (
                 <div className="space-y-4">
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                     <h4 className="text-sm font-semibold text-[#14324f]">Add Client Asset</h4>
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
                       <input
@@ -1485,7 +1485,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                     <button
                       type="button"
                       onClick={() => void createAsset()}
-                      className="mt-2 rounded bg-[#0176d3] px-3 py-2 text-xs font-semibold text-white"
+                      className="mt-2 rounded bg-[#20a8d8] px-3 py-2 text-xs font-semibold text-white"
                     >
                       Save Asset
                     </button>
@@ -1493,12 +1493,12 @@ export default function ClientWorkspacePage(): JSX.Element {
 
                   <section className="space-y-2">
                     {assets.filter((item) => normalize(item.asset_type) !== 'note').length === 0 ? (
-                      <p className="text-sm text-[#6a6a6a]">No assets yet.</p>
+                      <p className="text-sm text-[#73818f]">No assets yet.</p>
                     ) : null}
                     {assets
                       .filter((item) => normalize(item.asset_type) !== 'note')
                       .map((asset) => (
-                        <article key={asset.id} className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                        <article key={asset.id} className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                           {editingAssetId === asset.id ? (
                             <div className="space-y-2">
                               <input
@@ -1519,14 +1519,14 @@ export default function ClientWorkspacePage(): JSX.Element {
                               <div className="flex gap-2">
                                 <button
                                   type="button"
-                                  className="rounded bg-[#0176d3] px-3 py-1.5 text-xs font-semibold text-white"
+                                  className="rounded bg-[#20a8d8] px-3 py-1.5 text-xs font-semibold text-white"
                                   onClick={() => void saveAssetEdit()}
                                 >
                                   Save
                                 </button>
                                 <button
                                   type="button"
-                                  className="rounded bg-[#e5e5e5] px-3 py-1.5 text-xs font-semibold text-[#3e3e3c]"
+                                  className="rounded bg-[#e4e5e6] px-3 py-1.5 text-xs font-semibold text-[#5c6873]"
                                   onClick={() => setEditingAssetId(null)}
                                 >
                                   Cancel
@@ -1536,7 +1536,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                           ) : (
                             <>
                               <p className="text-sm font-semibold text-[#14324f]">{asset.title}</p>
-                              <p className="text-xs text-[#60748a]">{asset.asset_type} · {safeDate(asset.updated_at)}</p>
+                              <p className="text-xs text-[#73818f]">{asset.asset_type} · {safeDate(asset.updated_at)}</p>
                               <p className="mt-1 text-sm text-[#425468]">{asset.value || '--'}</p>
                               <div className="mt-2 flex gap-2">
                                 <button
@@ -1564,7 +1564,7 @@ export default function ClientWorkspacePage(): JSX.Element {
 
               {profileTab === 'notes' ? (
                 <div className="space-y-4">
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                     <h4 className="text-sm font-semibold text-[#14324f]">Internal Notes</h4>
                     <textarea
                       className="mt-2 min-h-24 w-full rounded border border-[#d8e3f0] px-3 py-2 text-sm"
@@ -1575,16 +1575,16 @@ export default function ClientWorkspacePage(): JSX.Element {
                     <button
                       type="button"
                       onClick={() => void createNote()}
-                      className="mt-2 rounded bg-[#0176d3] px-3 py-2 text-xs font-semibold text-white"
+                      className="mt-2 rounded bg-[#20a8d8] px-3 py-2 text-xs font-semibold text-white"
                     >
                       Save Note
                     </button>
                   </section>
 
-                  {notes.length === 0 ? <p className="text-sm text-[#6a6a6a]">No notes yet.</p> : null}
+                  {notes.length === 0 ? <p className="text-sm text-[#73818f]">No notes yet.</p> : null}
                   {notes.map((note) => (
-                    <article key={note.id} className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
-                      <p className="text-xs text-[#60748a]">{safeDate(note.updated_at)}</p>
+                    <article key={note.id} className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
+                      <p className="text-xs text-[#73818f]">{safeDate(note.updated_at)}</p>
                       <p className="mt-1 whitespace-pre-line text-sm text-[#425468]">{note.value || '--'}</p>
                       <button
                         type="button"
@@ -1600,7 +1600,7 @@ export default function ClientWorkspacePage(): JSX.Element {
 
               {profileTab === 'tasks' ? (
                 <div className="space-y-4">
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                     <h4 className="text-sm font-semibold text-[#14324f]">Create Client Task</h4>
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                       <input
@@ -1625,18 +1625,18 @@ export default function ClientWorkspacePage(): JSX.Element {
                     <button
                       type="button"
                       onClick={() => void createClientTask()}
-                      className="mt-2 rounded bg-[#0176d3] px-3 py-2 text-xs font-semibold text-white"
+                      className="mt-2 rounded bg-[#20a8d8] px-3 py-2 text-xs font-semibold text-white"
                     >
                       Save Task
                     </button>
                   </section>
 
-                  {visibleClientTasks.length === 0 ? <p className="text-sm text-[#6a6a6a]">No client tasks yet.</p> : null}
+                  {visibleClientTasks.length === 0 ? <p className="text-sm text-[#73818f]">No client tasks yet.</p> : null}
                   {usingLegacyTaskStore ? (
-                    <p className="text-xs text-[#60748a]">Showing tasks from the standard task store for this client.</p>
+                    <p className="text-xs text-[#73818f]">Showing tasks from the standard task store for this client.</p>
                   ) : null}
                   {visibleClientTasks.map((task) => (
-                    <article key={task.id} className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                    <article key={task.id} className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                       {editingClientTaskId === task.id ? (
                         <div className="space-y-2">
                           <input
@@ -1677,14 +1677,14 @@ export default function ClientWorkspacePage(): JSX.Element {
                           <div className="flex gap-2">
                             <button
                               type="button"
-                              className="rounded bg-[#0176d3] px-3 py-1.5 text-xs font-semibold text-white"
+                              className="rounded bg-[#20a8d8] px-3 py-1.5 text-xs font-semibold text-white"
                               onClick={() => void saveClientTaskEdit()}
                             >
                               Save
                             </button>
                             <button
                               type="button"
-                              className="rounded bg-[#e5e5e5] px-3 py-1.5 text-xs font-semibold text-[#3e3e3c]"
+                              className="rounded bg-[#e4e5e6] px-3 py-1.5 text-xs font-semibold text-[#5c6873]"
                               onClick={() => setEditingClientTaskId(null)}
                             >
                               Cancel
@@ -1694,7 +1694,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                       ) : (
                         <>
                           <p className="text-sm font-semibold text-[#14324f]">{task.subject}</p>
-                          <p className="text-xs text-[#60748a]">Due {safeDateOnly(task.due_date)} · {task.status || 'open'} · {task.priority || 'medium'}</p>
+                          <p className="text-xs text-[#73818f]">Due {safeDateOnly(task.due_date)} · {task.status || 'open'} · {task.priority || 'medium'}</p>
                           {task.description ? <p className="mt-1 text-sm text-[#425468]">{task.description}</p> : null}
                           <div className="mt-2 flex gap-2">
                             <button
@@ -1731,7 +1731,7 @@ export default function ClientWorkspacePage(): JSX.Element {
 
               {profileTab === 'files' ? (
                 <div className="space-y-4">
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                     <h4 className="text-sm font-semibold text-[#14324f]">Add File Record</h4>
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
                       <input
@@ -1759,7 +1759,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                       <input
                         type="file"
                         accept="application/pdf,image/*"
-                        className="cursor-pointer rounded border border-dashed border-[#bfd2e8] bg-[#f8fbff] px-3 py-2 text-sm md:col-span-3"
+                        className="cursor-pointer rounded border border-dashed border-[#bfd2e8] bg-[#f8f9fa] px-3 py-2 text-sm md:col-span-3"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (!file) {
@@ -1789,7 +1789,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                       />
                     </div>
                     {selectedUploadName ? (
-                      <p className="mt-2 text-xs text-[#60748a]">
+                      <p className="mt-2 text-xs text-[#73818f]">
                         Selected: {selectedUploadName}
                         {typeof selectedUploadSize === 'number' ? ` (${Math.ceil(selectedUploadSize / 1024)} KB)` : ''}
                       </p>
@@ -1797,15 +1797,15 @@ export default function ClientWorkspacePage(): JSX.Element {
                     <button
                       type="button"
                       onClick={() => void createFileRecord()}
-                      className="mt-2 rounded bg-[#0176d3] px-3 py-2 text-xs font-semibold text-white"
+                      className="mt-2 rounded bg-[#20a8d8] px-3 py-2 text-xs font-semibold text-white"
                     >
                       Save File
                     </button>
                   </section>
 
-                  {files.length === 0 ? <p className="text-sm text-[#6a6a6a]">No file records yet.</p> : null}
+                  {files.length === 0 ? <p className="text-sm text-[#73818f]">No file records yet.</p> : null}
                   {files.map((item) => (
-                    <article key={item.id} className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                    <article key={item.id} className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                       {editingFileId === item.id ? (
                         <div className="space-y-2">
                           <input
@@ -1833,14 +1833,14 @@ export default function ClientWorkspacePage(): JSX.Element {
                           <div className="flex gap-2">
                             <button
                               type="button"
-                              className="rounded bg-[#0176d3] px-3 py-1.5 text-xs font-semibold text-white"
+                              className="rounded bg-[#20a8d8] px-3 py-1.5 text-xs font-semibold text-white"
                               onClick={() => void saveFileEdit()}
                             >
                               Save
                             </button>
                             <button
                               type="button"
-                              className="rounded bg-[#e5e5e5] px-3 py-1.5 text-xs font-semibold text-[#3e3e3c]"
+                              className="rounded bg-[#e4e5e6] px-3 py-1.5 text-xs font-semibold text-[#5c6873]"
                               onClick={() => setEditingFileId(null)}
                             >
                               Cancel
@@ -1850,9 +1850,9 @@ export default function ClientWorkspacePage(): JSX.Element {
                       ) : (
                         <>
                           <p className="text-sm font-semibold text-[#14324f]">{item.file_name}</p>
-                          <p className="text-xs text-[#60748a]">{item.file_type || '--'} · {item.status || 'uploaded'} · {safeDate(item.uploaded_at)}</p>
+                          <p className="text-xs text-[#73818f]">{item.file_type || '--'} · {item.status || 'uploaded'} · {safeDate(item.uploaded_at)}</p>
                           {item.file_url ? (
-                            <a href={item.file_url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs font-semibold text-[#0176d3] hover:underline">
+                            <a href={item.file_url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs font-semibold text-[#20a8d8] hover:underline">
                               Open file
                             </a>
                           ) : null}
@@ -1881,7 +1881,7 @@ export default function ClientWorkspacePage(): JSX.Element {
 
               {profileTab === 'tags' ? (
                 <div className="space-y-3">
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                     <h4 className="text-sm font-semibold text-[#14324f]">Add Tag</h4>
                     <div className="mt-2 flex gap-2">
                       <input
@@ -1893,7 +1893,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                       <button
                         type="button"
                         onClick={() => void createTag()}
-                        className="rounded bg-[#0176d3] px-3 py-2 text-xs font-semibold text-white"
+                        className="rounded bg-[#20a8d8] px-3 py-2 text-xs font-semibold text-white"
                       >
                         Add
                       </button>
@@ -1901,7 +1901,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                   </section>
 
                   <div className="flex flex-wrap gap-2">
-                    {tags.length === 0 ? <p className="text-sm text-[#6a6a6a]">No tags yet.</p> : null}
+                    {tags.length === 0 ? <p className="text-sm text-[#73818f]">No tags yet.</p> : null}
                     {tags.map((tag) => (
                       <span key={tag.id} className="inline-flex items-center gap-2 rounded-full bg-[#eef4fd] px-3 py-1 text-xs font-semibold text-[#1f4b7d]">
                         {tag.tag}
@@ -1920,13 +1920,13 @@ export default function ClientWorkspacePage(): JSX.Element {
 
               {profileTab === 'activity' ? (
                 <div className="space-y-2">
-                  {activities.length === 0 ? <p className="text-sm text-[#6a6a6a]">No client activity entries yet.</p> : null}
+                  {activities.length === 0 ? <p className="text-sm text-[#73818f]">No client activity entries yet.</p> : null}
                   {activities.map((item) => (
-                    <article key={item.id} className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#60748a]">{item.activity_type}</p>
+                    <article key={item.id} className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#73818f]">{item.activity_type}</p>
                       <p className="text-sm font-semibold text-[#14324f]">{item.title}</p>
                       {item.body ? <p className="mt-1 whitespace-pre-line text-sm text-[#425468]">{item.body}</p> : null}
-                      <p className="mt-1 text-xs text-[#60748a]">{safeDate(item.occurred_at)}</p>
+                      <p className="mt-1 text-xs text-[#73818f]">{safeDate(item.occurred_at)}</p>
                     </article>
                   ))}
                   {activities.length >= activityLimit ? (
@@ -1943,7 +1943,7 @@ export default function ClientWorkspacePage(): JSX.Element {
 
               {profileTab === 'insights' ? (
                 <div className="space-y-4">
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                     <h4 className="text-sm font-semibold text-[#14324f]">Underwriting Risk Flags</h4>
                     <button
                       type="button"
@@ -1953,14 +1953,14 @@ export default function ClientWorkspacePage(): JSX.Element {
                       Extract risk profile
                     </button>
                     <div className="mt-2 space-y-1">
-                      {aiRiskSignals.length === 0 ? <p className="text-sm text-[#6a6a6a]">Run extraction to view current flags.</p> : null}
+                      {aiRiskSignals.length === 0 ? <p className="text-sm text-[#73818f]">Run extraction to view current flags.</p> : null}
                       {aiRiskSignals.map((flag) => (
                         <p key={flag} className="text-sm text-[#425468]">• {flag}</p>
                       ))}
                     </div>
                   </section>
 
-                  <section className="rounded-lg border border-[#edf2f8] bg-[#fbfdff] p-3">
+                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                     <h4 className="text-sm font-semibold text-[#14324f]">Service Items Snapshot</h4>
                     <p className="mt-1 text-sm text-[#425468]">
                       Claims {claims.length} · Endorsements {endorsements.length} · Certificates {certificates.length}
@@ -1972,14 +1972,14 @@ export default function ClientWorkspacePage(): JSX.Element {
           </section>
 
           <aside
-            className={`fixed right-0 top-0 z-40 h-full w-full max-w-[26rem] transform border-l border-[#dddbda] bg-white shadow-2xl transition-transform duration-300 ${
+            className={`fixed right-0 top-0 z-40 h-full w-full max-w-[26rem] transform border-l border-[#c8ced3] bg-white shadow-2xl transition-transform duration-300 ${
               isConversationOpen ? 'translate-x-0' : 'translate-x-full'
             }`}
           >
             <div className="flex h-full flex-col">
-              <div className="border-b border-[#f3f2f1] px-4 py-3">
+              <div className="border-b border-[#f0f3f5] px-4 py-3">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-lg font-semibold text-[#080707]">Client Conversation</h3>
+                  <h3 className="text-lg font-semibold text-[#23282c]">Client Conversation</h3>
                   <button
                     type="button"
                     className="rounded bg-[#e8eef7] px-2 py-1 text-xs font-semibold text-[#35506d]"
@@ -1993,7 +1993,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                   <button
                     type="button"
                     className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                      conversationTab === 'thread' ? 'bg-[#0176d3] text-white' : 'bg-[#eff5ff] text-[#0a4f8f]'
+                      conversationTab === 'thread' ? 'bg-[#20a8d8] text-white' : 'bg-[#eff5ff] text-[#0a4f8f]'
                     }`}
                     onClick={() => setConversationTab('thread')}
                   >
@@ -2002,7 +2002,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                   <button
                     type="button"
                     className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                      conversationTab === 'delivery' ? 'bg-[#0176d3] text-white' : 'bg-[#eff5ff] text-[#0a4f8f]'
+                      conversationTab === 'delivery' ? 'bg-[#20a8d8] text-white' : 'bg-[#eff5ff] text-[#0a4f8f]'
                     }`}
                     onClick={() => setConversationTab('delivery')}
                   >
@@ -2016,7 +2016,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                       <button
                         type="button"
                         className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                          channelFilter === 'email' ? 'bg-[#0f62af] text-white' : 'bg-[#e7f2ff] text-[#0a4f8f]'
+                          channelFilter === 'email' ? 'bg-[#167495] text-white' : 'bg-[#e7f2ff] text-[#0a4f8f]'
                         }`}
                         onClick={() => setChannelFilter('email')}
                       >
@@ -2025,7 +2025,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                       <button
                         type="button"
                         className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                          channelFilter === 'sms' ? 'bg-[#0f62af] text-white' : 'bg-[#e7f2ff] text-[#0a4f8f]'
+                          channelFilter === 'sms' ? 'bg-[#167495] text-white' : 'bg-[#e7f2ff] text-[#0a4f8f]'
                         }`}
                         onClick={() => setChannelFilter('sms')}
                       >
@@ -2035,7 +2035,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                     <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-2">
                       <button
                         type="button"
-                        className="rounded bg-[#0f62af] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0a4f8f] disabled:opacity-60"
+                        className="rounded bg-[#167495] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0a4f8f] disabled:opacity-60"
                         disabled={runningAiAction === 'summary'}
                         onClick={(e) => {
                           e.preventDefault();
@@ -2082,10 +2082,10 @@ export default function ClientWorkspacePage(): JSX.Element {
                             : item.subject || item.automation_type || 'Scheduled follow-up';
 
                         return (
-                          <article key={`${item.kind}-${item.id}`} className="rounded-xl border border-[#e8eef7] bg-[#fbfdff] p-3">
+                          <article key={`${item.kind}-${item.id}`} className="rounded-xl border border-[#e8eef7] bg-[#ffffff] p-3">
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#60748a]">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#73818f]">
                                   {label} {item.kind === 'communication' && item.direction === 'inbound' ? 'Inbound' : ''}
                                 </p>
                                 <h4 className="truncate text-sm font-semibold text-[#14324f]">{headline}</h4>
@@ -2125,12 +2125,12 @@ export default function ClientWorkspacePage(): JSX.Element {
                       </button>
                     ) : null}
 
-                    <section className="rounded border border-[#dddbda] bg-white p-4 shadow-sm">
-                      <h3 className="text-base font-semibold text-[#080707]">Send Message</h3>
-                      <p className="mb-3 text-xs text-[#6a6a6a]">Send now or schedule a follow-up message.</p>
+                    <section className="rounded border border-[#c8ced3] bg-white p-4 shadow-sm">
+                      <h3 className="text-base font-semibold text-[#23282c]">Send Message</h3>
+                      <p className="mb-3 text-xs text-[#73818f]">Send now or schedule a follow-up message.</p>
                       <div className="space-y-2">
                         <select
-                          className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                          className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                           value={composer.channel}
                           onChange={(e) => setComposer((prev) => ({ ...prev, channel: e.target.value as 'email' | 'sms' }))}
                         >
@@ -2138,7 +2138,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                           <option value="sms">SMS</option>
                         </select>
                         <select
-                          className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                          className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                           value={activeTemplate}
                           onChange={(e) => {
                             const key = e.target.value;
@@ -2160,7 +2160,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                           ))}
                         </select>
                         <input
-                          className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                          className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                           placeholder="Subject"
                           value={composer.subject}
                           onChange={(e) => setComposer((prev) => ({ ...prev, subject: e.target.value }))}
@@ -2168,7 +2168,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                         <div className="relative">
                           <textarea
                             id="messageTextarea"
-                            className="min-h-24 w-full rounded border border-[#dddbda] px-3 py-2 pr-28 text-sm"
+                            className="min-h-24 w-full rounded border border-[#c8ced3] px-3 py-2 pr-28 text-sm"
                             placeholder="Write your message or enter a quick prompt for AI"
                             value={composer.body}
                             onChange={(e) => setComposer((prev) => ({ ...prev, body: e.target.value }))}
@@ -2183,13 +2183,13 @@ export default function ClientWorkspacePage(): JSX.Element {
                           </button>
                         </div>
                         <input
-                          className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                          className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                           type="datetime-local"
                           value={composer.sendAt}
                           onChange={(e) => setComposer((prev) => ({ ...prev, sendAt: e.target.value }))}
                         />
                         <input
-                          className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                          className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                           placeholder="Message category"
                           value={composer.automationType}
                           onChange={(e) => setComposer((prev) => ({ ...prev, automationType: e.target.value }))}
@@ -2203,7 +2203,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                             onChange={(e) => setComposerUploadFile(e.target.files?.[0] ?? null)}
                           />
                           {composerUploadFile ? (
-                            <p className="mt-1 text-[11px] text-[#64748b]">
+                            <p className="mt-1 text-[11px] text-[#73818f]">
                               Upload: {composerUploadFile.name} ({Math.ceil(composerUploadFile.size / 1024)} KB)
                             </p>
                           ) : null}
@@ -2233,7 +2233,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                           type="button"
                           disabled={savingMessage}
                           onClick={() => void sendManualMessage()}
-                          className="w-full rounded bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1] disabled:opacity-60"
+                          className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:opacity-60"
                         >
                           {savingMessage ? 'Saving...' : composer.sendAt ? 'Schedule Message' : 'Send Now'}
                         </button>
@@ -2241,17 +2241,17 @@ export default function ClientWorkspacePage(): JSX.Element {
                     </section>
                   </div>
                 ) : (
-                  <section className="rounded border border-[#dddbda] bg-white p-4 shadow-sm">
+                  <section className="rounded border border-[#c8ced3] bg-white p-4 shadow-sm">
                     <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-base font-semibold text-[#080707]">Delivery Activity</h3>
-                      <span className="text-xs text-[#6a6a6a]">{deliveryAudit.length} recent</span>
+                      <h3 className="text-base font-semibold text-[#23282c]">Delivery Activity</h3>
+                      <span className="text-xs text-[#73818f]">{deliveryAudit.length} recent</span>
                     </div>
                     <div className="space-y-2">
-                      {deliveryAudit.length === 0 ? <p className="text-sm text-[#6a6a6a]">No recent delivery activity.</p> : null}
+                      {deliveryAudit.length === 0 ? <p className="text-sm text-[#73818f]">No recent delivery activity.</p> : null}
                       {deliveryAudit.slice(0, 12).map((item) => (
-                        <article key={item.msg_id} className="rounded-lg border border-[#f3f2f1] bg-[#fbfbfb] p-3 text-sm">
+                        <article key={item.msg_id} className="rounded-lg border border-[#f0f3f5] bg-[#fbfbfb] p-3 text-sm">
                           <p className="font-semibold text-[#14324f]">{item.subject || 'Email message'}</p>
-                          <p className="text-xs text-[#6a6a6a]">{item.to_email || '--'} · {safeDate(item.last_event_time)} · {item.status}</p>
+                          <p className="text-xs text-[#73818f]">{item.to_email || '--'} · {safeDate(item.last_event_time)} · {item.status}</p>
                         </article>
                       ))}
                     </div>
@@ -2265,29 +2265,29 @@ export default function ClientWorkspacePage(): JSX.Element {
 
       {editingMessage ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded border border-[#dddbda] bg-white p-4 shadow-xl">
-            <h3 className="mb-3 text-lg font-bold text-[#080707]">Edit Scheduled Message</h3>
+          <div className="w-full max-w-lg rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
+            <h3 className="mb-3 text-lg font-bold text-[#23282c]">Edit Scheduled Message</h3>
             <div className="space-y-2">
               <input
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingMessage.subject ?? ''}
                 onChange={(e) => setEditingMessage((prev) => (prev ? { ...prev, subject: e.target.value } : prev))}
               />
               <textarea
-                className="min-h-28 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="min-h-28 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingMessage.body}
                 onChange={(e) => setEditingMessage((prev) => (prev ? { ...prev, body: e.target.value } : prev))}
               />
               <input
                 type="datetime-local"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingMessage.send_at.slice(0, 16)}
                 onChange={(e) =>
                   setEditingMessage((prev) => (prev ? { ...prev, send_at: new Date(e.target.value).toISOString() } : prev))
                 }
               />
               <select
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingMessage.channel}
                 onChange={(e) =>
                   setEditingMessage((prev) => (prev ? { ...prev, channel: e.target.value as 'email' | 'sms' } : prev))
@@ -2297,7 +2297,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                 <option value="sms">SMS</option>
               </select>
               <select
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingMessage.status}
                 onChange={(e) =>
                   setEditingMessage((prev) =>
@@ -2315,14 +2315,14 @@ export default function ClientWorkspacePage(): JSX.Element {
               <button
                 type="button"
                 onClick={() => void saveScheduledMessage()}
-                className="w-full rounded bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1]"
+                className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7]"
               >
                 Save
               </button>
               <button
                 type="button"
                 onClick={() => setEditingMessage(null)}
-                className="w-full rounded bg-[#e5e5e5] px-3 py-2 text-sm font-semibold text-[#3e3e3c] hover:bg-[#d9d9d9]"
+                className="w-full rounded bg-[#e4e5e6] px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#c8ced3]"
               >
                 Close
               </button>

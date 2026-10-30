@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
+import { isArizonaWeekend, nextArizonaBusinessMorning, startOfArizonaDay } from '../../../../lib/arizona-time';
+import { processDueEnrollments } from '../../../../lib/outreach-engine';
 
 export const runtime = 'nodejs';
 
@@ -107,28 +109,27 @@ async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
   }
 
   const now = new Date();
-  const day = now.getDay();
-  if (day === 0 || day === 6) {
+  if (isArizonaWeekend(now)) {
     return { created: 0 };
   }
 
   const { data: leads, error: leadsError } = await supabase
     .from('leads')
     .select('id')
-    .in('status', ['lead', 'working', 'quoted']);
+    .in('status', ['new', 'contacted', 'quoted']);
 
   if (leadsError || !leads || leads.length === 0) {
     return { created: 0 };
   }
 
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
-
+  // Skip leads that already have an open scheduled task.
   const { data: existingRows, error: existingError } = await supabase
-    .from('interactions')
-    .select('lead_id')
-    .eq('follow_up_completed', false)
-    .gte('follow_up_at', startOfDay.toISOString());
+    .from('tasks')
+    .select('related_id')
+    .eq('status', 'open')
+    .eq('related_type', 'lead')
+    .not('due_date', 'is', null)
+    .gte('due_date', startOfArizonaDay(now).toISOString());
 
   if (existingError) {
     return { created: 0 };
@@ -136,23 +137,22 @@ async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
 
   const existingLeadIds = new Set(
     (existingRows ?? [])
-      .map((row) => asString((row as { lead_id?: unknown }).lead_id))
+      .map((row) => asString((row as { related_id?: unknown }).related_id))
       .filter((value): value is string => Boolean(value)),
   );
 
-  const targetDate = new Date(now);
-  targetDate.setHours(8, 0, 0, 0);
-  if (targetDate < now) {
-    targetDate.setHours(targetDate.getHours() + 1);
-  }
+  const targetDate = nextArizonaBusinessMorning(now);
 
   const inserts = (leads as LeadIdRow[])
     .filter((lead) => !existingLeadIds.has(lead.id))
     .map((lead) => ({
-      lead_id: lead.id,
-      content: 'System Automated Follow-Up: General prospect check-in reminder.',
-      follow_up_at: targetDate.toISOString(),
-      follow_up_completed: false,
+      subject: 'Check in with this prospect',
+      description: 'Scheduled check-in — no recent activity on this prospect.',
+      due_date: targetDate.toISOString(),
+      status: 'open',
+      priority: 'medium',
+      related_type: 'lead',
+      related_id: lead.id,
       created_at: now.toISOString(),
     }));
 
@@ -160,7 +160,7 @@ async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
     return { created: 0 };
   }
 
-  const { error: insertError } = await supabase.from('interactions').insert(inserts);
+  const { error: insertError } = await supabase.from('tasks').insert(inserts);
   if (insertError) {
     return { created: 0 };
   }
@@ -179,6 +179,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   const followUpRoutine = await enforceDefaultFollowUpRoutine();
+
+  // Piggyback the outreach engine on the daily cron so due sequence steps get
+  // drafted even if nobody presses "Run engine now" (best-effort).
+  try {
+    const outreach = await processDueEnrollments(supabase);
+    console.log('[cron/sync-leads] outreach engine', outreach);
+  } catch (error) {
+    console.error('[cron/sync-leads] outreach engine failed', error);
+  }
 
   const exportUrl = process.env.WEBSITE_LEADS_EXPORT_URL?.trim() || 'https://www.shield-assurance.com/api/export-submissions';
   const syncToken = process.env.WEBSITE_SYNC_TOKEN?.trim();

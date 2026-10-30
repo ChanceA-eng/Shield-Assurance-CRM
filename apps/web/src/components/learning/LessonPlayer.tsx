@@ -314,11 +314,11 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
   }
 
   if (loading) {
-    return <div className="rounded-lg border border-[#dddbda] bg-white p-6 text-sm text-[#514f4d]">Loading lesson...</div>;
+    return <div className="rounded-lg border border-[#c8ced3] bg-white p-6 text-sm text-[#514f4d]">Loading lesson...</div>;
   }
 
   if (error || !lesson) {
-    return <div className="rounded-lg border border-[#dddbda] bg-white p-6 text-sm text-[#a61b1b]">{error ?? 'Lesson unavailable.'}</div>;
+    return <div className="rounded-lg border border-[#c8ced3] bg-white p-6 text-sm text-[#a61b1b]">{error ?? 'Lesson unavailable.'}</div>;
   }
 
   return (
@@ -327,22 +327,22 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm"
+        className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm"
       >
         <p className="text-xs uppercase tracking-wide text-[#706e6b]">{lesson.module.course.title} / {lesson.module.title}</p>
-        <h2 className="mt-1 text-xl font-bold text-[#080707]">{experience.meta.title || lesson.title}</h2>
+        <h2 className="mt-1 text-xl font-bold text-[#23282c]">{experience.meta.title || lesson.title}</h2>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#4b5563]">
           <span className="rounded-full bg-[#eef2ff] px-2 py-0.5 font-semibold text-[#1f3f77]">{experience.meta.difficulty}</span>
           <span>{experience.meta.readingTimeMinutes} min read</span>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <a href="/learning" className="rounded-md border border-[#c9c7c5] px-3 py-1 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Exit to Learning Center</a>
-          <a href={`/learning/course-builder/${lesson.module.course.id}`} className="rounded-md border border-[#c9c7c5] px-3 py-1 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Open Course in Studio</a>
+          <a href="/learning" className="rounded-md border border-[#c8ced3] px-3 py-1 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Exit to Learning Center</a>
+          <a href={`/learning/course-builder/${lesson.module.course.id}`} className="rounded-md border border-[#c8ced3] px-3 py-1 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Open Course in Studio</a>
           {navigation.previousLesson ? (
             <button
               type="button"
               onClick={() => goToLesson(navigation.previousLesson!.id)}
-              className="rounded-md border border-[#0f62af] px-3 py-1 text-xs font-semibold text-[#0f62af] hover:bg-[#eef5ff]"
+              className="rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]"
             >
               Back: {navigation.previousLesson.title}
             </button>
@@ -351,7 +351,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
             <button
               type="button"
               onClick={() => goToLesson(navigation.nextLesson!.id)}
-              className="rounded-md bg-[#0f62af] px-3 py-1 text-xs font-semibold text-white hover:bg-[#0c4e8a]"
+              className="rounded-md bg-[#167495] px-3 py-1 text-xs font-semibold text-white hover:bg-[#0c4e8a]"
             >
               Next: {navigation.nextLesson.title}
             </button>
@@ -360,12 +360,12 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       </motion.div>
 
       {experience.introduction ? (
-        <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+        <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
           <p className="text-sm leading-7 text-[#1f2937]">{experience.introduction}</p>
         </section>
       ) : null}
 
-      <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+      <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
         <button
           type="button"
           onClick={() => setObjectivesOpen((current) => !current)}
@@ -386,7 +386,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
             >
               <ol className="mt-3 space-y-2">
                 {experience.learningObjectives.map((objective, index) => (
-                  <li key={`${objective}-${index}`} className="rounded-md border border-[#e5e7eb] bg-[#fbfdff] p-3 text-sm leading-6 text-[#111827]">
+                  <li key={`${objective}-${index}`} className="rounded-md border border-[#e5e7eb] bg-[#ffffff] p-3 text-sm leading-6 text-[#111827]">
                     <span className="mr-2 font-semibold text-[#1d4ed8]">{index + 1}.</span>
                     {objective}
                   </li>
@@ -398,8 +398,8 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       </section>
 
       {experience.lexicon.length > 0 ? (
-        <section className="space-y-3 rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
-          <h3 className="text-sm font-semibold text-[#080707]">Lexicon Board</h3>
+        <section className="space-y-3 rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-[#23282c]">Lexicon Board</h3>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             {experience.lexicon.map((item, index) => {
               const active = activeLexicon === index;
@@ -410,7 +410,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                   onClick={() => setActiveLexicon(index)}
                   className={`rounded-lg border px-3 py-2 text-left transition ${
                     active
-                      ? 'border-[#0f62af] bg-[#f3f8ff]'
+                      ? 'border-[#167495] bg-[#f3f8ff]'
                       : 'border-[#e5e7eb] bg-white hover:border-[#bfd3f2]'
                   }`}
                 >
@@ -436,13 +436,13 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       ) : null}
 
       {(experience.technicalDeepDive.heading || experience.technicalDeepDive.coreDoctrine || experience.technicalDeepDive.scenarios.length > 0) ? (
-        <section className="space-y-3 rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+        <section className="space-y-3 rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
           <h3 className="text-base font-bold text-[#0f172a]">{experience.technicalDeepDive.heading || 'Technical Deep Dive'}</h3>
           {experience.technicalDeepDive.caseLawCitation ? (
             <p className="text-xs font-semibold text-[#334155]">{experience.technicalDeepDive.caseLawCitation}</p>
           ) : null}
           {experience.technicalDeepDive.coreDoctrine ? (
-            <p className="rounded-md border border-[#dbeafe] bg-[#f8fbff] p-3 text-sm leading-6 text-[#1f2937]">{experience.technicalDeepDive.coreDoctrine}</p>
+            <p className="rounded-md border border-[#dbeafe] bg-[#f8f9fa] p-3 text-sm leading-6 text-[#1f2937]">{experience.technicalDeepDive.coreDoctrine}</p>
           ) : null}
 
           {experience.technicalDeepDive.scenarios.length > 0 ? (
@@ -460,7 +460,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
             <button
               type="button"
               onClick={() => setExecutionVisible(true)}
-              className="rounded-md border border-[#0f62af] px-3 py-1 text-xs font-semibold text-[#0f62af] hover:bg-[#eef5ff]"
+              className="rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]"
             >
               Next Step: Field Execution
             </button>
@@ -475,9 +475,9 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.26, ease: 'easeOut' }}
-            className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm"
+            className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm"
           >
-            <h3 className="text-sm font-semibold text-[#080707]">{experience.fieldExecution.strategyName || 'Field Execution'}</h3>
+            <h3 className="text-sm font-semibold text-[#23282c]">{experience.fieldExecution.strategyName || 'Field Execution'}</h3>
             {experience.fieldExecution.script ? (
               <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#111827]">{experience.fieldExecution.script}</p>
             ) : null}
@@ -486,16 +486,16 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       </AnimatePresence>
 
       {lesson.contentType === LearningContentType.VIDEO && lesson.contentUrl ? (
-        <video className="w-full rounded-lg border border-[#dddbda] bg-black" src={lesson.contentUrl} controls />
+        <video className="w-full rounded-lg border border-[#c8ced3] bg-black" src={lesson.contentUrl} controls />
       ) : null}
 
       {lesson.contentType === LearningContentType.PDF && lesson.contentUrl ? (
-        <iframe title="Lesson PDF" className="h-[640px] w-full rounded-lg border border-[#dddbda] bg-white" src={lesson.contentUrl} />
+        <iframe title="Lesson PDF" className="h-[640px] w-full rounded-lg border border-[#c8ced3] bg-white" src={lesson.contentUrl} />
       ) : null}
 
       {lesson.blocks.length > 0 ? (
-        <section className="space-y-3 rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
-          <h3 className="text-sm font-semibold text-[#080707]">Applied Labs</h3>
+        <section className="space-y-3 rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-[#23282c]">Applied Labs</h3>
           <AnimatePresence>
             {lesson.blocks.map((block, index) => {
             const content = asContentObject(block.content);
@@ -509,10 +509,10 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.25, delay: Math.min(index * 0.04, 0.24) }}
-                className="rounded-md border border-[#ecebea] p-3"
+                className="rounded-md border border-[#e4e5e6] p-3"
               >
                 <p className="text-xs uppercase tracking-wide text-[#706e6b]">{blockTypeLabels[block.type]}</p>
-                <h4 className="text-sm font-semibold text-[#080707]">{block.title ?? 'Untitled block'}</h4>
+                <h4 className="text-sm font-semibold text-[#23282c]">{block.title ?? 'Untitled block'}</h4>
 
                 {block.type === 'CODE' ? (
                   <pre className="mt-2 overflow-x-auto rounded bg-[#081a30] p-3 text-xs text-[#e5edf8]">{body || '// Add code snippet in Course Builder block editor.'}</pre>
@@ -540,23 +540,23 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                       <button
                         type="button"
                         onClick={() => evaluateSimulation(block.id)}
-                        className="rounded border border-[#0f62af] px-2.5 py-1 text-xs font-semibold text-[#0f62af] hover:bg-[#eef5ff]"
+                        className="rounded border border-[#167495] px-2.5 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]"
                       >
                         Evaluate Response
                       </button>
                       {simulationScores[block.id] !== undefined ? (
-                        <span className="text-xs font-semibold text-[#0f62af]">Simulation score: {simulationScores[block.id]}%</span>
+                        <span className="text-xs font-semibold text-[#167495]">Simulation score: {simulationScores[block.id]}%</span>
                       ) : null}
                     </div>
                   </div>
                 ) : null}
 
                 {block.type === 'VIDEO' && url ? (
-                  <video className="mt-2 w-full rounded border border-[#dddbda] bg-black" controls src={url} />
+                  <video className="mt-2 w-full rounded border border-[#c8ced3] bg-black" controls src={url} />
                 ) : null}
 
                 {block.type === 'PDF' && url ? (
-                  <iframe title={`PDF block ${block.id}`} className="mt-2 h-[420px] w-full rounded border border-[#dddbda]" src={url} />
+                  <iframe title={`PDF block ${block.id}`} className="mt-2 h-[420px] w-full rounded border border-[#c8ced3]" src={url} />
                 ) : null}
               </motion.article>
             );
@@ -566,14 +566,14 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       ) : null}
 
       {lesson.quizzes.length > 0 ? (
-        <section className="space-y-3 rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
-          <h3 className="text-sm font-semibold text-[#080707]">Knowledge Checks</h3>
+        <section className="space-y-3 rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-[#23282c]">Knowledge Checks</h3>
           {lesson.quizzes.map((quiz) => {
             const result = quizResults[quiz.id];
             const options = normalizeQuizOptions(quiz.options);
 
             return (
-              <div key={quiz.id} className="rounded-md border border-[#ecebea] p-3">
+              <div key={quiz.id} className="rounded-md border border-[#e4e5e6] p-3">
                 <p className="text-sm font-medium text-[#181818]">{quiz.question}</p>
                 <div className="mt-2 space-y-2">
                   {options.map((option, index) => (
@@ -591,7 +591,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                               ? 'border-[#d97706] bg-[#fff7ed] text-[#7c2d12]'
                               : 'border-[#e5e7eb] bg-white text-[#1f2937]'))
                           : (quizSelections[quiz.id] === index
-                            ? 'border-[#0f62af] bg-[#eef5ff] text-[#0c4e8a]'
+                            ? 'border-[#167495] bg-[#eef5ff] text-[#0c4e8a]'
                             : 'border-[#e5e7eb] bg-white text-[#1f2937] hover:border-[#bfd3f2]')
                       }`}
                     >
@@ -605,7 +605,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                     onClick={() => {
                       void submitQuiz(quiz);
                     }}
-                    className="rounded-md border border-[#0f62af] px-3 py-1 text-xs font-semibold text-[#0f62af] hover:bg-[#eef5ff]"
+                    className="rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]"
                   >
                     Submit
                   </button>
@@ -618,7 +618,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                         <p className="text-xs text-[#334155]">Your answer note: {result.selectedExplanation}</p>
                       ) : null}
                       {!result.correct && result.correctExplanation ? (
-                        <p className="text-xs text-[#0f62af]">Correct answer note: {result.correctExplanation}</p>
+                        <p className="text-xs text-[#167495]">Correct answer note: {result.correctExplanation}</p>
                       ) : null}
                     </div>
                   ) : null}
@@ -629,13 +629,13 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
         </section>
       ) : null}
 
-      <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+      <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-[#080707]">Progress</h3>
-          <span className="text-xs font-semibold text-[#0f62af]">{progressPercent}%</span>
+          <h3 className="text-sm font-semibold text-[#23282c]">Progress</h3>
+          <span className="text-xs font-semibold text-[#167495]">{progressPercent}%</span>
         </div>
-        <div className="h-2 w-full rounded-full bg-[#ecebea]">
-          <div className="h-2 rounded-full bg-[#0f62af]" style={{ width: `${progressPercent}%` }} />
+        <div className="h-2 w-full rounded-full bg-[#e4e5e6]">
+          <div className="h-2 rounded-full bg-[#167495]" style={{ width: `${progressPercent}%` }} />
         </div>
         <button
           type="button"
@@ -643,7 +643,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
           onClick={() => {
             void markComplete();
           }}
-          className="mt-3 rounded-md bg-[#0b2545] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#133a6b] disabled:opacity-60"
+          className="mt-3 rounded-md bg-[#23282c] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#133a6b] disabled:opacity-60"
         >
           {completing ? 'Saving...' : 'Mark lesson complete'}
         </button>

@@ -264,7 +264,7 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
       return (
         <select
           id={fieldName}
-          className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+          className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
           value={readString(form, fieldName)}
           onChange={(event) => updateField(fieldName, event.target.value)}
           required
@@ -281,7 +281,7 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
         id={fieldName}
         type={isNumericQuestion(fieldName) ? 'number' : 'text'}
         step={isNumericQuestion(fieldName) ? 'any' : undefined}
-        className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+        className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
         value={readString(form, fieldName)}
         onChange={(event) => updateField(fieldName, event.target.value)}
         required
@@ -292,27 +292,27 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
   const renderFieldHelp = (fieldKey: string): JSX.Element | null => {
     const helper = FIELD_EXPLANATIONS[fieldKey];
     if (!helper) return null;
-    return <span className="mt-1 block text-xs text-[#6a6a6a]">{helper}</span>;
+    return <span className="mt-1 block text-xs text-[#73818f]">{helper}</span>;
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <section className="rounded border border-[#ecebea] p-3">
-        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#1f3f5b]">Tier 1: Global Required Fields</h3>
+      <section className="rounded border border-[#e4e5e6] p-3">
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#2f353a]">Tier 1: Global Required Fields</h3>
         <div className="grid gap-3 md:grid-cols-2">
-          <label className="text-sm text-[#3e3e3c]">
+          <label className="text-sm text-[#5c6873]">
             Legal Name
-            <input className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm" value={readString(form, 'legal_name')} onChange={(e) => updateField('legal_name', e.target.value)} required />
+            <input className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm" value={readString(form, 'legal_name')} onChange={(e) => updateField('legal_name', e.target.value)} required />
             {renderFieldHelp('legal_name')}
           </label>
-          <label className="text-sm text-[#3e3e3c]">
+          <label className="text-sm text-[#5c6873]">
             DBA Name
-            <input className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm" value={readString(form, 'dba_name')} onChange={(e) => updateField('dba_name', e.target.value)} />
+            <input className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm" value={readString(form, 'dba_name')} onChange={(e) => updateField('dba_name', e.target.value)} />
             {renderFieldHelp('dba_name')}
           </label>
-          <label className="text-sm text-[#3e3e3c]">
+          <label className="text-sm text-[#5c6873]">
             Entity Type
-            <select className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm" value={readString(form, 'entity_type')} onChange={(e) => updateField('entity_type', e.target.value)} required>
+            <select className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm" value={readString(form, 'entity_type')} onChange={(e) => updateField('entity_type', e.target.value)} required>
               <option value="">Select</option>
               <option value="LLC">LLC</option>
               <option value="S-Corp">S-Corp</option>
@@ -321,10 +321,10 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
             </select>
             {renderFieldHelp('entity_type')}
           </label>
-          <label className="text-sm text-[#3e3e3c]">
+          <label className="text-sm text-[#5c6873]">
             FEIN
             <input
-              className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+              className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
               value={readString(form, 'fein')}
               onChange={(e) => updateField('fein', e.target.value.replace(/[^\d-]/g, '').slice(0, 10))}
               placeholder="12-3456789"
@@ -333,24 +333,24 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
             {renderFieldHelp('fein')}
             {!feinIsValid && feinValue.length > 0 ? <span className="mt-1 block text-xs text-rose-700">Enter 9 digits.</span> : null}
           </label>
-          <label className="text-sm text-[#3e3e3c] md:col-span-2">
+          <label className="text-sm text-[#5c6873] md:col-span-2">
             Physical Address
-            <input className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm" value={readString(form, 'physical_address')} onChange={(e) => updateField('physical_address', e.target.value)} required />
+            <input className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm" value={readString(form, 'physical_address')} onChange={(e) => updateField('physical_address', e.target.value)} required />
             {renderFieldHelp('physical_address')}
           </label>
-          <label className="text-sm text-[#3e3e3c]">
+          <label className="text-sm text-[#5c6873]">
             Gross Revenue
-            <input type="number" step="any" className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm" value={readString(form, 'gross_revenue')} onChange={(e) => updateField('gross_revenue', e.target.value)} required />
+            <input type="number" step="any" className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm" value={readString(form, 'gross_revenue')} onChange={(e) => updateField('gross_revenue', e.target.value)} required />
             {renderFieldHelp('gross_revenue')}
           </label>
-          <label className="text-sm text-[#3e3e3c]">
+          <label className="text-sm text-[#5c6873]">
             Years Experience
-            <input type="number" className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm" value={readString(form, 'years_experience')} onChange={(e) => updateField('years_experience', e.target.value)} required />
+            <input type="number" className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm" value={readString(form, 'years_experience')} onChange={(e) => updateField('years_experience', e.target.value)} required />
             {renderFieldHelp('years_experience')}
           </label>
-          <label className="text-sm text-[#3e3e3c]">
+          <label className="text-sm text-[#5c6873]">
             Industry Group
-            <select className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm" value={readString(form, 'industry_group')} onChange={(e) => updateField('industry_group', e.target.value)} required>
+            <select className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm" value={readString(form, 'industry_group')} onChange={(e) => updateField('industry_group', e.target.value)} required>
               <option value="">Select</option>
               {Object.entries(riskEngine.industries).map(([key, industry]) => (
                 <option key={key} value={key}>
@@ -359,17 +359,17 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
               ))}
             </select>
           </label>
-          <label className="text-sm text-[#3e3e3c]">
+          <label className="text-sm text-[#5c6873]">
             NAICS Code
             <input
-              className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+              className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
               value={readString(form, 'naics_code')}
               onChange={(e) => updateField('naics_code', e.target.value.replace(/\D/g, '').slice(0, 6))}
               placeholder="524210"
               list="naics-options"
               required
             />
-            <span className="mt-1 block text-xs text-[#6a6a6a]">Classifies business operations for carrier eligibility and pricing.</span>
+            <span className="mt-1 block text-xs text-[#73818f]">Classifies business operations for carrier eligibility and pricing.</span>
             {!naicsIsValid && naicsValue.length > 0 ? <span className="mt-1 block text-xs text-rose-700">Use a 6 digit NAICS code.</span> : null}
             <datalist id="naics-options">
               {NAICS_LOOKUP_OPTIONS.map((option) => (
@@ -380,14 +380,14 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
         </div>
       </section>
 
-      <section className="rounded border border-[#ecebea] p-3">
-        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#1f3f5b]">Tier 2: Exposure Modules</h3>
+      <section className="rounded border border-[#e4e5e6] p-3">
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#2f353a]">Tier 2: Exposure Modules</h3>
         <div className="grid gap-3 md:grid-cols-2">
           {Object.entries(riskEngine.modules).map(([moduleKey, moduleDefinition]) => (
-            <label key={moduleKey} className="text-sm text-[#3e3e3c]">
+            <label key={moduleKey} className="text-sm text-[#5c6873]">
               {EXPOSURE_QUESTION_LABELS[moduleDefinition.trigger_flag] ?? moduleDefinition.label}
               <select
-                className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={readString(form, moduleDefinition.trigger_flag)}
                 onChange={(event) => updateField(moduleDefinition.trigger_flag, event.target.value)}
               >
@@ -404,11 +404,11 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
             if (!activeModules[moduleKey as RiskModuleKey]) return null;
 
             return (
-              <div key={moduleKey} className="rounded border border-[#dddbda] bg-[#f8f8f7] p-3">
-                <p className="mb-2 text-sm font-semibold text-[#1f3f5b]">{moduleDefinition.label}</p>
+              <div key={moduleKey} className="rounded border border-[#c8ced3] bg-[#f8f9fa] p-3">
+                <p className="mb-2 text-sm font-semibold text-[#2f353a]">{moduleDefinition.label}</p>
                 <div className="grid gap-3 md:grid-cols-2">
                   {moduleDefinition.required_fields.map((fieldName) => (
-                    <label key={fieldName} className="text-sm text-[#3e3e3c]">
+                    <label key={fieldName} className="text-sm text-[#5c6873]">
                       {prettyLabel(fieldName)}
                       {renderQuestionField(fieldName)}
                       {renderFieldHelp(fieldName)}
@@ -422,11 +422,11 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
       </section>
 
       {industryDefinition ? (
-        <section className="rounded border border-[#ecebea] p-3">
-          <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#1f3f5b]">Tier 3: {industryDefinition.label}</h3>
+        <section className="rounded border border-[#e4e5e6] p-3">
+          <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#2f353a]">Tier 3: {industryDefinition.label}</h3>
           <div className="grid gap-3 md:grid-cols-2">
             {industryDefinition.questions.map((question) => (
-              <label key={question} className="text-sm text-[#3e3e3c]">
+              <label key={question} className="text-sm text-[#5c6873]">
                 {prettyLabel(question)}
                 {renderQuestionField(question)}
                 {renderFieldHelp(question)}
@@ -436,8 +436,8 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
         </section>
       ) : null}
 
-      <section className="rounded border border-[#ecebea] p-3">
-        <label className="flex gap-2 text-sm text-[#3e3e3c]">
+      <section className="rounded border border-[#e4e5e6] p-3">
+        <label className="flex gap-2 text-sm text-[#5c6873]">
           <input type="checkbox" checked={Boolean(form.legal_consent)} onChange={(e) => updateField('legal_consent', e.target.checked)} required />
           <span>
             By submitting this form, the applicant authorizes Shield Assurance LLC to act as their insurance broker and consents to the
@@ -449,7 +449,7 @@ export default function IntakeForm({ onInsightsChange }: IntakeFormProps): JSX.E
       {error ? <p className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p> : null}
       {successMessage ? <p className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{successMessage}</p> : null}
 
-      <button type="submit" disabled={isSubmitting} className="rounded border border-[#0163b3] bg-[#0176d3] px-4 py-2 text-sm font-semibold text-white hover:bg-[#015ba1] disabled:cursor-not-allowed disabled:opacity-70">
+      <button type="submit" disabled={isSubmitting} className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:cursor-not-allowed disabled:opacity-70">
         {isSubmitting ? 'Submitting Intake...' : 'Submit Intake'}
       </button>
     </form>

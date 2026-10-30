@@ -51,21 +51,21 @@ function SortableModuleItem({ module, courseId }: { module: ModuleItem; courseId
   };
 
   return (
-    <article ref={setNodeRef} style={style} className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+    <article ref={setNodeRef} style={style} className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <button
             type="button"
             {...attributes}
             {...listeners}
-            className="cursor-grab rounded border border-[#c9c7c5] px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
+            className="cursor-grab rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
             aria-label="Drag module"
           >
             Drag
           </button>
-          <h3 className="text-sm font-semibold text-[#080707]">{module.title}</h3>
+          <h3 className="text-sm font-semibold text-[#23282c]">{module.title}</h3>
         </div>
-        <a href={`/learning/course-builder/${courseId}/module/${module.id}`} className="text-xs font-semibold text-[#0f62af] hover:text-[#0c4e8a]">
+        <a href={`/learning/course-builder/${courseId}/module/${module.id}`} className="text-xs font-semibold text-[#167495] hover:text-[#0c4e8a]">
           Edit Lessons
         </a>
       </div>
@@ -248,31 +248,31 @@ export default function CourseEditorPage(): JSX.Element {
 
       {course ? (
         <div className="space-y-4">
-          <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <a href="/learning/course-builder" className="rounded-md border border-[#c9c7c5] px-3 py-1.5 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Back to Studio Courses</a>
-              <a href="/learning" className="rounded-md border border-[#c9c7c5] px-3 py-1.5 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Back to Learning Center</a>
-              <a href="/" className="rounded-md border border-[#c9c7c5] px-3 py-1.5 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">Exit Studio</a>
+              <a href="/learning/course-builder" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Studio Courses</a>
+              <a href="/learning" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Learning Center</a>
+              <a href="/" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Exit Studio</a>
             </div>
           </section>
 
-          <section className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
-            <h2 className="text-lg font-bold text-[#080707]">{course.title}</h2>
+          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+            <h2 className="text-lg font-bold text-[#23282c]">{course.title}</h2>
             <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
               <input
                 value={courseTitle}
                 onChange={(event) => setCourseTitle(event.target.value)}
-                className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm"
+                className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm"
                 placeholder="Course title"
               />
               <input
                 value={courseDescription}
                 onChange={(event) => setCourseDescription(event.target.value)}
-                className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm md:col-span-2"
+                className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2"
                 placeholder="Description"
               />
               <select
-                className="rounded-md border border-[#c9c7c5] px-3 py-2 text-sm"
+                className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm"
                 value={courseLevel}
                 onChange={(event) => {
                   const value = event.target.value;
@@ -292,7 +292,7 @@ export default function CourseEditorPage(): JSX.Element {
                 onClick={() => {
                   void saveCourseDetails();
                 }}
-                className="rounded-md border border-[#0f62af] px-3 py-1 text-xs font-semibold text-[#0f62af] hover:bg-[#eef5ff]"
+                className="rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]"
               >
                 Save Course Details
               </button>
@@ -312,7 +312,7 @@ export default function CourseEditorPage(): JSX.Element {
                 <input
                   value={snapshotLabel}
                   onChange={(event) => setSnapshotLabel(event.target.value)}
-                  className="min-w-[14rem] flex-1 rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                  className="min-w-[14rem] flex-1 rounded border border-[#c8ced3] px-2 py-1 text-xs"
                   placeholder="Snapshot label (optional)"
                 />
                 <button
@@ -320,7 +320,7 @@ export default function CourseEditorPage(): JSX.Element {
                   onClick={() => {
                     void createSnapshot();
                   }}
-                  className="rounded border border-[#0f62af] px-2 py-1 text-[11px] font-semibold text-[#0f62af] hover:bg-[#eef5ff]"
+                  className="rounded border border-[#167495] px-2 py-1 text-[11px] font-semibold text-[#167495] hover:bg-[#eef5ff]"
                 >
                   Save Snapshot
                 </button>
@@ -334,7 +334,7 @@ export default function CourseEditorPage(): JSX.Element {
                       onClick={() => {
                         void restoreSnapshot(snapshot.id);
                       }}
-                      className="rounded border border-[#c9d8ee] bg-white px-2 py-1 text-[11px] font-semibold text-[#234067] hover:border-[#0f62af]"
+                      className="rounded border border-[#c9d8ee] bg-white px-2 py-1 text-[11px] font-semibold text-[#234067] hover:border-[#167495]"
                     >
                       Restore: {snapshot.label}
                     </button>
@@ -344,7 +344,7 @@ export default function CourseEditorPage(): JSX.Element {
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <input
-                className="min-w-[16rem] flex-1 rounded-md border border-[#c9c7c5] px-3 py-2 text-sm"
+                className="min-w-[16rem] flex-1 rounded-md border border-[#c8ced3] px-3 py-2 text-sm"
                 value={moduleTitle}
                 onChange={(event) => setModuleTitle(event.target.value)}
                 placeholder="New module title"
@@ -354,7 +354,7 @@ export default function CourseEditorPage(): JSX.Element {
                 onClick={() => {
                   void addModule();
                 }}
-                className="rounded-md bg-[#0b2545] px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]"
+                className="rounded-md bg-[#23282c] px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]"
               >
                 + Add Module
               </button>
@@ -367,7 +367,7 @@ export default function CourseEditorPage(): JSX.Element {
                 {course.modules.map((module) => (
                   <div key={module.id} className="space-y-2">
                     <SortableModuleItem module={module} courseId={course.id} />
-                    <div className="rounded border border-[#e5e5e5] bg-white px-3 py-2">
+                    <div className="rounded border border-[#e4e5e6] bg-white px-3 py-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <input
                           value={moduleDrafts[module.id] ?? ''}
@@ -377,7 +377,7 @@ export default function CourseEditorPage(): JSX.Element {
                               [module.id]: event.target.value,
                             }));
                           }}
-                          className="min-w-[16rem] flex-1 rounded border border-[#c9c7c5] px-2 py-1 text-xs"
+                          className="min-w-[16rem] flex-1 rounded border border-[#c8ced3] px-2 py-1 text-xs"
                           placeholder="Module title"
                         />
                         <button
@@ -385,7 +385,7 @@ export default function CourseEditorPage(): JSX.Element {
                           onClick={() => {
                             void saveModule(module.id);
                           }}
-                          className="rounded border border-[#0f62af] px-2 py-1 text-[11px] font-semibold text-[#0f62af] hover:bg-[#eef5ff]"
+                          className="rounded border border-[#167495] px-2 py-1 text-[11px] font-semibold text-[#167495] hover:bg-[#eef5ff]"
                         >
                           Save Module
                         </button>

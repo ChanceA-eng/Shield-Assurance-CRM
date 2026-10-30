@@ -77,7 +77,7 @@ export default function ReportSlugPage(): JSX.Element {
     switch (slug) {
       case 'production':
         return data.drilldowns.policies.slice(0, 12).map((policy) => (
-          <tr key={policy.id} className="border-t border-[#edf2f8]">
+          <tr key={policy.id} className="border-t border-[#f0f3f5]">
             <td className="px-3 py-2 font-semibold text-[#16324d]">{policy.insured_name ?? '--'}</td>
             <td className="px-3 py-2">{policy.carrier ?? '--'}</td>
             <td className="px-3 py-2">{formatCurrency(policy.premium ?? 0)}</td>
@@ -90,7 +90,7 @@ export default function ReportSlugPage(): JSX.Element {
           .filter((policy) => !!policy.renewal_date)
           .slice(0, 12)
           .map((policy) => (
-            <tr key={policy.id} className="border-t border-[#edf2f8]">
+            <tr key={policy.id} className="border-t border-[#f0f3f5]">
               <td className="px-3 py-2 font-semibold text-[#16324d]">{policy.insured_name ?? '--'}</td>
               <td className="px-3 py-2">{policy.carrier ?? '--'}</td>
               <td className="px-3 py-2">{formatDate(policy.renewal_date)}</td>
@@ -100,7 +100,7 @@ export default function ReportSlugPage(): JSX.Element {
           ));
       case 'claims':
         return data.drilldowns.claims.slice(0, 12).map((claim) => (
-          <tr key={claim.id} className="border-t border-[#edf2f8]">
+          <tr key={claim.id} className="border-t border-[#f0f3f5]">
             <td className="px-3 py-2 font-semibold text-[#16324d]">{claim.policies?.insured_name ?? '--'}</td>
             <td className="px-3 py-2">{claim.policies?.carrier ?? '--'}</td>
             <td className="px-3 py-2">{claim.type ?? '--'}</td>
@@ -110,7 +110,7 @@ export default function ReportSlugPage(): JSX.Element {
         ));
       case 'endorsements':
         return data.drilldowns.endorsements.slice(0, 12).map((endorsement) => (
-          <tr key={endorsement.id} className="border-t border-[#edf2f8]">
+          <tr key={endorsement.id} className="border-t border-[#f0f3f5]">
             <td className="px-3 py-2 font-semibold text-[#16324d]">{endorsement.policies?.insured_name ?? '--'}</td>
             <td className="px-3 py-2">{endorsement.policies?.carrier ?? '--'}</td>
             <td className="px-3 py-2">{endorsement.type ?? '--'}</td>
@@ -120,7 +120,7 @@ export default function ReportSlugPage(): JSX.Element {
         ));
       case 'leads':
         return data.drilldowns.leads.slice(0, 12).map((lead) => (
-          <tr key={lead.id} className="border-t border-[#edf2f8]">
+          <tr key={lead.id} className="border-t border-[#f0f3f5]">
             <td className="px-3 py-2 font-semibold text-[#16324d]">{lead.full_name ?? '--'}</td>
             <td className="px-3 py-2">{lead.status ?? '--'}</td>
             <td className="px-3 py-2">{lead.line_of_business ?? '--'}</td>
@@ -129,7 +129,7 @@ export default function ReportSlugPage(): JSX.Element {
         ));
       case 'carriers':
         return data.carrierMix.slice(0, 12).map((carrier) => (
-          <tr key={carrier.carrier} className="border-t border-[#edf2f8]">
+          <tr key={carrier.carrier} className="border-t border-[#f0f3f5]">
             <td className="px-3 py-2 font-semibold text-[#16324d]">{carrier.carrier}</td>
             <td className="px-3 py-2">{carrier.count}</td>
             <td className="px-3 py-2">{formatCurrency(carrier.premium)}</td>
@@ -142,13 +142,13 @@ export default function ReportSlugPage(): JSX.Element {
 
   return (
     <SectionLayout title={title}>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#d6deea] bg-gradient-to-r from-[#f5f9ff] via-white to-[#f3f7ff] p-4 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#d8dde2] bg-gradient-to-r from-[#f5f9ff] via-white to-[#f3f7ff] p-4 shadow-sm">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#54739e]">Detailed Analytics</p>
-          <h2 className="mt-1 text-xl font-semibold text-[#10273f]">{title}</h2>
+          <h2 className="mt-1 text-xl font-semibold text-[#23282c]">{title}</h2>
         </div>
         <div className="flex items-center gap-2">
-          <select className="rounded-full border border-[#d6deea] bg-white px-3 py-2 text-xs font-semibold text-[#184168]" value={range} onChange={(e) => setRange(e.target.value as ReportsRange)}>
+          <select className="rounded-full border border-[#d8dde2] bg-white px-3 py-2 text-xs font-semibold text-[#184168]" value={range} onChange={(e) => setRange(e.target.value as ReportsRange)}>
             <option value="mtd">MTD</option>
             <option value="ytd">YTD</option>
             <option value="qtd">QTD</option>
@@ -160,33 +160,33 @@ export default function ReportSlugPage(): JSX.Element {
         </div>
       </div>
 
-      {loading ? <div className="text-sm text-[#60748a]">Loading report...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading report...</div> : null}
       {!loading && data ? (
         <div className="space-y-4">
           <section className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
+            <div className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[#516680]">MTD Premium</p>
-              <p className="mt-1 text-2xl font-bold text-[#10273f]">{formatCurrency(data.metrics.mtd_written_premium)}</p>
+              <p className="mt-1 text-2xl font-bold text-[#23282c]">{formatCurrency(data.metrics.mtd_written_premium)}</p>
             </div>
-            <div className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
+            <div className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[#516680]">YTD Premium</p>
-              <p className="mt-1 text-2xl font-bold text-[#10273f]">{formatCurrency(data.metrics.ytd_written_premium)}</p>
+              <p className="mt-1 text-2xl font-bold text-[#23282c]">{formatCurrency(data.metrics.ytd_written_premium)}</p>
             </div>
-            <div className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
+            <div className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[#516680]">Open Claims</p>
-              <p className="mt-1 text-2xl font-bold text-[#10273f]">{data.metrics.open_claims}</p>
+              <p className="mt-1 text-2xl font-bold text-[#23282c]">{data.metrics.open_claims}</p>
             </div>
           </section>
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <div className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
-              <h3 className="mb-3 text-sm font-semibold text-[#0f2943]">{title}</h3>
+            <div className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
+              <h3 className="mb-3 text-sm font-semibold text-[#23282c]">{title}</h3>
               {slug === 'carriers' ? (
                 <div className="h-72">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={data.carrierMix}>
-                      <XAxis dataKey="carrier" stroke="#64748b" tickLine={false} axisLine={false} interval={0} angle={-10} height={60} />
-                      <YAxis stroke="#64748b" tickLine={false} axisLine={false} />
+                      <XAxis dataKey="carrier" stroke="#73818f" tickLine={false} axisLine={false} interval={0} angle={-10} height={60} />
+                      <YAxis stroke="#73818f" tickLine={false} axisLine={false} />
                       <Tooltip formatter={(value) => formatCurrency(Number(value))} />
                       <Bar dataKey="premium" fill="#6366f1" radius={[8, 8, 0, 0]} />
                     </BarChart>
@@ -208,11 +208,11 @@ export default function ReportSlugPage(): JSX.Element {
               )}
             </div>
 
-            <div className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
-              <h3 className="mb-3 text-sm font-semibold text-[#0f2943]">Drilldown Table</h3>
-              <div className="overflow-hidden rounded-xl border border-[#edf2f8]">
+            <div className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
+              <h3 className="mb-3 text-sm font-semibold text-[#23282c]">Drilldown Table</h3>
+              <div className="overflow-hidden rounded-xl border border-[#f0f3f5]">
                 <table className="w-full text-left text-sm">
-                  <thead className="bg-[#f7f9fc] text-[#60748a]">
+                  <thead className="bg-[#f7f9fc] text-[#73818f]">
                     <tr>
                       {slug === 'production' && <><th className="px-3 py-2">Insured</th><th className="px-3 py-2">Carrier</th><th className="px-3 py-2">Premium</th><th className="px-3 py-2">Effective</th><th className="px-3 py-2">Status</th></>}
                       {slug === 'renewals' && <><th className="px-3 py-2">Insured</th><th className="px-3 py-2">Carrier</th><th className="px-3 py-2">Renewal</th><th className="px-3 py-2">Premium</th><th className="px-3 py-2">Status</th></>}

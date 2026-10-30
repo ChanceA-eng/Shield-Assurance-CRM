@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+function endOfTodayISO(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 interface NewTaskPayload {
@@ -39,22 +41,25 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const due = searchParams.get('due');
   const relatedId = searchParams.get('related_id');
   const relatedType = searchParams.get('related_type');
+  const rawLimit = Number(searchParams.get('limit'));
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 200) : 20;
 
   let query = supabase
     .from('tasks')
     .select('*')
-    .limit(20);
+    .limit(limit);
 
   if (status === 'open') {
     query = query.eq('status', 'open');
   } else if (status === 'completed') {
     query = query.eq('status', 'completed');
   } else if (status === 'overdue') {
-    query = query.eq('status', 'open').lt('due_date', todayISO());
+    query = query.eq('status', 'open').lt('due_date', new Date().toISOString());
   }
 
   if (due === 'today') {
-    query = query.lte('due_date', todayISO());
+    // due_date is timestamptz; include everything up to end of today (and overdue).
+    query = query.lt('due_date', endOfTodayISO());
   }
 
   if (relatedId) {
@@ -81,7 +86,30 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(data ?? [], { status: 200 });
+  const rows = data ?? [];
+
+  // Resolve related record names so the UI can show what a task is about.
+  if (searchParams.get('include') === 'related' && rows.length > 0) {
+    const leadIds = [...new Set(rows.filter((row) => row.related_type === 'lead' && row.related_id).map((row) => row.related_id as string))];
+    const clientIds = [...new Set(rows.filter((row) => row.related_type === 'client' && row.related_id).map((row) => row.related_id as string))];
+
+    const [leadsRes, clientsRes] = await Promise.all([
+      leadIds.length > 0 ? supabase.from('leads').select('id,full_name,status').in('id', leadIds) : Promise.resolve({ data: [], error: null }),
+      clientIds.length > 0 ? supabase.from('clients').select('id,full_name').in('id', clientIds) : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    const names = new Map<string, { name: string; status?: string }>();
+    for (const lead of leadsRes.data ?? []) names.set(lead.id, { name: lead.full_name, status: lead.status });
+    for (const client of clientsRes.data ?? []) names.set(client.id, { name: client.full_name });
+
+    for (const row of rows as Array<Record<string, unknown>>) {
+      const related = row.related_id ? names.get(row.related_id as string) : undefined;
+      row.related_name = related?.name ?? null;
+      row.related_status = related?.status ?? null;
+    }
+  }
+
+  return NextResponse.json(rows, { status: 200 });
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {

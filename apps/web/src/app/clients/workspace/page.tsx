@@ -42,8 +42,8 @@ function LeadWorkspaceResolverContent(): JSX.Element {
 
   return (
     <SectionLayout title="Client">
-      <div className="rounded border border-[#dddbda] bg-white p-4 shadow-sm">
-        {!error ? <p className="text-sm text-[#3e3e3c]">Opening client workspace...</p> : null}
+      <div className="rounded border border-[#c8ced3] bg-white p-4 shadow-sm">
+        {!error ? <p className="text-sm text-[#5c6873]">Opening client workspace...</p> : null}
         {error ? <p className="text-sm text-rose-700">{error}</p> : null}
       </div>
     </SectionLayout>
@@ -55,8 +55,8 @@ export default function LeadWorkspaceResolverPage(): JSX.Element {
     <Suspense
       fallback={
         <SectionLayout title="Client">
-          <div className="rounded border border-[#dddbda] bg-white p-4 shadow-sm">
-            <p className="text-sm text-[#3e3e3c]">Opening client workspace...</p>
+          <div className="rounded border border-[#c8ced3] bg-white p-4 shadow-sm">
+            <p className="text-sm text-[#5c6873]">Opening client workspace...</p>
           </div>
         </SectionLayout>
       }

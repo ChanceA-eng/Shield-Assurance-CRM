@@ -274,7 +274,7 @@ export default function RashiDocumentView({ documentId }: { documentId: string }
   };
 
   if (loading) {
-    return <div className="text-sm text-[#64748b]">Loading document...</div>;
+    return <div className="text-sm text-[#73818f]">Loading document...</div>;
   }
 
   if (error) {
@@ -282,7 +282,7 @@ export default function RashiDocumentView({ documentId }: { documentId: string }
   }
 
   if (!document) {
-    return <div className="text-sm text-[#64748b]">Document not found.</div>;
+    return <div className="text-sm text-[#73818f]">Document not found.</div>;
   }
 
   const embeddedSourceUrl = document.sourceUrl ? getEmbeddedSourceUrl(document.sourceUrl) : null;

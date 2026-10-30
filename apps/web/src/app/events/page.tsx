@@ -160,11 +160,11 @@ export default function EventsPage(): JSX.Element {
 
   return (
     <SectionLayout title="Events">
-      <div className="mb-4 rounded-2xl border border-[#d6deea] bg-gradient-to-r from-[#f4fbff] via-white to-[#f1fff8] p-4 shadow-sm">
+      <div className="mb-4 rounded-2xl border border-[#d8dde2] bg-gradient-to-r from-[#f4fbff] via-white to-[#f1fff8] p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#4b7b6b]">Calendar Center</p>
-            <h2 className="mt-1 text-xl font-semibold text-[#10273f]">Agency Events</h2>
+            <h2 className="mt-1 text-xl font-semibold text-[#23282c]">Agency Events</h2>
             <p className="mt-1 text-sm text-[#5f738c]">Appointments, calls, and follow-ups synced with tasks.</p>
           </div>
           <div className="flex gap-2">
@@ -192,7 +192,7 @@ export default function EventsPage(): JSX.Element {
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <select
-          className="rounded border border-[#d6deea] bg-white px-3 py-2 text-sm"
+          className="rounded border border-[#d8dde2] bg-white px-3 py-2 text-sm"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as EventStatusFilter)}
         >
@@ -203,17 +203,17 @@ export default function EventsPage(): JSX.Element {
       </div>
 
       {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
-      {loading ? <div className="text-sm text-[#60748a]">Loading events...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading events...</div> : null}
 
       {!loading ? (
         <div className="space-y-2">
           {events.length === 0 ? (
-            <div className="rounded-xl border border-[#dce6f3] bg-white p-4 text-sm text-[#60748a]">No events found for this filter.</div>
+            <div className="rounded-xl border border-[#f0f3f5] bg-white p-4 text-sm text-[#73818f]">No events found for this filter.</div>
           ) : (
             events.map((event) => (
               <div
                 key={event.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#dce6f3] bg-white p-3 shadow-sm transition hover:border-[#c4d7ef]"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#f0f3f5] bg-white p-3 shadow-sm transition hover:border-[#c4d7ef]"
               >
                 <div className="flex min-w-0 flex-1 items-start gap-3">
                   <input
@@ -224,7 +224,7 @@ export default function EventsPage(): JSX.Element {
                   />
 
                   <div className="min-w-0">
-                    <p className={`truncate text-sm font-semibold ${(event.status ?? 'scheduled') === 'completed' ? 'text-[#7e8b9b] line-through' : 'text-[#10273f]'}`}>
+                    <p className={`truncate text-sm font-semibold ${(event.status ?? 'scheduled') === 'completed' ? 'text-[#7e8b9b] line-through' : 'text-[#23282c]'}`}>
                       {event.title ?? event.subject ?? 'Untitled event'}
                     </p>
                     <p className="mt-0.5 text-xs text-[#647b94]">
@@ -250,8 +250,8 @@ export default function EventsPage(): JSX.Element {
 
       {showNewEvent ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/45 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-xl">
-            <h3 className="mb-3 text-lg font-semibold text-[#10273f]">New Event</h3>
+          <div className="w-full max-w-md rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-xl">
+            <h3 className="mb-3 text-lg font-semibold text-[#23282c]">New Event</h3>
             <form onSubmit={handleCreateEvent} className="space-y-2">
               <input
                 required
@@ -259,20 +259,20 @@ export default function EventsPage(): JSX.Element {
                 placeholder="Event subject"
                 value={newEvent.title}
                 onChange={(e) => setNewEvent((prev) => ({ ...prev, title: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#d8dde2] px-3 py-2 text-sm"
               />
               <textarea
                 placeholder="Description"
                 value={newEvent.description}
                 onChange={(e) => setNewEvent((prev) => ({ ...prev, description: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#d8dde2] px-3 py-2 text-sm"
               />
               <input
                 required
                 type="date"
                 value={newEvent.event_date}
                 onChange={(e) => setNewEvent((prev) => ({ ...prev, event_date: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#d8dde2] px-3 py-2 text-sm"
               />
               <label className="flex items-center gap-2 text-sm text-[#44576f]">
                 <input
@@ -288,13 +288,13 @@ export default function EventsPage(): JSX.Element {
                   type="time"
                   value={newEvent.event_time}
                   onChange={(e) => setNewEvent((prev) => ({ ...prev, event_time: e.target.value }))}
-                  className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
+                  className="w-full rounded border border-[#d8dde2] px-3 py-2 text-sm"
                 />
               ) : null}
               <select
                 value={newEvent.related_type}
                 onChange={(e) => setNewEvent((prev) => ({ ...prev, related_type: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#d8dde2] px-3 py-2 text-sm"
               >
                 <option value="">Related Type (Optional)</option>
                 <option value="lead">Lead</option>
@@ -310,7 +310,7 @@ export default function EventsPage(): JSX.Element {
                 placeholder="Related ID (Optional)"
                 value={newEvent.related_id}
                 onChange={(e) => setNewEvent((prev) => ({ ...prev, related_id: e.target.value }))}
-                className="w-full rounded border border-[#d6deea] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#d8dde2] px-3 py-2 text-sm"
               />
 
               <button

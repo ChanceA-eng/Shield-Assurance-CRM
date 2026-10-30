@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
+import { ACTIVE_LEAD_STATUSES } from '../../../../lib/lead-pipeline';
 
 function thirtyDaysFromNowISO(): string {
   const d = new Date();
@@ -32,9 +33,9 @@ export async function GET(): Promise<NextResponse> {
       openClaimsCount,
     ] = await Promise.all([
       supabase.from('policies').select('premium'),
-      supabase.from('leads').select('id', { count: 'exact', head: true }).in('status', ['new', 'working', 'quoted']),
+      supabase.from('leads').select('id', { count: 'exact', head: true }).in('status', [...ACTIVE_LEAD_STATUSES]),
       supabase.from('leads').select('id', { count: 'exact', head: true }),
-      supabase.from('leads').select('id', { count: 'exact', head: true }).eq('status', 'closed'),
+      supabase.from('leads').select('id', { count: 'exact', head: true }).eq('status', 'won'),
       supabase
         .from('policies')
         .select('id', { count: 'exact', head: true })

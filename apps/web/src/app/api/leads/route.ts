@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
+import { requireApiSession } from '../../../lib/api-auth';
 import { processLeadStatusChanged } from '../../../lib/automation';
+import { ACTIVE_LEAD_STATUSES, normalizeLeadStatus } from '../../../lib/lead-pipeline';
+import { scheduleIntakeTask, isWarmSource } from '../../../lib/intake-task';
+import { writeNotification } from '../../../lib/automation';
 
 interface NewLeadPayload {
   id?: string;
@@ -20,26 +24,7 @@ interface NewLeadPayload {
   line_of_business?: string;
   source?: string;
   status?: string;
-}
-
-interface LeadAutomationPayload {
-  lead: {
-    id: string;
-    full_name: string;
-    status: string;
-    source: string | null;
-    email: string | null;
-    phone: string | null;
-    line_of_business: string | null;
-    created_at: string | null;
-  };
-  submission: NewLeadPayload;
-  receivedAt: string;
-  request: {
-    origin: string | null;
-    userAgent: string | null;
-    ip: string | null;
-  };
+  estimated_premium?: number | string;
 }
 
 function normalizeText(value: string | undefined): string | null {
@@ -49,7 +34,8 @@ function normalizeText(value: string | undefined): string | null {
 
 function normalizeStatus(value: string | undefined): string {
   const normalized = value?.trim().toLowerCase();
-  return normalized || 'new';
+  if (!normalized) return 'new';
+  return normalizeLeadStatus(normalized) ?? 'new';
 }
 
 function normalizeBundles(input: string | string[] | undefined): string[] {
@@ -65,87 +51,6 @@ function normalizeBundles(input: string | string[] | undefined): string[] {
   }
 
   return [];
-}
-
-function envValue(name: string): string | null {
-  const value = process.env[name]?.trim();
-  return value ? value : null;
-}
-
-function getRequestIp(request: NextRequest): string | null {
-  const forwarded = request.headers.get('x-forwarded-for');
-  if (!forwarded) {
-    return null;
-  }
-
-  const first = forwarded.split(',')[0]?.trim();
-  return first || null;
-}
-
-async function postWebhook(url: string, payload: LeadAutomationPayload, headers?: Record<string, string>): Promise<void> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(headers ?? {}),
-    },
-    body: JSON.stringify(payload),
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    throw new Error(`Webhook request failed (${response.status} ${response.statusText}).`);
-  }
-}
-
-async function triggerLeadAutomation(request: NextRequest, payload: NewLeadPayload, lead: LeadAutomationPayload['lead']): Promise<void> {
-  const crmWebhookUrl = envValue('CRM_LEAD_WEBHOOK_URL');
-  const crmApiKey = envValue('CRM_LEAD_API_KEY');
-  const enrichmentWebhookUrl = envValue('LEAD_ENRICHMENT_WEBHOOK_URL');
-  const enrichmentToken = envValue('LEAD_ENRICHMENT_WEBHOOK_TOKEN');
-
-  if (!crmWebhookUrl && !enrichmentWebhookUrl) {
-    return;
-  }
-
-  const automationPayload: LeadAutomationPayload = {
-    lead,
-    submission: payload,
-    receivedAt: new Date().toISOString(),
-    request: {
-      origin: request.headers.get('origin'),
-      userAgent: request.headers.get('user-agent'),
-      ip: getRequestIp(request),
-    },
-  };
-
-  const jobs: Promise<void>[] = [];
-
-  if (crmWebhookUrl) {
-    const crmHeaders: Record<string, string> = {};
-    if (crmApiKey) {
-      crmHeaders['x-api-key'] = crmApiKey;
-    }
-
-    jobs.push(postWebhook(crmWebhookUrl, automationPayload, crmHeaders));
-  }
-
-  if (enrichmentWebhookUrl) {
-    const enrichmentHeaders: Record<string, string> = {};
-    if (enrichmentToken) {
-      enrichmentHeaders.Authorization = `Bearer ${enrichmentToken}`;
-      enrichmentHeaders['x-webhook-token'] = enrichmentToken;
-    }
-
-    jobs.push(postWebhook(enrichmentWebhookUrl, automationPayload, enrichmentHeaders));
-  }
-
-  const results = await Promise.allSettled(jobs);
-  for (const result of results) {
-    if (result.status === 'rejected') {
-      console.error('[leads] Automation webhook delivery failed.', result.reason);
-    }
-  }
 }
 
 function resolveAllowedOrigins(): string[] {
@@ -181,34 +86,46 @@ function jsonWithCors(request: NextRequest, body: unknown, init?: ResponseInit):
   return response;
 }
 
-function isMissingLeadsTableError(message: string | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-
-  return message.includes("Could not find the table 'public.leads' in the schema cache");
-}
-
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return jsonWithCors(request, { message: 'Supabase is not configured.' }, { status: 503 });
   }
 
   const searchParams = request.nextUrl.searchParams;
+  if (searchParams.get('actionableCount') === 'true') {
+    const { data, error } = await supabase.rpc('get_actionable_leads_count');
+    if (error) {
+      return jsonWithCors(request, { message: error.message }, { status: 500 });
+    }
+
+    return jsonWithCors(request, { count: typeof data === 'number' ? data : 0 }, { status: 200 });
+  }
+
   const status = searchParams.get('status');
 
-  let query = supabase.from('leads').select('*').order('created_at', { ascending: false }).limit(50);
+  const rawLimit = Number(searchParams.get('limit'));
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 1000) : 500;
+
+  // List views don't need the heavy vendor payloads; the workspace drawer
+  // fetches /api/leads/[id] for the full record. ?full=true opts back in.
+  const columns =
+    searchParams.get('full') === 'true'
+      ? '*'
+      : 'id,full_name,industry,category,phone,email,address,source,line_of_business,status,created_at,website,est_employees,est_revenue,estimated_premium,stage_changed_at,lost_reason,last_viewed_at,last_activity_at';
+
+  let query = supabase.from('leads').select(columns).order('created_at', { ascending: false }).limit(limit);
   if (status === 'open') {
-    query = query.in('status', ['new', 'working', 'quoted']);
+    query = query.in('status', [...ACTIVE_LEAD_STATUSES]);
+  } else if (status && ['won', 'lost', 'inactive'].includes(status)) {
+    query = query.eq('status', status);
   }
 
   const { data, error } = await query;
   if (error) {
-    if (isMissingLeadsTableError(error.message)) {
-      return jsonWithCors(request, [], { status: 200 });
-    }
-
     return jsonWithCors(request, { message: error.message }, { status: 500 });
   }
 
@@ -216,6 +133,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  // Public endpoint by design: external website forms post leads here (see website-integration.md).
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return jsonWithCors(request, { message: 'Supabase is not configured.' }, { status: 503 });
@@ -251,10 +169,74 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     form_payload: payload,
   };
 
+  // Resubmission check: a repeat inquiry is a hot signal, not a new lead.
+  const email = normalizeText(payload.email)?.toLowerCase() ?? null;
+  const phoneDigitsValue = (normalizeText(payload.phone) ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+  let existing: { id: string; full_name: string } | null = null;
+  if (email) {
+    const byEmail = await supabase
+      .from('leads')
+      .select('id,full_name')
+      .eq('email', email)
+      .in('status', ['new', 'contacted', 'quoted'])
+      .limit(1)
+      .maybeSingle<{ id: string; full_name: string }>();
+    existing = byEmail.data ?? null;
+  }
+  if (!existing && phoneDigitsValue.length === 10) {
+    const byPhone = await supabase
+      .from('leads')
+      .select('id,full_name,phone')
+      .in('status', ['new', 'contacted', 'quoted'])
+      .limit(500);
+    existing =
+      (byPhone.data ?? []).find(
+        (row) => ((row.phone as string | null) ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '') === phoneDigitsValue,
+      ) ?? null;
+  }
+
+  if (existing) {
+    await supabase
+      .from('leads')
+      .update({ last_activity_at: new Date().toISOString() })
+      .eq('id', existing.id);
+    await supabase.from('interactions').insert([
+      {
+        lead_id: existing.id,
+        content: `Lead resubmitted via website: ${JSON.stringify(payload).slice(0, 800)}`,
+        follow_up_completed: true,
+      },
+    ]);
+    const hotDue = new Date(Date.now() + 2 * 3600 * 1000);
+    await supabase.from('tasks').insert([
+      {
+        subject: `${existing.full_name} submitted another request — call now`,
+        description: 'They filled out the website form again. Repeat inquiries close fast.',
+        due_date: hotDue.toISOString(),
+        status: 'open',
+        priority: 'high',
+        related_type: 'lead',
+        related_id: existing.id,
+      },
+    ]);
+    await writeNotification({
+      type: 'new_lead',
+      message: `${existing.full_name} submitted another request — strike while it's hot`,
+      href: `/leads?lead=${existing.id}`,
+    });
+    return jsonWithCors(request, { id: existing.id, resubmission: true }, { status: 200 });
+  }
+
   const { data, error } = await supabase.from('leads').insert([insertData]).select('*').single();
   if (error) {
     return jsonWithCors(request, { message: error.message }, { status: 500 });
   }
+
+  await scheduleIntakeTask(supabase, {
+    leadId: data.id,
+    name: data.full_name,
+    warm: isWarmSource(insertData.source, payload),
+  });
 
   await processLeadStatusChanged({
     leadId: data.id,
@@ -262,21 +244,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     status: data.status,
   });
 
-  await triggerLeadAutomation(request, payload, {
-    id: data.id,
-    full_name: data.full_name,
-    status: data.status,
-    source: data.source ?? null,
-    email: data.email ?? null,
-    phone: data.phone ?? null,
-    line_of_business: data.line_of_business ?? null,
-    created_at: data.created_at ?? null,
-  });
 
   return jsonWithCors(request, data, { status: 201 });
 }
 
 export async function PATCH(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return jsonWithCors(request, { message: 'Supabase is not configured.' }, { status: 503 });
@@ -287,7 +262,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     return jsonWithCors(request, { message: 'id is required.' }, { status: 400 });
   }
 
-  const updates: Record<string, string | null> = {};
+  const updates: Record<string, string | number | null> = {};
   if (typeof payload.name === 'string') updates.full_name = payload.name.trim();
   if (typeof payload.fullName === 'string') updates.full_name = payload.fullName.trim();
   if (typeof payload.full_name === 'string') updates.full_name = payload.full_name.trim();
@@ -302,7 +277,22 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   if (typeof payload.message === 'string') updates.details = payload.message.trim() || null;
   if (typeof payload.line_of_business === 'string') updates.line_of_business = payload.line_of_business.trim() || null;
   if (typeof payload.source === 'string') updates.source = payload.source.trim() || null;
-  if (typeof payload.status === 'string') updates.status = payload.status.trim();
+  if (typeof payload.status === 'string') {
+    const normalized = normalizeLeadStatus(payload.status);
+    if (normalized) {
+      updates.status = normalized;
+      updates.stage_changed_at = new Date().toISOString();
+    }
+  }
+  if (typeof payload.estimated_premium === 'number' || typeof payload.estimated_premium === 'string') {
+    const raw =
+      typeof payload.estimated_premium === 'string'
+        ? Number(payload.estimated_premium.replace(/[$,]/g, ''))
+        : payload.estimated_premium;
+    if (Number.isFinite(raw)) {
+      updates.estimated_premium = raw;
+    }
+  }
 
   if (Object.keys(updates).length === 0) {
     return jsonWithCors(request, { message: 'No update fields were provided.' }, { status: 400 });
@@ -323,6 +313,9 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function DELETE(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return jsonWithCors(request, { message: 'Supabase is not configured.' }, { status: 503 });

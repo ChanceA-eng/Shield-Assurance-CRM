@@ -1,38 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
+import { requireApiSession } from '../../../../../lib/api-auth';
 import { processLeadStatusChanged } from '../../../../../lib/automation';
+import { normalizeLeadStatus, LOST_REASONS } from '../../../../../lib/lead-pipeline';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
 }
 
-function normalizeLeadStatus(input: string): string | null {
-  const value = input.trim().toLowerCase();
+interface StatusPayload {
+  status?: string;
+  lost_reason?: string;
+  estimated_premium?: number | string;
+}
 
-  const aliases: Record<string, string> = {
-    lead: 'new',
-    new: 'new',
-    prospect: 'working',
-    working: 'working',
-    quoted: 'quoted',
-    bound: 'closed',
-    renewal: 'closed',
-    closed: 'closed',
-  };
-
-  return aliases[value] ?? null;
+function parsePremium(value: number | string | undefined): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/[$,]/g, ''));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 export async function PATCH(
   request: NextRequest,
   context: RouteContext,
 ): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
   }
 
-  const payload = (await request.json().catch(() => ({}))) as { status?: string };
+  const payload = (await request.json().catch(() => ({}))) as StatusPayload;
   const statusValue = typeof payload.status === 'string' ? normalizeLeadStatus(payload.status) : null;
 
   if (!statusValue) {
@@ -45,9 +48,27 @@ export async function PATCH(
     return NextResponse.json({ message: 'Lead id is required.' }, { status: 400 });
   }
 
+  const updateData: Record<string, string | number | null> = {
+    status: statusValue,
+    stage_changed_at: new Date().toISOString(),
+    last_activity_at: new Date().toISOString(),
+  };
+
+  if (statusValue === 'lost') {
+    const reason = typeof payload.lost_reason === 'string' ? payload.lost_reason.trim().toLowerCase() : '';
+    updateData.lost_reason = (LOST_REASONS as readonly string[]).includes(reason) ? reason : 'other';
+  } else {
+    updateData.lost_reason = null;
+  }
+
+  const premium = parsePremium(payload.estimated_premium);
+  if (premium !== null) {
+    updateData.estimated_premium = premium;
+  }
+
   const { data, error } = await supabase
     .from('leads')
-    .update({ status: statusValue })
+    .update(updateData)
     .eq('id', leadId)
     .select('*')
     .single();

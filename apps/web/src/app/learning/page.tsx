@@ -134,13 +134,13 @@ export default function LearningCenterPage(): JSX.Element {
   return (
     <SectionLayout title="Learning Center">
       <div className="space-y-4">
-        <div className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+        <div className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-lg font-bold text-[#080707]">Interactive Learning Platform</h2>
+              <h2 className="text-lg font-bold text-[#23282c]">Interactive Learning Platform</h2>
               <p className="text-sm text-[#514f4d]">Courses, modules, quizzes, simulations, and Rashi coaching are now wired as a foundation layer.</p>
             </div>
-            <a href="/learning/course-builder" className="rounded-md bg-[#0b2545] px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]">
+            <a href="/learning/course-builder" className="rounded-md bg-[#23282c] px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]">
               Open Learning Studio
             </a>
           </div>
@@ -158,11 +158,11 @@ export default function LearningCenterPage(): JSX.Element {
               <div className="flex flex-wrap gap-2">
                 <a
                   href={`/learning/course/${flagshipCourse.id}/overview`}
-                  className="rounded-md bg-[#0f62af] px-3 py-2 text-xs font-semibold text-white hover:bg-[#0c4e8a]"
+                  className="rounded-md bg-[#167495] px-3 py-2 text-xs font-semibold text-white hover:bg-[#0c4e8a]"
                 >
                   Start Learning
                 </a>
-                <a href={`/learning/course-builder/${flagshipCourse.id}`} className="rounded-md border border-[#0f62af] px-3 py-2 text-xs font-semibold text-[#0f62af] hover:bg-[#eef5ff]">
+                <a href={`/learning/course-builder/${flagshipCourse.id}`} className="rounded-md border border-[#167495] px-3 py-2 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]">
                   Open in Studio
                 </a>
               </div>
@@ -173,7 +173,7 @@ export default function LearningCenterPage(): JSX.Element {
                 onClick={() => {
                   void startFlagshipCourse();
                 }}
-                className="rounded-md bg-[#0f62af] px-3 py-2 text-xs font-semibold text-white hover:bg-[#0c4e8a] disabled:opacity-60"
+                className="rounded-md bg-[#167495] px-3 py-2 text-xs font-semibold text-white hover:bg-[#0c4e8a] disabled:opacity-60"
               >
                 {installing ? 'Starting...' : 'Start Course'}
               </button>
@@ -188,9 +188,9 @@ export default function LearningCenterPage(): JSX.Element {
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {cards.map((course) => (
-            <article key={course.id} className="rounded-lg border border-[#dddbda] bg-white p-4 shadow-sm">
+            <article key={course.id} className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[#706e6b]">{course.level}</p>
-              <h3 className="mt-1 text-base font-bold text-[#080707]">{course.title}</h3>
+              <h3 className="mt-1 text-base font-bold text-[#23282c]">{course.title}</h3>
               <p className="mt-1 text-xs text-[#514f4d]">{course.description ?? 'No description yet. Add one in Course Builder.'}</p>
 
               <div className="mt-3 flex items-center justify-between text-xs text-[#514f4d]">
@@ -198,16 +198,16 @@ export default function LearningCenterPage(): JSX.Element {
                 <span>{course.completedLessons}/{course.totalLessons} lessons complete</span>
               </div>
 
-              <div className="mt-2 h-2 w-full rounded-full bg-[#ecebea]">
-                <div className="h-2 rounded-full bg-[#0f62af]" style={{ width: `${course.completionPercent}%` }} />
+              <div className="mt-2 h-2 w-full rounded-full bg-[#e4e5e6]">
+                <div className="h-2 rounded-full bg-[#167495]" style={{ width: `${course.completionPercent}%` }} />
               </div>
 
               <div className="mt-3 flex flex-wrap gap-2">
-                <a href={`/learning/course-builder/${course.id}`} className="rounded-md border border-[#c9c7c5] px-2.5 py-1 text-xs font-semibold text-[#0b2545] hover:bg-[#f3f2f1]">
+                <a href={`/learning/course-builder/${course.id}`} className="rounded-md border border-[#c8ced3] px-2.5 py-1 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">
                   Edit Course
                 </a>
                 {course.resumeLessonId ? (
-                  <a href={`/learning/course/${course.id}/overview`} className="rounded-md bg-[#0f62af] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#0c4e8a]">
+                  <a href={`/learning/course/${course.id}/overview`} className="rounded-md bg-[#167495] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#0c4e8a]">
                     Open Course
                   </a>
                 ) : null}

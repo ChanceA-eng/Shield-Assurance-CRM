@@ -8,17 +8,6 @@ interface TaskCandidate {
   priority: 'low' | 'medium' | 'high';
 }
 
-function isMissingRelationError(message: string | undefined): boolean {
-  if (!message) return false;
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("could not find the table") ||
-    lower.includes('relation') ||
-    lower.includes('schema cache') ||
-    lower.includes('does not exist')
-  );
-}
-
 function daysFromNow(days: number): string {
   const date = new Date();
   date.setDate(date.getDate() + days);
@@ -53,26 +42,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (clientRes.error) return NextResponse.json({ message: clientRes.error.message }, { status: 500 });
   if (policiesRes.error) return NextResponse.json({ message: policiesRes.error.message }, { status: 500 });
+  if (openClientTasksRes.error) return NextResponse.json({ message: openClientTasksRes.error.message }, { status: 500 });
   if (!clientRes.data) return NextResponse.json({ message: 'Client not found.' }, { status: 404 });
-
-  const useLegacyTasks = Boolean(openClientTasksRes.error && isMissingRelationError(openClientTasksRes.error.message));
-  if (openClientTasksRes.error && !useLegacyTasks) {
-    return NextResponse.json({ message: openClientTasksRes.error.message }, { status: 500 });
-  }
-
-  const openLegacyTasksRes = useLegacyTasks
-    ? await supabase
-        .from('tasks')
-        .select('subject,status')
-        .eq('related_type', 'client')
-        .eq('related_id', clientId)
-        .neq('status', 'completed')
-        .limit(200)
-    : { data: [], error: null };
-
-  if (openLegacyTasksRes.error) {
-    return NextResponse.json({ message: openLegacyTasksRes.error.message }, { status: 500 });
-  }
 
   const clientName = clientRes.data.full_name;
 
@@ -106,7 +77,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
   }
 
-  const existingRows = useLegacyTasks ? openLegacyTasksRes.data ?? [] : openClientTasksRes.data ?? [];
+  const existingRows = openClientTasksRes.data ?? [];
   const existingSubjects = new Set(existingRows.map((row) => row.subject?.trim().toLowerCase()).filter(Boolean));
   const newCandidates = uniqueBySubject(candidates)
     .filter((item) => !existingSubjects.has(item.subject.trim().toLowerCase()))
@@ -114,34 +85,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   let createdCount = 0;
   if (newCandidates.length > 0) {
-    const insertRes = useLegacyTasks
-      ? await supabase
-          .from('tasks')
-          .insert(
-            newCandidates.map((item) => ({
-              subject: item.subject,
-              description: item.description,
-              due_date: item.due_date,
-              status: 'open',
-              priority: item.priority,
-              related_type: 'client',
-              related_id: clientId,
-            })),
-          )
-          .select('id,subject')
-      : await supabase
-          .from('client_tasks')
-          .insert(
-            newCandidates.map((item) => ({
-              client_id: clientId,
-              subject: item.subject,
-              description: item.description,
-              due_date: item.due_date,
-              status: 'open',
-              priority: item.priority,
-            })),
-          )
-          .select('id,subject');
+    const insertRes = await supabase
+      .from('client_tasks')
+      .insert(
+        newCandidates.map((item) => ({
+          client_id: clientId,
+          subject: item.subject,
+          description: item.description,
+          due_date: item.due_date,
+          status: 'open',
+          priority: item.priority,
+        })),
+      )
+      .select('id,subject');
 
     if (insertRes.error) {
       return NextResponse.json({ message: insertRes.error.message }, { status: 500 });
@@ -162,7 +118,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         source: 'api.ai.generate-tasks',
         created: createdCount,
         skipped: Math.max(0, candidates.length - createdCount),
-        task_store: useLegacyTasks ? 'tasks' : 'client_tasks',
+        task_store: 'client_tasks',
       },
       occurred_at: new Date().toISOString(),
     },

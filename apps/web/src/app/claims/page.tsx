@@ -163,26 +163,26 @@ export default function ClaimsPage(): JSX.Element {
   return (
     <SectionLayout title="Claims">
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-[#3e3e3c]">Open claims tied directly to policy and client records.</p>
+        <p className="text-sm text-[#5c6873]">Open claims tied directly to policy and client records.</p>
         <button
           type="button"
           onClick={() => setShowNewClaim(true)}
-          className="rounded border border-[#0163b3] bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1]"
+          className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7]"
         >
           + New Claim
         </button>
       </div>
 
       {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
-      {loading ? <div className="text-sm text-[#6a6a6a]">Loading claims...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading claims...</div> : null}
 
       {!loading ? (
-        <div className="rounded border border-[#dddbda] bg-white shadow-sm">
+        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
           {claims.length === 0 ? (
-            <div className="p-4 text-sm text-[#6a6a6a]">No open claims found.</div>
+            <div className="p-4 text-sm text-[#73818f]">No open claims found.</div>
           ) : (
             <table className="w-full text-left text-sm">
-              <thead className="bg-[#f8f8f7] text-[#6a6a6a]">
+              <thead className="bg-[#f8f9fa] text-[#73818f]">
                 <tr>
                   <th className="px-3 py-2">Insured</th>
                   <th className="px-3 py-2">Carrier</th>
@@ -194,14 +194,14 @@ export default function ClaimsPage(): JSX.Element {
               </thead>
               <tbody>
                 {claims.map((claim) => (
-                  <tr key={claim.id} className="border-t border-[#f3f2f1]">
-                    <td className="px-3 py-2 font-semibold text-[#0176d3]">{claim.policies?.insured_name ?? claim.clients?.full_name ?? '--'}</td>
+                  <tr key={claim.id} className="border-t border-[#f0f3f5]">
+                    <td className="px-3 py-2 font-semibold text-[#20a8d8]">{claim.policies?.insured_name ?? claim.clients?.full_name ?? '--'}</td>
                     <td className="px-3 py-2">{claim.policies?.carrier ?? '--'}</td>
                     <td className="px-3 py-2">{claim.type}</td>
                     <td className="px-3 py-2">{claim.date_of_loss}</td>
                     <td className="px-3 py-2">{claim.status}</td>
                     <td className="px-3 py-2 text-xs">
-                      <button type="button" className="mr-2 font-semibold text-[#0f62af] hover:underline" onClick={() => setEditingClaim(claim)}>
+                      <button type="button" className="mr-2 font-semibold text-[#167495] hover:underline" onClick={() => setEditingClaim(claim)}>
                         Edit
                       </button>
                       <button type="button" className="font-semibold text-[#c23934] hover:underline" onClick={() => void handleRemoveClaim(claim.id)}>
@@ -218,13 +218,13 @@ export default function ClaimsPage(): JSX.Element {
 
       {showNewClaim ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded border border-[#dddbda] bg-white p-4 shadow-xl">
-            <h2 className="mb-3 text-lg font-bold text-[#080707]">New Claim</h2>
+          <div className="w-full max-w-md rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
+            <h2 className="mb-3 text-lg font-bold text-[#23282c]">New Claim</h2>
 
             <form onSubmit={handleCreateClaim} className="space-y-2">
               <select
                 required
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={newClaim.policy_id}
                 onChange={(e) => {
                   const selected = policies.find((policy) => policy.id === e.target.value);
@@ -245,7 +245,7 @@ export default function ClaimsPage(): JSX.Element {
 
               <select
                 required
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={newClaim.type}
                 onChange={(e) => setNewClaim((prev) => ({ ...prev, type: e.target.value }))}
               >
@@ -259,14 +259,14 @@ export default function ClaimsPage(): JSX.Element {
               <input
                 required
                 type="date"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={newClaim.date_of_loss}
                 onChange={(e) => setNewClaim((prev) => ({ ...prev, date_of_loss: e.target.value }))}
               />
 
               <textarea
                 placeholder="Description"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={newClaim.description}
                 onChange={(e) => setNewClaim((prev) => ({ ...prev, description: e.target.value }))}
               />
@@ -274,7 +274,7 @@ export default function ClaimsPage(): JSX.Element {
               <button
                 type="submit"
                 disabled={isCreating}
-                className="w-full rounded bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1] disabled:opacity-60"
+                className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:opacity-60"
               >
                 {isCreating ? 'Saving Claim...' : 'Save Claim'}
               </button>
@@ -282,7 +282,7 @@ export default function ClaimsPage(): JSX.Element {
               <button
                 type="button"
                 onClick={() => setShowNewClaim(false)}
-                className="w-full rounded bg-[#e5e5e5] px-3 py-2 text-sm font-semibold text-[#3e3e3c] hover:bg-[#d9d9d9]"
+                className="w-full rounded bg-[#e4e5e6] px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#c8ced3]"
               >
                 Cancel
               </button>
@@ -293,12 +293,12 @@ export default function ClaimsPage(): JSX.Element {
 
       {editingClaim ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded border border-[#dddbda] bg-white p-4 shadow-xl">
-            <h2 className="mb-3 text-lg font-bold text-[#080707]">Edit Claim</h2>
+          <div className="w-full max-w-md rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
+            <h2 className="mb-3 text-lg font-bold text-[#23282c]">Edit Claim</h2>
             <form onSubmit={handleUpdateClaim} className="space-y-2">
               <select
                 required
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingClaim.policy_id}
                 onChange={(e) =>
                   setEditingClaim((prev) => {
@@ -316,7 +316,7 @@ export default function ClaimsPage(): JSX.Element {
               </select>
               <select
                 required
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingClaim.type}
                 onChange={(e) => setEditingClaim((prev) => (prev ? { ...prev, type: e.target.value } : prev))}
               >
@@ -328,17 +328,17 @@ export default function ClaimsPage(): JSX.Element {
               <input
                 required
                 type="date"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingClaim.date_of_loss}
                 onChange={(e) => setEditingClaim((prev) => (prev ? { ...prev, date_of_loss: e.target.value } : prev))}
               />
               <textarea
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingClaim.description || ''}
                 onChange={(e) => setEditingClaim((prev) => (prev ? { ...prev, description: e.target.value } : prev))}
               />
               <select
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingClaim.status}
                 onChange={(e) => setEditingClaim((prev) => (prev ? { ...prev, status: e.target.value } : prev))}
               >
@@ -350,14 +350,14 @@ export default function ClaimsPage(): JSX.Element {
               <button
                 type="submit"
                 disabled={isSavingEdit}
-                className="w-full rounded bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1] disabled:opacity-60"
+                className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:opacity-60"
               >
                 {isSavingEdit ? 'Saving Changes...' : 'Save Changes'}
               </button>
               <button
                 type="button"
                 onClick={() => setEditingClaim(null)}
-                className="w-full rounded bg-[#e5e5e5] px-3 py-2 text-sm font-semibold text-[#3e3e3c] hover:bg-[#d9d9d9]"
+                className="w-full rounded bg-[#e4e5e6] px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#c8ced3]"
               >
                 Cancel
               </button>

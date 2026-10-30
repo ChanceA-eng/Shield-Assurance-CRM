@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
-import { sendEmail } from '../../../lib/messaging';
+import { requireApiSession } from '../../../lib/api-auth';
+import { sendOutboundEmail } from '../../../lib/email-adapter';
 import { appendAgencySignature } from '../../../lib/agency-signature';
+import { handleInboundReply } from '../../../lib/outreach-engine';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -22,6 +27,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -45,6 +53,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const subject = payload.subject?.trim() || (payload.channel === 'email' ? 'Message from Shield Assurance' : 'SMS Notification');
   const direction = payload.direction ?? 'outbound';
+  let deliveryProvider: string | null = null;
 
   const profileFiles = (payload.profile_files ?? [])
     .map((file) => ({
@@ -85,8 +94,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ message: 'Recipient email is required. Provide to or client_id with a valid client email.' }, { status: 400 });
     }
 
+    let provider = 'sendgrid';
     try {
-      await sendEmail({
+      provider = await sendOutboundEmail({
         to: recipientEmail,
         subject,
         body: messageBody,
@@ -96,6 +106,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const message = error instanceof Error ? error.message : 'Unknown email delivery failure';
       return NextResponse.json({ message: `Email delivery failed: ${message}` }, { status: 502 });
     }
+    deliveryProvider = provider;
   }
 
   const { data, error } = await supabase
@@ -125,10 +136,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .eq('id', payload.client_id);
   }
 
+  // Reply sensor: an inbound message stops any active outreach sequence.
+  if (direction === 'inbound') {
+    await handleInboundReply(supabase, { clientId: payload.client_id ?? null, body: payload.body });
+  }
+
   return NextResponse.json(
     {
       ...data,
-      delivery: payload.channel === 'email' && direction === 'outbound' ? 'accepted_by_sendgrid' : 'logged_only',
+      delivery:
+        payload.channel === 'email' && direction === 'outbound'
+          ? `accepted_by_${deliveryProvider ?? 'provider'}`
+          : 'logged_only',
     },
     { status: 201 },
   );

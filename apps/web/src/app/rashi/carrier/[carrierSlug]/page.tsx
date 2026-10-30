@@ -20,8 +20,8 @@ export default async function RashiCarrierPage({
 
   return (
     <SectionLayout title={`Rashi · ${carrierName}`}>
-      <nav className="mb-3 text-xs text-[#64748b]">
-        <Link href="/rashi" className="text-[#0f62af] hover:underline">
+      <nav className="mb-3 text-xs text-[#73818f]">
+        <Link href="/rashi" className="text-[#167495] hover:underline">
           Rashi
         </Link>
         <span> · </span>

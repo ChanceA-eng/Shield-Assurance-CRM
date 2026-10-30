@@ -223,11 +223,7 @@ async function loadClientSnapshot(clientId: string): Promise<ProspectSnapshot> {
     throw new Error(policiesResult.error.message);
   }
 
-  const missingAssetsRelation = assetsResult.error?.message?.toLowerCase().includes('does not exist')
-    || assetsResult.error?.message?.toLowerCase().includes('schema cache')
-    || assetsResult.error?.message?.toLowerCase().includes('relation');
-
-  if (assetsResult.error && !missingAssetsRelation) {
+  if (assetsResult.error) {
     throw new Error(assetsResult.error.message);
   }
 

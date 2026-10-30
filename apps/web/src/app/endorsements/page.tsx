@@ -165,26 +165,26 @@ export default function EndorsementsPage(): JSX.Element {
   return (
     <SectionLayout title="Endorsements">
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-[#3e3e3c]">Open policy changes linked directly to client and policy records.</p>
+        <p className="text-sm text-[#5c6873]">Open policy changes linked directly to client and policy records.</p>
         <button
           type="button"
           onClick={() => setShowNewEndorsement(true)}
-          className="rounded border border-[#0163b3] bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1]"
+          className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7]"
         >
           + New Endorsement
         </button>
       </div>
 
       {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
-      {loading ? <div className="text-sm text-[#6a6a6a]">Loading endorsements...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading endorsements...</div> : null}
 
       {!loading ? (
-        <div className="rounded border border-[#dddbda] bg-white shadow-sm">
+        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
           {endorsements.length === 0 ? (
-            <div className="p-4 text-sm text-[#6a6a6a]">No open endorsements found.</div>
+            <div className="p-4 text-sm text-[#73818f]">No open endorsements found.</div>
           ) : (
             <table className="w-full text-left text-sm">
-              <thead className="bg-[#f8f8f7] text-[#6a6a6a]">
+              <thead className="bg-[#f8f9fa] text-[#73818f]">
                 <tr>
                   <th className="px-3 py-2">Insured</th>
                   <th className="px-3 py-2">Carrier</th>
@@ -196,8 +196,8 @@ export default function EndorsementsPage(): JSX.Element {
               </thead>
               <tbody>
                 {endorsements.map((endorsement) => (
-                  <tr key={endorsement.id} className="border-t border-[#f3f2f1]">
-                    <td className="px-3 py-2 font-semibold text-[#0176d3]">
+                  <tr key={endorsement.id} className="border-t border-[#f0f3f5]">
+                    <td className="px-3 py-2 font-semibold text-[#20a8d8]">
                       {endorsement.policies?.insured_name ?? endorsement.clients?.full_name ?? '--'}
                     </td>
                     <td className="px-3 py-2">{endorsement.policies?.carrier ?? '--'}</td>
@@ -207,7 +207,7 @@ export default function EndorsementsPage(): JSX.Element {
                     <td className="px-3 py-2 text-xs">
                       <button
                         type="button"
-                        className="mr-2 font-semibold text-[#0f62af] hover:underline"
+                        className="mr-2 font-semibold text-[#167495] hover:underline"
                         onClick={() => setEditingEndorsement(endorsement)}
                       >
                         Edit
@@ -230,13 +230,13 @@ export default function EndorsementsPage(): JSX.Element {
 
       {showNewEndorsement ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded border border-[#dddbda] bg-white p-4 shadow-xl">
-            <h2 className="mb-3 text-lg font-bold text-[#080707]">New Endorsement</h2>
+          <div className="w-full max-w-md rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
+            <h2 className="mb-3 text-lg font-bold text-[#23282c]">New Endorsement</h2>
 
             <form onSubmit={handleCreateEndorsement} className="space-y-2">
               <select
                 required
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={newEndorsement.policy_id}
                 onChange={(e) => {
                   const selected = policies.find((policy) => policy.id === e.target.value);
@@ -257,7 +257,7 @@ export default function EndorsementsPage(): JSX.Element {
 
               <select
                 required
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={newEndorsement.type}
                 onChange={(e) => setNewEndorsement((prev) => ({ ...prev, type: e.target.value }))}
               >
@@ -271,14 +271,14 @@ export default function EndorsementsPage(): JSX.Element {
               <input
                 required
                 type="date"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={newEndorsement.effective_date}
                 onChange={(e) => setNewEndorsement((prev) => ({ ...prev, effective_date: e.target.value }))}
               />
 
               <textarea
                 placeholder="Description"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={newEndorsement.description}
                 onChange={(e) => setNewEndorsement((prev) => ({ ...prev, description: e.target.value }))}
               />
@@ -286,7 +286,7 @@ export default function EndorsementsPage(): JSX.Element {
               <button
                 type="submit"
                 disabled={isCreating}
-                className="w-full rounded bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1] disabled:opacity-60"
+                className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:opacity-60"
               >
                 {isCreating ? 'Saving Endorsement...' : 'Save Endorsement'}
               </button>
@@ -294,7 +294,7 @@ export default function EndorsementsPage(): JSX.Element {
               <button
                 type="button"
                 onClick={() => setShowNewEndorsement(false)}
-                className="w-full rounded bg-[#e5e5e5] px-3 py-2 text-sm font-semibold text-[#3e3e3c] hover:bg-[#d9d9d9]"
+                className="w-full rounded bg-[#e4e5e6] px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#c8ced3]"
               >
                 Cancel
               </button>
@@ -305,12 +305,12 @@ export default function EndorsementsPage(): JSX.Element {
 
       {editingEndorsement ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded border border-[#dddbda] bg-white p-4 shadow-xl">
-            <h2 className="mb-3 text-lg font-bold text-[#080707]">Edit Endorsement</h2>
+          <div className="w-full max-w-md rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
+            <h2 className="mb-3 text-lg font-bold text-[#23282c]">Edit Endorsement</h2>
             <form onSubmit={handleUpdateEndorsement} className="space-y-2">
               <select
                 required
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingEndorsement.policy_id}
                 onChange={(e) =>
                   setEditingEndorsement((prev) => {
@@ -328,24 +328,24 @@ export default function EndorsementsPage(): JSX.Element {
               </select>
               <input
                 type="text"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingEndorsement.type}
                 onChange={(e) => setEditingEndorsement((prev) => (prev ? { ...prev, type: e.target.value } : prev))}
               />
               <input
                 required
                 type="date"
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingEndorsement.effective_date}
                 onChange={(e) => setEditingEndorsement((prev) => (prev ? { ...prev, effective_date: e.target.value } : prev))}
               />
               <textarea
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingEndorsement.description || ''}
                 onChange={(e) => setEditingEndorsement((prev) => (prev ? { ...prev, description: e.target.value } : prev))}
               />
               <select
-                className="w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={editingEndorsement.status}
                 onChange={(e) => setEditingEndorsement((prev) => (prev ? { ...prev, status: e.target.value } : prev))}
               >
@@ -355,14 +355,14 @@ export default function EndorsementsPage(): JSX.Element {
               <button
                 type="submit"
                 disabled={isSavingEdit}
-                className="w-full rounded bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1] disabled:opacity-60"
+                className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:opacity-60"
               >
                 {isSavingEdit ? 'Saving Changes...' : 'Save Changes'}
               </button>
               <button
                 type="button"
                 onClick={() => setEditingEndorsement(null)}
-                className="w-full rounded bg-[#e5e5e5] px-3 py-2 text-sm font-semibold text-[#3e3e3c] hover:bg-[#d9d9d9]"
+                className="w-full rounded bg-[#e4e5e6] px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#c8ced3]"
               >
                 Cancel
               </button>

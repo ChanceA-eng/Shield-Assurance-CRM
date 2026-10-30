@@ -123,23 +123,23 @@ export default function ReportsPage(): JSX.Element {
 
   return (
     <SectionLayout title="Reports">
-      <div className="mb-4 rounded-2xl border border-[#d6deea] bg-gradient-to-r from-[#f5f9ff] via-white to-[#f3f7ff] p-4 shadow-sm">
+      <div className="mb-4 rounded-2xl border border-[#d8dde2] bg-gradient-to-r from-[#f5f9ff] via-white to-[#f3f7ff] p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#54739e]">Analytics Engine</p>
-            <h2 className="mt-1 text-xl font-semibold text-[#10273f]">Reports Dashboard</h2>
+            <h2 className="mt-1 text-xl font-semibold text-[#23282c]">Reports Dashboard</h2>
             <p className="mt-1 text-sm text-[#5f738c]">Decision-ready analytics pulled directly from Supabase.</p>
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <select className="rounded-full border border-[#d6deea] bg-white px-3 py-2 text-xs font-semibold text-[#184168]" value={range} onChange={(e) => setRange(e.target.value as ReportsRange)}>
+            <select className="rounded-full border border-[#d8dde2] bg-white px-3 py-2 text-xs font-semibold text-[#184168]" value={range} onChange={(e) => setRange(e.target.value as ReportsRange)}>
               <option value="mtd">MTD</option>
               <option value="ytd">YTD</option>
               <option value="qtd">QTD</option>
               <option value="12m">Last 12 Months</option>
             </select>
 
-            <select className="rounded-full border border-[#d6deea] bg-white px-3 py-2 text-xs font-semibold text-[#184168]" value={carrier} onChange={(e) => setCarrier(e.target.value)}>
+            <select className="rounded-full border border-[#d8dde2] bg-white px-3 py-2 text-xs font-semibold text-[#184168]" value={carrier} onChange={(e) => setCarrier(e.target.value)}>
               <option value="all">All Carriers</option>
               {carriers.map((name) => (
                 <option key={name} value={name}>
@@ -156,7 +156,7 @@ export default function ReportsPage(): JSX.Element {
       </div>
 
       {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
-      {loading ? <div className="text-sm text-[#60748a]">Loading reports...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading reports...</div> : null}
 
       {!loading && data ? (
         <div className="space-y-5">
@@ -171,7 +171,7 @@ export default function ReportsPage(): JSX.Element {
               <Link key={metric.label} href={metric.href} className={`group relative overflow-hidden rounded-2xl border bg-white p-4 shadow-sm ring-1 transition hover:-translate-y-0.5 hover:shadow-lg ${metricTone(index)}`}>
                 <div className="relative">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-[#516680]">{metric.label}</p>
-                  <p className="mt-2 text-2xl font-bold text-[#10273f]">{metric.value}</p>
+                  <p className="mt-2 text-2xl font-bold text-[#23282c]">{metric.value}</p>
                   <p className="mt-1 text-[11px] font-semibold text-[#587189]">{metric.helper}</p>
                 </div>
               </Link>
@@ -179,18 +179,18 @@ export default function ReportsPage(): JSX.Element {
           </section>
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <article className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm xl:col-span-2">
+            <article className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm xl:col-span-2">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-[#0f2943]">Premium Trend</h3>
-                <Link href="/reports/production" className="text-xs font-semibold text-[#0f62af] hover:underline">
+                <h3 className="text-sm font-semibold text-[#23282c]">Premium Trend</h3>
+                <Link href="/reports/production" className="text-xs font-semibold text-[#167495] hover:underline">
                   Open report
                 </Link>
               </div>
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={data.premiumTrend}>
-                    <XAxis dataKey="month" stroke="#64748b" tickLine={false} axisLine={false} />
-                    <YAxis stroke="#64748b" tickLine={false} axisLine={false} />
+                    <XAxis dataKey="month" stroke="#73818f" tickLine={false} axisLine={false} />
+                    <YAxis stroke="#73818f" tickLine={false} axisLine={false} />
                     <Tooltip formatter={(value) => formatCurrency(Number(value))} />
                     <Line type="monotone" dataKey="premium" stroke="#0ea5e9" strokeWidth={3} dot={{ r: 3 }} />
                   </LineChart>
@@ -198,18 +198,18 @@ export default function ReportsPage(): JSX.Element {
               </div>
             </article>
 
-            <article className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
+            <article className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-[#0f2943]">Carrier Mix</h3>
-                <Link href="/reports/carriers" className="text-xs font-semibold text-[#0f62af] hover:underline">
+                <h3 className="text-sm font-semibold text-[#23282c]">Carrier Mix</h3>
+                <Link href="/reports/carriers" className="text-xs font-semibold text-[#167495] hover:underline">
                   Open report
                 </Link>
               </div>
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={data.carrierMix}>
-                    <XAxis dataKey="carrier" stroke="#64748b" tickLine={false} axisLine={false} interval={0} angle={-10} height={60} />
-                    <YAxis stroke="#64748b" tickLine={false} axisLine={false} />
+                    <XAxis dataKey="carrier" stroke="#73818f" tickLine={false} axisLine={false} interval={0} angle={-10} height={60} />
+                    <YAxis stroke="#73818f" tickLine={false} axisLine={false} />
                     <Tooltip formatter={(value) => formatCurrency(Number(value))} />
                     <Bar dataKey="premium" fill="#6366f1" radius={[8, 8, 0, 0]} />
                   </BarChart>
@@ -217,10 +217,10 @@ export default function ReportsPage(): JSX.Element {
               </div>
             </article>
 
-            <article className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
+            <article className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-[#0f2943]">Claims Status</h3>
-                <Link href="/reports/claims" className="text-xs font-semibold text-[#0f62af] hover:underline">
+                <h3 className="text-sm font-semibold text-[#23282c]">Claims Status</h3>
+                <Link href="/reports/claims" className="text-xs font-semibold text-[#167495] hover:underline">
                   Open report
                 </Link>
               </div>
@@ -238,10 +238,10 @@ export default function ReportsPage(): JSX.Element {
               </div>
             </article>
 
-            <article className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
+            <article className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-[#0f2943]">Lead Pipeline</h3>
-                <Link href="/reports/leads" className="text-xs font-semibold text-[#0f62af] hover:underline">
+                <h3 className="text-sm font-semibold text-[#23282c]">Lead Pipeline</h3>
+                <Link href="/reports/leads" className="text-xs font-semibold text-[#167495] hover:underline">
                   Open report
                 </Link>
               </div>
@@ -249,7 +249,7 @@ export default function ReportsPage(): JSX.Element {
                 <ResponsiveContainer width="100%" height="100%">
                   <FunnelChart>
                     <Funnel dataKey="value" data={data.leadPipeline} isAnimationActive>
-                      <LabelList dataKey="stage" position="right" fill="#10273f" />
+                      <LabelList dataKey="stage" position="right" fill="#23282c" />
                     </Funnel>
                     <Tooltip />
                   </FunnelChart>
@@ -259,11 +259,11 @@ export default function ReportsPage(): JSX.Element {
           </section>
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-            <article className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
-              <h3 className="text-sm font-semibold text-[#0f2943]">Production Drilldown</h3>
+            <article className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-semibold text-[#23282c]">Production Drilldown</h3>
               <div className="mt-3 space-y-2 text-sm">
                 {data.drilldowns.policies.slice(0, 5).map((policy) => (
-                  <div key={policy.id} className="rounded-xl border border-[#e8eef7] bg-[#fbfdff] px-3 py-2">
+                  <div key={policy.id} className="rounded-xl border border-[#e8eef7] bg-[#ffffff] px-3 py-2">
                     <p className="font-semibold text-[#14324f]">{policy.insured_name ?? 'Unnamed policy'}</p>
                     <p className="text-xs text-[#667b90]">
                       {policy.carrier ?? '--'} · {formatCurrency(policy.premium ?? 0)} · {formatDate(policy.effective_date)}
@@ -273,11 +273,11 @@ export default function ReportsPage(): JSX.Element {
               </div>
             </article>
 
-            <article className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
-              <h3 className="text-sm font-semibold text-[#0f2943]">Claims Drilldown</h3>
+            <article className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-semibold text-[#23282c]">Claims Drilldown</h3>
               <div className="mt-3 space-y-2 text-sm">
                 {data.drilldowns.claims.slice(0, 5).map((claim) => (
-                  <div key={claim.id} className="rounded-xl border border-[#e8eef7] bg-[#fbfdff] px-3 py-2">
+                  <div key={claim.id} className="rounded-xl border border-[#e8eef7] bg-[#ffffff] px-3 py-2">
                     <p className="font-semibold text-[#14324f]">{claim.policies?.insured_name ?? 'Unknown insured'}</p>
                     <p className="text-xs text-[#667b90]">
                       {claim.policies?.carrier ?? '--'} · {claim.type ?? 'Claim'} · {claim.status ?? 'open'}
@@ -287,11 +287,11 @@ export default function ReportsPage(): JSX.Element {
               </div>
             </article>
 
-            <article className="rounded-2xl border border-[#dce6f3] bg-white p-4 shadow-sm">
-              <h3 className="text-sm font-semibold text-[#0f2943]">Report Cards</h3>
+            <article className="rounded-2xl border border-[#f0f3f5] bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-semibold text-[#23282c]">Report Cards</h3>
               <div className="mt-3 space-y-2">
                 {reportCards.map((card) => (
-                  <Link key={card.id} href={card.href} className="block rounded-xl border border-[#e8eef7] bg-[#fbfdff] px-3 py-2 hover:bg-[#f1f7ff]">
+                  <Link key={card.id} href={card.href} className="block rounded-xl border border-[#e8eef7] bg-[#ffffff] px-3 py-2 hover:bg-[#f1f7ff]">
                     <p className="font-semibold text-[#14324f]">{card.title}</p>
                     <p className="text-xs text-[#667b90]">{card.summary}</p>
                   </Link>

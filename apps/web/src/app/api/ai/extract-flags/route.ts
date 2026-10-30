@@ -5,17 +5,6 @@ function normalize(value?: string | null): string {
   return (value ?? '').trim().toLowerCase();
 }
 
-function isMissingRelationError(message: string | undefined): boolean {
-  if (!message) return false;
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("could not find the table") ||
-    lower.includes('relation') ||
-    lower.includes('schema cache') ||
-    lower.includes('does not exist')
-  );
-}
-
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -42,25 +31,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (policiesRes.error) return NextResponse.json({ message: policiesRes.error.message }, { status: 500 });
   if (claimsRes.error) return NextResponse.json({ message: claimsRes.error.message }, { status: 500 });
+  if (tasksRes.error) return NextResponse.json({ message: tasksRes.error.message }, { status: 500 });
   if (communicationsRes.error) return NextResponse.json({ message: communicationsRes.error.message }, { status: 500 });
-
-  const useLegacyTasks = Boolean(tasksRes.error && isMissingRelationError(tasksRes.error.message));
-  if (tasksRes.error && !useLegacyTasks) {
-    return NextResponse.json({ message: tasksRes.error.message }, { status: 500 });
-  }
-
-  const legacyTasksRes = useLegacyTasks
-    ? await supabase
-        .from('tasks')
-        .select('id,status,due_date')
-        .eq('related_type', 'client')
-        .eq('related_id', clientId)
-        .limit(200)
-    : { data: [], error: null };
-
-  if (legacyTasksRes.error) {
-    return NextResponse.json({ message: legacyTasksRes.error.message }, { status: 500 });
-  }
 
   const flags: string[] = [];
 
@@ -69,7 +41,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     flags.push(`${openClaims} open claim${openClaims > 1 ? 's' : ''} require active servicing.`);
   }
 
-  const taskRows = useLegacyTasks ? legacyTasksRes.data ?? [] : tasksRes.data ?? [];
+  const taskRows = tasksRes.data ?? [];
   const overdueTasks = taskRows.filter((task) => {
     if (!task.due_date || normalize(task.status) === 'completed') return false;
     return new Date(task.due_date).getTime() < Date.now();

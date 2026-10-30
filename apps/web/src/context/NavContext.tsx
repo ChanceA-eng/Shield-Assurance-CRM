@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 
 interface NavContextValue {
   isNavOpen: boolean;
@@ -12,7 +12,14 @@ interface NavContextValue {
 const NavContext = createContext<NavContextValue | null>(null);
 
 export function NavProvider({ children }: { children: React.ReactNode }): JSX.Element {
-  const [isNavOpen, setIsNavOpen] = useState(false);
+  const [isNavOpen, setIsNavOpen] = useState(true);
+
+  // Start collapsed on small screens so the mobile overlay is not open by default.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setIsNavOpen(false);
+    }
+  }, []);
 
   const openNav = (): void => setIsNavOpen(true);
   const closeNav = (): void => setIsNavOpen(false);

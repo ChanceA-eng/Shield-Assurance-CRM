@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
+import { nextArizonaBusinessMorning } from '../../../../lib/arizona-time';
+import { requireApiSession } from '../../../../lib/api-auth';
+import { scheduleIntakeTask } from '../../../../lib/intake-task';
 
 type IntakePayload = {
   name?: string;
@@ -61,16 +64,7 @@ function normalizeWebsite(input: unknown): string | null {
 }
 
 function nextBusinessMorningIso(): string {
-  const now = new Date();
-  const target = new Date(now);
-  target.setHours(8, 0, 0, 0);
-  target.setDate(target.getDate() + 1);
-
-  while (target.getDay() === 0 || target.getDay() === 6) {
-    target.setDate(target.getDate() + 1);
-  }
-
-  return target.toISOString();
+  return nextArizonaBusinessMorning(new Date(), true).toISOString();
 }
 
 function buildSnapshotNote(input: {
@@ -96,6 +90,9 @@ function buildSnapshotNote(input: {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -174,6 +171,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (interactionError) {
     return NextResponse.json({ message: interactionError.message, leadId: newLead.id }, { status: 500 });
   }
+
+  await scheduleIntakeTask(supabase, { leadId: newLead.id, name: fullName, warm: true });
 
   return NextResponse.json({ success: true, leadId: newLead.id }, { status: 201 });
 }

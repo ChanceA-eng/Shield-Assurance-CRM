@@ -1,9 +1,10 @@
 import { getSupabaseServerClient } from './supabase-server';
 import { sendEmail } from './messaging';
 import { appendAgencySignature } from './agency-signature';
+import { LEAD_STATUS_LABELS, type LeadStatus } from './lead-pipeline';
 
 export type AutomationChannel = 'email' | 'sms' | 'in_app';
-export type AutomationType = 'renewal' | 'claim' | 'endorsement' | 'lead' | 'appointment' | 'certificate';
+export type AutomationType = 'renewal' | 'claim' | 'endorsement' | 'lead' | 'new_lead' | 'appointment' | 'certificate' | 'outreach';
 
 export interface ClientPreferences {
   id: string;
@@ -68,13 +69,19 @@ export async function getClientPreferences(clientId: string): Promise<ClientPref
   return data ?? null;
 }
 
-export async function writeNotification(input: { client_id?: string | null; type: AutomationType; message: string }): Promise<void> {
+export async function writeNotification(input: {
+  client_id?: string | null;
+  type: AutomationType;
+  message: string;
+  href?: string | null;
+}): Promise<void> {
   try {
     await safeInsert('notifications', [
       {
         client_id: input.client_id ?? null,
         type: input.type,
         message: input.message,
+        href: input.href ?? null,
         read: false,
       },
     ]);
@@ -365,8 +372,9 @@ export async function processLeadStatusChanged(input: {
   leadName?: string | null;
   status: string;
 }): Promise<void> {
-  const body = `Lead ${input.leadName ?? input.leadId} moved to ${input.status}.`;
-  await writeNotification({ client_id: null, type: 'lead', message: body });
+  const stageLabel = LEAD_STATUS_LABELS[input.status as LeadStatus] ?? input.status;
+  const body = `${input.leadName ?? 'A lead'} is now in ${stageLabel}`;
+  await writeNotification({ client_id: null, type: 'lead', message: body, href: `/leads?lead=${input.leadId}` });
 }
 
 export async function createDashboardAutomationAlerts(): Promise<void> {
@@ -383,7 +391,7 @@ export async function createDashboardAutomationAlerts(): Promise<void> {
     supabase.from('endorsements').select('id').eq('status', 'open').limit(20),
     supabase.from('tasks').select('id').eq('status', 'open').lt('due_date', todayISO()).limit(20),
     supabase.from('events').select('id').eq('event_date', todayISO()).limit(20),
-    supabase.from('leads').select('id').in('status', ['new', 'working']).limit(20),
+    supabase.from('leads').select('id').in('status', ['new', 'contacted']).limit(20),
   ]);
 
   await safeInsert('notifications', [

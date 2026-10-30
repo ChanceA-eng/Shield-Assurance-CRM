@@ -85,7 +85,7 @@ export default function NewPersonalSubmission(): JSX.Element {
   const renderHelp = (key: string): JSX.Element | null => {
     const message = FIELD_HELP[key];
     if (!message) return null;
-    return <p className="mt-1 text-xs text-[#6a6a6a]">{message}</p>;
+    return <p className="mt-1 text-xs text-[#73818f]">{message}</p>;
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
@@ -118,19 +118,19 @@ export default function NewPersonalSubmission(): JSX.Element {
   return (
     <form onSubmit={handleSubmit} className="space-y-5 p-4">
       <div>
-        <h2 className="text-lg font-bold text-[#080707]">New Personal Submission</h2>
-        <p className="text-sm text-[#3e3e3c]">Capture personal lines data for Auto, Home, and Umbrella quoting.</p>
+        <h2 className="text-lg font-bold text-[#23282c]">New Personal Submission</h2>
+        <p className="text-sm text-[#5c6873]">Capture personal lines data for Auto, Home, and Umbrella quoting.</p>
       </div>
 
-      <section className="rounded border border-[#ecebea] p-3">
-        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#1f3f5b]">Identity and Contact</h3>
+      <section className="rounded border border-[#e4e5e6] p-3">
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#2f353a]">Identity and Contact</h3>
         <div className="grid gap-3 md:grid-cols-2">
           {['first_name', 'last_name', 'dob', 'primary_phone', 'primary_email', 'street_address', 'city', 'state', 'zip_code', 'current_carrier', 'current_policy_expiration', 'credit_score_tier'].map((key) => (
-            <label key={key} className={`text-sm text-[#3e3e3c] ${key === 'street_address' ? 'md:col-span-2' : ''}`}>
+            <label key={key} className={`text-sm text-[#5c6873] ${key === 'street_address' ? 'md:col-span-2' : ''}`}>
               {toLabel(key)}
               <input
                 type={key.includes('date') || key === 'dob' ? 'date' : key.includes('email') ? 'email' : 'text'}
-                className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={form[key] ?? ''}
                 onChange={(e) => updateField(key, e.target.value)}
                 required={['first_name', 'last_name', 'dob', 'primary_phone', 'primary_email', 'street_address', 'city', 'state', 'zip_code'].includes(key)}
@@ -141,14 +141,14 @@ export default function NewPersonalSubmission(): JSX.Element {
         </div>
       </section>
 
-      <section className="rounded border border-[#ecebea] p-3">
-        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#1f3f5b]">Coverage Modules</h3>
+      <section className="rounded border border-[#e4e5e6] p-3">
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#2f353a]">Coverage Modules</h3>
         <div className="grid gap-3 md:grid-cols-3">
           {moduleEntries.map(([moduleKey, moduleDef]) => (
-            <label key={moduleKey} className="text-sm text-[#3e3e3c]">
+            <label key={moduleKey} className="text-sm text-[#5c6873]">
               {moduleDef.label}
               <select
-                className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                 value={form[moduleDef.trigger_flag] ?? 'no'}
                 onChange={(e) => updateField(moduleDef.trigger_flag, e.target.value)}
               >
@@ -165,15 +165,15 @@ export default function NewPersonalSubmission(): JSX.Element {
             if (!modules[moduleKey]) return null;
 
             return (
-              <div key={moduleKey} className="rounded border border-[#dddbda] bg-[#f8f8f7] p-3">
-                <p className="mb-2 text-sm font-semibold text-[#1f3f5b]">{moduleDef.label}</p>
+              <div key={moduleKey} className="rounded border border-[#c8ced3] bg-[#f8f9fa] p-3">
+                <p className="mb-2 text-sm font-semibold text-[#2f353a]">{moduleDef.label}</p>
                 <div className="grid gap-3 md:grid-cols-2">
                   {moduleDef.required_fields.map((field) => (
-                    <label key={field} className="text-sm text-[#3e3e3c]">
+                    <label key={field} className="text-sm text-[#5c6873]">
                       {toLabel(field)}
                       {field.startsWith('has_') ? (
                         <select
-                          className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                          className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                           value={form[field] ?? 'no'}
                           onChange={(e) => updateField(field, e.target.value)}
                         >
@@ -182,7 +182,7 @@ export default function NewPersonalSubmission(): JSX.Element {
                         </select>
                       ) : (
                         <input
-                          className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm"
+                          className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
                           value={form[field] ?? ''}
                           onChange={(e) => updateField(field, e.target.value)}
                           required
@@ -198,14 +198,14 @@ export default function NewPersonalSubmission(): JSX.Element {
         </div>
       </section>
 
-      <section className="rounded border border-[#ecebea] p-3">
-        <label className="text-sm text-[#3e3e3c]">
+      <section className="rounded border border-[#e4e5e6] p-3">
+        <label className="text-sm text-[#5c6873]">
           Consent To Retrieve Policy Data
-          <select className="mt-1 w-full rounded border border-[#dddbda] px-3 py-2 text-sm" value={form.legal_consent} onChange={(e) => updateField('legal_consent', e.target.value)}>
+          <select className="mt-1 w-full rounded border border-[#c8ced3] px-3 py-2 text-sm" value={form.legal_consent} onChange={(e) => updateField('legal_consent', e.target.value)}>
             <option value="no">No</option>
             <option value="yes">Yes</option>
           </select>
-          <p className="mt-1 text-xs text-[#6a6a6a]">Authorizes policy data collection and underwriting use for quote generation.</p>
+          <p className="mt-1 text-xs text-[#73818f]">Authorizes policy data collection and underwriting use for quote generation.</p>
         </label>
       </section>
 
@@ -214,7 +214,7 @@ export default function NewPersonalSubmission(): JSX.Element {
       <button
         type="submit"
         disabled={isSubmitting}
-        className="rounded border border-[#0163b3] bg-[#0176d3] px-4 py-2 text-sm font-semibold text-white hover:bg-[#015ba1] disabled:cursor-not-allowed disabled:opacity-70"
+        className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:cursor-not-allowed disabled:opacity-70"
       >
         {isSubmitting ? 'Submitting...' : 'Submit Personal Intake'}
       </button>

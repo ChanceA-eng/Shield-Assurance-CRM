@@ -1,5 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
+import { handleInboundReply } from '../../../../lib/outreach-engine';
+
+/**
+ * Inbound email webhook. This is the reply sensor for the outreach engine.
+ *
+ * Setup (one-time, external):
+ * - SendGrid: Settings > Inbound Parse > add host (e.g. reply.shield-assurance.com)
+ *   with destination URL https://<your-domain>/api/messages/webhook, POST raw off.
+ * - Point the subdomain MX record at mx.sendgrid.net.
+ * Replies from leads/clients then flow into communication_log as inbound messages,
+ * which cancels active outreach sequences and raises a call task.
+ */
 
 interface InboundPayload {
   from?: string;
@@ -133,6 +145,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (error) {
     return NextResponse.json({ message: error.message }, { status: 500 });
   }
+
+  // Reply sensor: stop active sequences and raise a call task for the matching lead.
+  await handleInboundReply(supabase, {
+    clientId: clientLookup.data?.id ?? null,
+    fromEmail: parsed.from,
+    body: parsed.body,
+  });
 
   return NextResponse.json(
     {

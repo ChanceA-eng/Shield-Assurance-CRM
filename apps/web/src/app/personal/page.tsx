@@ -62,22 +62,22 @@ export default function PersonalQueuePage(): JSX.Element {
   return (
     <SectionLayout title="Personal">
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-[#3e3e3c]">Personal submission queue for Auto, Home, and Umbrella opportunities.</p>
-        <Link href={'/personal/new' as Route} className="rounded border border-[#0163b3] bg-[#0176d3] px-3 py-2 text-sm font-semibold text-white hover:bg-[#015ba1]">
+        <p className="text-sm text-[#5c6873]">Personal submission queue for Auto, Home, and Umbrella opportunities.</p>
+        <Link href={'/personal/new' as Route} className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7]">
           + New
         </Link>
       </div>
 
       {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
-      {loading ? <div className="text-sm text-[#6a6a6a]">Loading personal submissions...</div> : null}
+      {loading ? <div className="text-sm text-[#73818f]">Loading personal submissions...</div> : null}
 
       {!loading ? (
-        <div className="rounded border border-[#dddbda] bg-white shadow-sm">
+        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
           {rows.length === 0 ? (
-            <div className="p-4 text-sm text-[#6a6a6a]">No personal submissions yet.</div>
+            <div className="p-4 text-sm text-[#73818f]">No personal submissions yet.</div>
           ) : (
             <table className="w-full text-left text-sm">
-              <thead className="bg-[#f8f8f7] text-[#6a6a6a]">
+              <thead className="bg-[#f8f9fa] text-[#73818f]">
                 <tr>
                   <th className="px-3 py-2">Applicant</th>
                   <th className="px-3 py-2">Email</th>
@@ -91,8 +91,8 @@ export default function PersonalQueuePage(): JSX.Element {
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <tr key={row.id} className="border-t border-[#f3f2f1]">
-                    <td className="px-3 py-2 font-semibold text-[#0176d3]">{row.firstName} {row.lastName}</td>
+                  <tr key={row.id} className="border-t border-[#f0f3f5]">
+                    <td className="px-3 py-2 font-semibold text-[#20a8d8]">{row.firstName} {row.lastName}</td>
                     <td className="px-3 py-2">{row.primaryEmail}</td>
                     <td className="px-3 py-2">{row.primaryPhone}</td>
                     <td className="px-3 py-2">{row.state} {row.zipCode}</td>

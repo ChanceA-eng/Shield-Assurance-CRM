@@ -15,12 +15,14 @@ Rashi is deployment-ready through the Next.js web app.
 - `RASHI_EMBEDDING_MODEL` optional, defaults to `text-embedding-3-small`
 - `RASHI_CHAT_MODEL` optional, defaults to `gpt-4o-mini`
 - `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 
 ## Database Requirements
 
-- Apply the Prisma migrations before or during deployment.
+- Apply `supabase/migrations` and the Prisma migrations before deployment.
+- The web build runs `schema:verify` before `next build`. Vercel will reject a deployment when required Supabase columns or functions are missing; apply migrations, then redeploy.
 - Ensure the target PostgreSQL instance has the `vector` extension enabled.
 - Ensure the target database includes the Rashi migrations in `apps/api/prisma/migrations`.
 

@@ -197,9 +197,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const leadStageMap = new Map<string, number>([
     ['new', 0],
-    ['working', 0],
+    ['contacted', 0],
     ['quoted', 0],
-    ['closed', 0],
+    ['won', 0],
+    ['lost', 0],
+    ['inactive', 0],
   ]);
   for (const row of leadsStatusRes.data ?? []) {
     const stage = (row.status || 'new').toLowerCase();
@@ -207,9 +209,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
   const leadPipeline: LeadPipelineRow[] = [
     { stage: 'New', value: leadStageMap.get('new') ?? 0, color: '#38bdf8' },
-    { stage: 'Working', value: leadStageMap.get('working') ?? 0, color: '#818cf8' },
+    { stage: 'Contacted', value: leadStageMap.get('contacted') ?? 0, color: '#818cf8' },
     { stage: 'Quoted', value: leadStageMap.get('quoted') ?? 0, color: '#34d399' },
-    { stage: 'Closed', value: leadStageMap.get('closed') ?? 0, color: '#f59e0b' },
+    { stage: 'Won', value: leadStageMap.get('won') ?? 0, color: '#4dbd74' },
+    { stage: 'Lost', value: leadStageMap.get('lost') ?? 0, color: '#f86c6b' },
+    { stage: 'Inactive', value: leadStageMap.get('inactive') ?? 0, color: '#c8ced3' },
   ];
 
   const reportCards: ReportCard[] = [

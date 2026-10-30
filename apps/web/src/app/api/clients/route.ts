@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
+import { requireApiSession } from '../../../lib/api-auth';
 
 interface NewClientPayload {
   id?: string;
@@ -8,18 +9,16 @@ interface NewClientPayload {
   email?: string;
   address?: string;
   source?: string;
+  account_type?: 'unknown' | 'personal' | 'commercial';
+  assigned_producer?: string | null;
+  csr?: string | null;
+  since_date?: string | null;
   email_consent?: boolean;
   sms_consent?: boolean;
   preferred_channel?: string;
   policy_effective_at?: string | null;
   last_viewed_at?: string | null;
   last_activity_at?: string | null;
-}
-
-function isColumnError(message: string | undefined): boolean {
-  if (!message) return false;
-  const value = message.toLowerCase();
-  return value.includes('column') || value.includes('schema cache') || value.includes('does not exist');
 }
 
 function normalizeIsoDate(value: string | null | undefined): string | null {
@@ -39,20 +38,10 @@ function normalizeIsoDate(value: string | null | undefined): string | null {
   return parsed.toISOString();
 }
 
-function isMissingFunctionError(message: string | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-
-  const value = message.toLowerCase();
-  if (!value.includes('get_actionable_clients_count')) {
-    return false;
-  }
-
-  return value.includes('does not exist') || value.includes('could not find the function') || value.includes('schema cache');
-}
-
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -61,81 +50,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const actionableCount = request.nextUrl.searchParams.get('actionableCount') === 'true';
 
   if (actionableCount) {
-    const rpcResult = await supabase.rpc('get_actionable_clients_count');
-
-    if (!rpcResult.error) {
-      return NextResponse.json({ count: typeof rpcResult.data === 'number' ? rpcResult.data : 0 }, { status: 200 });
+    const { data, error } = await supabase.rpc('get_actionable_clients_count');
+    if (error) {
+      return NextResponse.json({ message: error.message }, { status: 500 });
     }
 
-    if (!isMissingFunctionError(rpcResult.error.message)) {
-      if (isColumnError(rpcResult.error.message)) {
-        return NextResponse.json({ count: 0 }, { status: 200 });
-      }
-
-      return NextResponse.json({ message: rpcResult.error.message }, { status: 500 });
-    }
-
-    const clientsWithTracking = await supabase
-      .from('clients')
-      .select('id,created_at,policy_effective_at,last_viewed_at,last_activity_at')
-      .limit(500);
-
-    if (clientsWithTracking.error && isColumnError(clientsWithTracking.error.message)) {
-      return NextResponse.json({ count: 0 }, { status: 200 });
-    }
-
-    if (clientsWithTracking.error) {
-      return NextResponse.json({ message: clientsWithTracking.error.message }, { status: 500 });
-    }
-
-    const now = Date.now();
-    const dayMs = 24 * 60 * 60 * 1000;
-    const actionable = (clientsWithTracking.data ?? []).filter((client) => {
-      const policyEffectiveAt = client.policy_effective_at ? new Date(client.policy_effective_at).getTime() : null;
-      const lastViewedAt = client.last_viewed_at ? new Date(client.last_viewed_at).getTime() : null;
-      const lastActivityAt = client.last_activity_at ? new Date(client.last_activity_at).getTime() : new Date(client.created_at).getTime();
-
-      const hasNewMessage = !Number.isNaN(lastActivityAt) && lastActivityAt > (lastViewedAt ?? 0);
-
-      const milestone30At = typeof policyEffectiveAt === 'number' && !Number.isNaN(policyEffectiveAt)
-        ? policyEffectiveAt + 30 * dayMs
-        : null;
-      const milestone45At = typeof policyEffectiveAt === 'number' && !Number.isNaN(policyEffectiveAt)
-        ? policyEffectiveAt + 45 * dayMs
-        : null;
-
-      const hit30DayMilestone = typeof milestone30At === 'number'
-        ? now >= milestone30At && (lastViewedAt === null || Number.isNaN(lastViewedAt) || lastViewedAt < milestone30At)
-        : false;
-      const hit45DayMilestone = typeof milestone45At === 'number'
-        ? now >= milestone45At && (lastViewedAt === null || Number.isNaN(lastViewedAt) || lastViewedAt < milestone45At)
-        : false;
-
-      return hasNewMessage || hit30DayMilestone || hit45DayMilestone;
-    }).length;
-
-    return NextResponse.json({ count: actionable }, { status: 200 });
+    return NextResponse.json({ count: typeof data === 'number' ? data : 0 }, { status: 200 });
   }
 
   const queryResult = await supabase
     .from('clients')
-    .select('id,full_name,phone,email,address,source,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at')
+    .select('id,full_name,phone,email,address,source,account_type,assigned_producer,csr,since_date,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at')
     .order('created_at', { ascending: false })
     .limit(100);
-
-  if (queryResult.error && isColumnError(queryResult.error.message)) {
-    const fallbackQueryResult = await supabase
-      .from('clients')
-      .select('id,full_name,phone,email,address,source,email_consent,sms_consent,preferred_channel,created_at')
-      .order('created_at', { ascending: false })
-      .limit(100);
-
-    if (fallbackQueryResult.error) {
-      return NextResponse.json({ message: fallbackQueryResult.error.message }, { status: 500 });
-    }
-
-    return NextResponse.json(fallbackQueryResult.data ?? [], { status: 200 });
-  }
 
   const { data, error } = queryResult;
 
@@ -147,6 +74,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -167,6 +97,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         email: payload.email?.trim() || null,
         address: payload.address?.trim() || null,
         source: payload.source?.trim() || null,
+        account_type: payload.account_type ?? 'unknown',
+        assigned_producer: payload.assigned_producer?.trim() || null,
+        csr: payload.csr?.trim() || null,
+        since_date: payload.since_date ?? null,
         email_consent: payload.email_consent ?? false,
         sms_consent: payload.sms_consent ?? false,
         preferred_channel: payload.preferred_channel?.trim() || 'email',
@@ -174,31 +108,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     ])
     .select('*')
     .single();
-
-  if (insertResult.error && isColumnError(insertResult.error.message)) {
-    const fallbackInsertResult = await supabase
-      .from('clients')
-      .insert([
-        {
-          full_name: payload.full_name.trim(),
-          phone: payload.phone?.trim() || null,
-          email: payload.email?.trim() || null,
-          address: payload.address?.trim() || null,
-          source: payload.source?.trim() || null,
-          email_consent: payload.email_consent ?? false,
-          sms_consent: payload.sms_consent ?? false,
-          preferred_channel: payload.preferred_channel?.trim() || 'email',
-        },
-      ])
-      .select('*')
-      .single();
-
-    if (fallbackInsertResult.error) {
-      return NextResponse.json({ message: fallbackInsertResult.error.message }, { status: 500 });
-    }
-
-    return NextResponse.json(fallbackInsertResult.data, { status: 201 });
-  }
 
   const { data, error } = insertResult;
 
@@ -210,6 +119,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function PATCH(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -226,6 +138,10 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   if (typeof payload.email === 'string') updates.email = payload.email.trim() || null;
   if (typeof payload.address === 'string') updates.address = payload.address.trim() || null;
   if (typeof payload.source === 'string') updates.source = payload.source.trim() || null;
+  if (payload.account_type === 'unknown' || payload.account_type === 'personal' || payload.account_type === 'commercial') updates.account_type = payload.account_type;
+  if (typeof payload.assigned_producer === 'string' || payload.assigned_producer === null) updates.assigned_producer = payload.assigned_producer?.trim() || null;
+  if (typeof payload.csr === 'string' || payload.csr === null) updates.csr = payload.csr?.trim() || null;
+  if (typeof payload.since_date === 'string' || payload.since_date === null) updates.since_date = payload.since_date;
   if (typeof payload.email_consent === 'boolean') updates.email_consent = payload.email_consent;
   if (typeof payload.sms_consent === 'boolean') updates.sms_consent = payload.sms_consent;
   if (typeof payload.preferred_channel === 'string') updates.preferred_channel = payload.preferred_channel.trim();
@@ -259,28 +175,6 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   }
 
   const updateResult = await supabase.from('clients').update(updates).eq('id', payload.id).select('*').single();
-  if (updateResult.error && isColumnError(updateResult.error.message)) {
-    const {
-      source: _source,
-      policy_effective_at: _policyEffectiveAt,
-      last_viewed_at: _lastViewedAt,
-      last_activity_at: _lastActivityAt,
-      ...fallbackUpdates
-    } = updates;
-
-    if (Object.keys(fallbackUpdates).length === 0) {
-      return NextResponse.json({ message: 'Client notification tracking columns are not available yet.' }, { status: 200 });
-    }
-
-    const fallbackUpdateResult = await supabase.from('clients').update(fallbackUpdates).eq('id', payload.id).select('*').single();
-
-    if (fallbackUpdateResult.error) {
-      return NextResponse.json({ message: fallbackUpdateResult.error.message }, { status: 500 });
-    }
-
-    return NextResponse.json(fallbackUpdateResult.data, { status: 200 });
-  }
-
   const { data, error } = updateResult;
   if (error) {
     return NextResponse.json({ message: error.message }, { status: 500 });
@@ -290,6 +184,9 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function DELETE(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });

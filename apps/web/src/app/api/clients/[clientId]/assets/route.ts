@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
+import { requireApiSession } from '../../../../../lib/api-auth';
 
 interface RouteContext {
   params: Promise<{ clientId: string }>;
@@ -13,7 +14,10 @@ interface AssetPayload {
   metadata?: Record<string, unknown>;
 }
 
-export async function GET(_request: NextRequest, context: RouteContext): Promise<NextResponse> {
+export async function GET(request: NextRequest, context: RouteContext): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -35,6 +39,9 @@ export async function GET(_request: NextRequest, context: RouteContext): Promise
 }
 
 export async function POST(request: NextRequest, context: RouteContext): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -68,6 +75,9 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
 }
 
 export async function PATCH(request: NextRequest, context: RouteContext): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -101,6 +111,9 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
 }
 
 export async function DELETE(request: NextRequest, context: RouteContext): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });

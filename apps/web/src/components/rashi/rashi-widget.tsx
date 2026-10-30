@@ -111,7 +111,7 @@ function InlineMd({ children: text }: { children: string }): JSX.Element {
       components={{
         p: ({ children: nodes }) => <>{nodes}</>,
         strong: ({ children: nodes }) => (
-          <strong className="rounded bg-blue-100 px-0.5 font-bold text-[#0f62af]">{nodes}</strong>
+          <strong className="rounded bg-blue-100 px-0.5 font-bold text-[#167495]">{nodes}</strong>
         ),
       }}
     >
@@ -279,7 +279,7 @@ export default function RashiWidget(): JSX.Element {
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="fixed bottom-4 right-4 z-[80] rounded-full bg-[#0b2545] px-4 py-2 text-xs font-semibold text-white shadow-lg transition hover:bg-[#133a6b]"
+        className="fixed bottom-4 right-4 z-[80] rounded-full bg-[#23282c] px-4 py-2 text-xs font-semibold text-white shadow-lg transition hover:bg-[#133a6b]"
       >
         {open ? 'Hide Rashi' : 'Rashi'}
       </button>
@@ -309,14 +309,14 @@ export default function RashiWidget(): JSX.Element {
           {analyzeContext && !isLearningMode ? (
             <div className="border-b border-[#eceef3] bg-[#f7f9fd] px-3 py-2">
               <div className="mb-1 flex items-center justify-between">
-                <p className="text-[11px] font-semibold text-[#0b2545]">Proactive Insights: {targetLabel || analyzeContext.label}</p>
+                <p className="text-[11px] font-semibold text-[#23282c]">Proactive Insights: {targetLabel || analyzeContext.label}</p>
                 <button
                   type="button"
                   onClick={() => {
                     void runProactiveAnalyze(true);
                   }}
                   disabled={analyzeLoading}
-                  className="text-[10px] font-semibold text-[#0f62af] disabled:text-[#92a4bc]"
+                  className="text-[10px] font-semibold text-[#167495] disabled:text-[#92a4bc]"
                 >
                   {analyzeLoading ? 'Scanning...' : 'Refresh'}
                 </button>
@@ -376,7 +376,7 @@ export default function RashiWidget(): JSX.Element {
                       p: ({ children }) => <p className="my-1">{children}</p>,
                       ul: ({ children }) => <ul className="list-disc space-y-1 pl-4">{children}</ul>,
                       li: ({ children }) => <li className="my-1">{children}</li>,
-                      strong: ({ children }) => <strong className="rounded bg-blue-100 px-0.5 font-bold text-[#0f62af]">{children}</strong>,
+                      strong: ({ children }) => <strong className="rounded bg-blue-100 px-0.5 font-bold text-[#167495]">{children}</strong>,
                     }}
                   >
                     {message.content}
@@ -401,7 +401,7 @@ export default function RashiWidget(): JSX.Element {
                     void submitMessage();
                   }
                 }}
-                className="w-full rounded-lg border border-[#d6dbe5] bg-[#f7f9fd] px-3 py-2 pr-12 text-xs text-[#081a30] outline-none transition focus:border-[#0f62af] focus:bg-white"
+                className="w-full rounded-lg border border-[#d6dbe5] bg-[#f7f9fd] px-3 py-2 pr-12 text-xs text-[#081a30] outline-none transition focus:border-[#167495] focus:bg-white"
               />
               <button
                 type="button"
@@ -409,7 +409,7 @@ export default function RashiWidget(): JSX.Element {
                   void submitMessage();
                 }}
                 disabled={sending}
-                className="absolute right-2 text-xs font-bold text-[#0f62af] transition hover:text-[#0b4b87] disabled:cursor-not-allowed disabled:text-[#92a4bc]"
+                className="absolute right-2 text-xs font-bold text-[#167495] transition hover:text-[#0b4b87] disabled:cursor-not-allowed disabled:text-[#92a4bc]"
               >
                 {sending ? '...' : 'Ask'}
               </button>

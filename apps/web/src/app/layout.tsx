@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import RashiWidget from '../components/rashi/rashi-widget';
+import AppShell from '../components/layout/AppShell';
 import { NavProvider } from '../context/NavContext';
 import { NotificationProvider } from '../context/NotificationContext';
 
@@ -12,11 +12,12 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>
+      <body className="bg-cui-body text-cui-text antialiased">
         <NotificationProvider>
-          <NavProvider>{children}</NavProvider>
+          <NavProvider>
+            <AppShell>{children}</AppShell>
+          </NavProvider>
         </NotificationProvider>
-        <RashiWidget />
       </body>
     </html>
   );

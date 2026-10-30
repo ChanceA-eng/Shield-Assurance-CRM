@@ -33,12 +33,6 @@ interface UpdateEventPayload {
   related_id?: string;
 }
 
-function isColumnError(message: string | undefined): boolean {
-  if (!message) return false;
-  const value = message.toLowerCase();
-  return value.includes('column') || value.includes('schema cache') || value.includes('does not exist');
-}
-
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -126,25 +120,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     .select('*')
     .single();
 
-  let event = insertedEvent.data;
-  let insertError = insertedEvent.error;
-
-  if (insertError && isColumnError(insertError.message)) {
-    const fallbackInsert = await supabase
-      .from('events')
-      .insert([
-        {
-          client_id: payload.client_id?.trim() || null,
-          subject,
-          event_date: payload.event_date,
-        },
-      ])
-      .select('*')
-      .single();
-
-    event = fallbackInsert.data;
-    insertError = fallbackInsert.error;
-  }
+  const event = insertedEvent.data;
+  const insertError = insertedEvent.error;
 
   if (insertError || !event) {
     return NextResponse.json({ message: insertError?.message ?? 'Failed to create event.' }, { status: 500 });
@@ -223,14 +200,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'No update fields were provided.' }, { status: 400 });
   }
 
-  let updateResult = await supabase.from('events').update(updates).eq('id', payload.id).select('*').single();
-
-  if (updateResult.error && isColumnError(updateResult.error.message)) {
-    const minimalUpdates: Record<string, string> = {};
-    if (typeof updates.subject === 'string') minimalUpdates.subject = updates.subject;
-    if (typeof updates.event_date === 'string') minimalUpdates.event_date = updates.event_date;
-    updateResult = await supabase.from('events').update(minimalUpdates).eq('id', payload.id).select('*').single();
-  }
+  const updateResult = await supabase.from('events').update(updates).eq('id', payload.id).select('*').single();
 
   const { data, error } = updateResult;
 
