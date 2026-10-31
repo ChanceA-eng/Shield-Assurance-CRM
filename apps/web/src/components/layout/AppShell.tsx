@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation';
 import AppHeader from './AppHeader';
 import AppSidebar from './AppSidebar';
+import NewLeadBanner from './NewLeadBanner';
 import RashiWidget from '../rashi/rashi-widget';
 
 export default function AppShell({ children }: { children: React.ReactNode }): JSX.Element {
@@ -16,6 +17,7 @@ export default function AppShell({ children }: { children: React.ReactNode }): J
     <>
       <div className="flex h-screen w-screen flex-col overflow-hidden">
         <AppHeader />
+        <NewLeadBanner />
         <div className="relative flex flex-1 flex-row overflow-hidden">
           <AppSidebar />
           <main className="min-w-0 flex-1 overflow-y-auto bg-cui-body">{children}</main>

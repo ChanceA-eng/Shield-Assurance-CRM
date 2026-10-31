@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import type { Route } from 'next';
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarClock, CircleDollarSign, ShieldAlert, Users } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -20,7 +21,17 @@ interface RecentRecord {
   type: string;
   name: string;
   touchedAt: string;
+  href?: string | null;
 }
+
+const ACTIVITY_BADGE_TONES: Record<string, string> = {
+  'New Lead': 'bg-cui-success/15 text-green-700',
+  'Lead Update': 'bg-cui-warning/20 text-amber-700',
+  'Reply In': 'bg-cui-danger/15 text-cui-danger',
+  'Message Sent': 'bg-cui-primary/15 text-cui-primary',
+  'Task Done': 'bg-cui-light text-cui-muted',
+  Client: 'bg-cui-info/15 text-cui-info',
+};
 
 interface TaskRow {
   id: string;
@@ -349,13 +360,22 @@ export default function DashboardPage(): JSX.Element {
                 {recent.map((record) => (
                   <li key={`${record.type}-${record.id}`} className="flex items-center gap-3 px-4 py-2.5">
                     <span
-                      className={`rounded px-2 py-0.5 text-[11px] font-bold uppercase ${
-                        record.type === 'Client' ? 'bg-cui-info/15 text-cui-info' : 'bg-cui-primary/15 text-cui-primary'
+                      className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-bold uppercase ${
+                        ACTIVITY_BADGE_TONES[record.type] ?? 'bg-cui-light text-cui-muted'
                       }`}
                     >
                       {record.type}
                     </span>
-                    <span className="flex-1 truncate text-sm text-cui-text">{record.name}</span>
+                    {record.href ? (
+                      <Link
+                        href={record.href as Route}
+                        className="flex-1 truncate text-sm font-medium text-cui-text hover:text-cui-primary hover:underline"
+                      >
+                        {record.name}
+                      </Link>
+                    ) : (
+                      <span className="flex-1 truncate text-sm text-cui-text">{record.name}</span>
+                    )}
                     <span className="shrink-0 text-xs text-cui-muted">{relativeTime(record.touchedAt)}</span>
                   </li>
                 ))}

@@ -28,16 +28,25 @@ interface StatWidgetProps {
  */
 export default function StatWidget({ label, value, color, icon: Icon, href, footer }: StatWidgetProps): JSX.Element {
   const body = (
-    <div className={clsx('relative overflow-hidden rounded p-4 text-white shadow-card transition hover:brightness-105', colorClasses[color])}>
+    <div
+      className={clsx(
+        'relative flex h-full min-h-[118px] flex-col overflow-hidden rounded p-4 text-white shadow-card transition hover:brightness-105',
+        colorClasses[color],
+      )}
+    >
       <Icon className="absolute -right-2 -top-2 h-16 w-16 opacity-20" />
       <p className="text-2xl font-bold leading-tight">{value}</p>
       <p className="mt-0.5 text-sm text-white/80">{label}</p>
-      {footer ? <div className="mt-3">{footer}</div> : null}
+      {footer ? <div className="mt-auto pt-3">{footer}</div> : null}
     </div>
   );
 
   if (href) {
-    return <Link href={href as Route}>{body}</Link>;
+    return (
+      <Link href={href as Route} className="block h-full">
+        {body}
+      </Link>
+    );
   }
 
   return body;

@@ -464,12 +464,15 @@ function AnswerLines({ text }: { text: string }): JSX.Element | null {
     .filter((line) => line.length > 0)
     // JSON fragments are machine noise; the structured sections cover that data.
     .filter((line) => !/[:=]\s*[{[]/.test(line) && !line.startsWith('{') && !line.startsWith('['));
-  if (lines.length === 0) return null;
+  if (lines.length === 0) {
+    // Everything was machine noise — show the raw text rather than nothing.
+    return <p className="whitespace-pre-wrap break-all text-sm text-cui-text">{text}</p>;
+  }
 
   return (
     <div className="space-y-1">
       {lines.map((line, index) => {
-        const match = line.match(/^([^:]{2,48}):\s*(.+)$/);
+        const match = line.match(/^([^:]{2,64}):\s*(.+)$/);
         if (match) {
           return (
             <div key={index} className="text-sm">
@@ -1563,7 +1566,11 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
                   <div className="border-b border-cui-border/40 bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">Notes & History</div>
                   {notes.slice(0, 15).map((note) => (
                     <div key={note.id} className="border-t border-cui-light px-3 py-2 first:border-t-0">
-                      <p className="text-sm text-cui-text">{note.content}</p>
+                      {note.content && note.content.includes('\n') ? (
+                        <AnswerLines text={note.content} />
+                      ) : (
+                        <p className="text-sm text-cui-text">{note.content}</p>
+                      )}
                       <p className="mt-0.5 text-[11px] text-cui-muted">{prettyDateTime(note.created_at)}</p>
                     </div>
                   ))}
