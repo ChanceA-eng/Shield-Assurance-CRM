@@ -603,6 +603,7 @@ function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): J
 
   const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value.trim() : null);
   const consent = isRecord(metadata.contactConsent) ? metadata.contactConsent : {};
+  const businessReview = isRecord(metadata.businessReview) ? metadata.businessReview : {};
   const submittedAt = fullDateTime(
     text(metadata.submittedAt) ??
       text(payload.submission_date as string) ??
@@ -646,6 +647,11 @@ function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): J
           value={text(routingContext.sourceChannel) ?? text(payload.source_page as string) ?? text(payload.from as string) ?? text(metadata.page)}
         />
         <Field label="Business name" value={text(metadata.businessName)} />
+        <Field
+          label="Industry"
+          value={text(businessReview.industry) ? humanizeKey(String(businessReview.industry)) : null}
+        />
+        <Field label="What they do" value={text(businessReview.activity)} />
         <Field
           label="Preferred contact"
           value={text(metadata.preferredContactMethod) ? humanizeKey(String(metadata.preferredContactMethod)) : null}

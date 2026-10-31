@@ -123,6 +123,32 @@ export function buildGrounding(lead: LeadLike): string {
     }
   }
 
+  // Website submissions: the prospect's own form answers are the strongest
+  // grounding there is — feed them verbatim.
+  const payloadRec = (lead.form_payload ?? {}) as Record<string, unknown>;
+  const webMeta = (payloadRec.metadata ?? {}) as Record<string, unknown>;
+  const webGuide = (webMeta.guide ?? {}) as Record<string, unknown>;
+  const answers =
+    text(webGuide.message) ??
+    text(payloadRec.message) ??
+    text(payloadRec.risk_details) ??
+    text(payloadRec.details) ??
+    text(payloadRec.requirements);
+  if (answers) {
+    const submitted =
+      text(webMeta.submittedAt) ?? text(payloadRec.submission_date) ?? text(payloadRec.created_at);
+    if (submitted) lines.push(section('They submitted the website form on', submitted.slice(0, 10)));
+    lines.push(section('Business name', text(webMeta.businessName)));
+    lines.push(
+      section('Preferred contact method (honor this)', text(webMeta.preferredContactMethod)),
+    );
+    lines.push('Their exact answers on the quote request form:');
+    for (const answerLine of answers.split(/\r?\n/)) {
+      const trimmed = answerLine.trim();
+      if (trimmed && !/[:=]\s*[{[]/.test(trimmed) && !trimmed.startsWith('{')) lines.push(`  ${trimmed}`);
+    }
+  }
+
   lines.push(section('Address', lead.address));
 
   // Verified public records pulled from government sources (strong, citable facts).

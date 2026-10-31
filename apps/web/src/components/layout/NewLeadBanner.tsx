@@ -65,9 +65,6 @@ export default function NewLeadBanner(): JSX.Element | null {
   const visible = leads.filter((lead) => !dismissed.has(lead.id));
   if (visible.length === 0) return null;
 
-  const lead = visible[0];
-  const extra = visible.length - 1;
-
   const dismiss = (id: string): void => {
     const next = new Set(dismissed);
     next.add(id);
@@ -79,36 +76,44 @@ export default function NewLeadBanner(): JSX.Element | null {
     }
   };
 
+  // Every unhandled lead gets its own row; they stack until opened or dismissed.
   return (
-    <div className="flex shrink-0 items-center gap-2.5 border-b border-orange-300 bg-orange-100 px-4 py-1.5 text-sm">
-      <UserPlus className="h-4 w-4 shrink-0 text-orange-700" />
-      <p className="min-w-0 flex-1 truncate text-cui-text">
-        <span className="font-bold text-orange-900">New website lead:</span>{' '}
-        <Link href={`/leads?lead=${lead.id}` as Route} className="font-semibold text-cui-primary hover:underline">
-          {lead.full_name}
-        </Link>
-        {lead.line_of_business ? <span className="text-orange-900/70"> · {lead.line_of_business}</span> : null}
-        <span className="text-orange-900/70"> · {relativeTime(lead.arrived_at)}</span>
-        {extra > 0 ? (
-          <Link href={'/leads' as Route} className="ml-2 font-semibold text-cui-primary hover:underline">
-            +{extra} more waiting
+    <div className="flex max-h-[50vh] shrink-0 flex-col overflow-y-auto">
+      {visible.map((lead) => (
+        <div
+          key={lead.id}
+          className="flex shrink-0 items-center gap-2.5 border-b border-orange-300 bg-orange-100 px-4 py-1.5 text-sm"
+        >
+          <UserPlus className="h-4 w-4 shrink-0 text-orange-700" />
+          <p className="min-w-0 flex-1 truncate text-cui-text">
+            <span className="font-bold text-orange-900">New website lead:</span>{' '}
+            <Link
+              href={`/leads?lead=${lead.id}` as Route}
+              onClick={() => dismiss(lead.id)}
+              className="font-semibold text-cui-primary hover:underline"
+            >
+              {lead.full_name}
+            </Link>
+            {lead.line_of_business ? <span className="text-orange-900/70"> · {lead.line_of_business}</span> : null}
+            <span className="text-orange-900/70"> · {relativeTime(lead.arrived_at)}</span>
+          </p>
+          <Link
+            href={`/leads?lead=${lead.id}` as Route}
+            onClick={() => dismiss(lead.id)}
+            className="shrink-0 rounded bg-cui-primary px-2.5 py-0.5 text-xs font-semibold text-white transition hover:bg-cui-primary/90"
+          >
+            Open profile
           </Link>
-        ) : null}
-      </p>
-      <Link
-        href={`/leads?lead=${lead.id}` as Route}
-        className="shrink-0 rounded bg-cui-primary px-2.5 py-0.5 text-xs font-semibold text-white transition hover:bg-cui-primary/90"
-      >
-        Open profile
-      </Link>
-      <button
-        type="button"
-        onClick={() => dismiss(lead.id)}
-        className="shrink-0 rounded p-0.5 text-orange-700 transition hover:text-orange-950"
-        aria-label="Dismiss"
-      >
-        <X className="h-4 w-4" />
-      </button>
+          <button
+            type="button"
+            onClick={() => dismiss(lead.id)}
+            className="shrink-0 rounded p-0.5 text-orange-700 transition hover:text-orange-950"
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

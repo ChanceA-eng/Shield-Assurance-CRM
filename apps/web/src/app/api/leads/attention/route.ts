@@ -52,7 +52,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }))
     .filter((lead) => new Date(lead.arrived_at).getTime() >= weekAgo)
     .sort((a, b) => b.arrived_at.localeCompare(a.arrived_at))
-    .slice(0, 5);
+    .slice(0, 20);
 
   return NextResponse.json({ leads }, { status: 200 });
 }
