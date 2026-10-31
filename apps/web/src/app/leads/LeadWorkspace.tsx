@@ -438,6 +438,129 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function fullDateTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * Renders a freeform text blob as readable Q&A: lines shaped like
+ * "Question: answer" get a bold label and highlighted answer; raw JSON
+ * fragments are dropped; everything else stays as plain text.
+ */
+function AnswerLines({ text }: { text: string }): JSX.Element | null {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    // JSON fragments are machine noise; the structured sections cover that data.
+    .filter((line) => !/[:=]\s*[{[]/.test(line) && !line.startsWith('{') && !line.startsWith('['));
+  if (lines.length === 0) return null;
+
+  return (
+    <div className="space-y-1">
+      {lines.map((line, index) => {
+        const match = line.match(/^([^:]{2,48}):\s*(.+)$/);
+        if (match) {
+          return (
+            <div key={index} className="text-sm">
+              <span className="font-semibold text-cui-muted">{match[1].trim()}:</span>{' '}
+              <span className="rounded bg-cui-warning/15 px-1 font-medium text-cui-text">{match[2].trim()}</span>
+            </div>
+          );
+        }
+        return (
+          <p key={index} className="text-sm font-semibold text-cui-text">
+            {line.replace(/:$/, '')}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Structured view of a website quote-request submission. */
+function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): JSX.Element {
+  const metadata = isRecord(payload.metadata) ? payload.metadata : {};
+  const guide = isRecord(metadata.guide) ? metadata.guide : {};
+  const assets = isRecord(metadata.assets) ? metadata.assets : {};
+  const routing = isRecord(metadata.routing) ? metadata.routing : {};
+  const routingContext = isRecord(metadata.routingContext) ? metadata.routingContext : {};
+  const auto = isRecord(assets.auto) ? assets.auto : {};
+  const home = isRecord(assets.home) ? assets.home : {};
+  const business = isRecord(assets.business) ? assets.business : {};
+
+  const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value.trim() : null);
+  const submittedAt = fullDateTime(text(metadata.submittedAt) ?? text(payload.created_at as string));
+
+  const requested = [text(guide.label) ?? text(guide.category), text(guide.tier)].filter(Boolean).join(' · ');
+  const bundles = Array.isArray(assets.bundleSelections)
+    ? (assets.bundleSelections as unknown[]).map((item) => String(item)).filter(Boolean)
+    : [];
+
+  const vehicle = [text(auto.year), text(auto.make), text(auto.model)].filter(Boolean).join(' ');
+  const answersText = text(guide.message) ?? text(payload.risk_details as string);
+
+  return (
+    <div className="space-y-4">
+      <ProfileSection title="Website Submission">
+        <Field label="Submitted" value={submittedAt} />
+        <Field label="Requested" value={requested || null} />
+        <Field label="From" value={text(routingContext.sourceChannel) ?? text(payload.source_page as string) ?? text(metadata.page)} />
+        {bundles.length > 0 ? <Field label="Also interested in" value={bundles.join(', ')} /> : null}
+      </ProfileSection>
+
+      {answersText ? (
+        <ProfileSection title="What They Asked For">
+          <AnswerLines text={answersText} />
+        </ProfileSection>
+      ) : null}
+
+      {vehicle || text(auto.vin) || text(home.address) || text(business.industry) ? (
+        <ProfileSection title="Assets Mentioned">
+          <Field label="Vehicle" value={vehicle || null} />
+          <Field label="VIN" value={text(auto.vin)} />
+          <Field label="Home address" value={text(home.address)} />
+          <Field label="Business industry" value={text(business.industry)} />
+        </ProfileSection>
+      ) : null}
+
+      <ProfileSection title="Contact Provided">
+        <Field label="Name" value={text(routing.fullName) ?? text(payload.client_name as string)} />
+        <Field label="Email" value={text(routing.email) ?? text(payload.email as string)} />
+        <Field label="Phone" value={formatPhone(text(routing.phone) ?? text(payload.phone as string))} />
+        <Field label="ZIP" value={text(routing.zipCode)} />
+      </ProfileSection>
+    </div>
+  );
+}
+
+/** snake_case / camelCase keys become readable labels. */
+function humanizeKey(key: string): string {
+  return key
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+/** Displays US phone numbers as (xxx) xxx-xxxx regardless of stored format. */
+function formatPhone(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const digits = value.replace(/\D/g, '');
+  const core = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  if (core.length !== 10) return value;
+  return `(${core.slice(0, 3)}) ${core.slice(3, 6)}-${core.slice(6)}`;
+}
+
 function renderPayloadValue(value: unknown): string {
   if (Array.isArray(value)) return value.map((item) => renderPayloadValue(item)).join(', ');
   if (value === null || typeof value === 'undefined') return '--';
@@ -880,6 +1003,13 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
   };
 
   const structuredProfile = isRecord(fullPayload?.profile) ? fullPayload.profile : null;
+  // Website quote requests carry a routing/metadata envelope instead of a vendor profile.
+  const websitePayload =
+    !structuredProfile &&
+    fullPayload &&
+    (isRecord(fullPayload.metadata) || typeof fullPayload.intake_route === 'string' || typeof fullPayload.client_name === 'string')
+      ? fullPayload
+      : null;
   const payloadEntries = fullPayload
     ? Object.entries(fullPayload).filter(([key]) => !['_request', 'profile', 'import', 'repaired_at', 'row', 'merged_from'].includes(key))
     : [];
@@ -995,7 +1125,7 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
           {tab === 'overview' ? (
             <div className="space-y-4">
               <div className="grid gap-2 text-sm md:grid-cols-2">
-                <div><span className="font-semibold text-cui-muted">Phone:</span> {lead.phone || '--'}</div>
+                <div><span className="font-semibold text-cui-muted">Phone:</span> {formatPhone(lead.phone) || '--'}</div>
                 <div className="break-all"><span className="font-semibold text-cui-muted">Email:</span> {lead.email || '--'}</div>
                 <div className="md:col-span-2"><span className="font-semibold text-cui-muted">Address:</span> {lead.address || '--'}</div>
                 <div><span className="font-semibold text-cui-muted">Created:</span> {prettyDateTime(lead.created_at)}</div>
@@ -1132,15 +1262,23 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
                 ) : null}
               </div>
 
-              {!structuredProfile && payloadEntries.length > 0 ? (
+              {websitePayload ? <WebsiteSubmission payload={websitePayload} /> : null}
+
+              {!structuredProfile && !websitePayload && payloadEntries.length > 0 ? (
                 <div className="rounded border border-cui-border/60">
                   <div className="border-b border-cui-border/40 bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">Submitted Fields</div>
                   <table className="w-full text-left text-sm">
                     <tbody>
                       {payloadEntries.map(([key, value]) => (
                         <tr key={key} className="border-t border-cui-light first:border-t-0">
-                          <td className="w-40 px-3 py-1.5 align-top font-semibold text-cui-primary">{key}</td>
-                          <td className="break-all px-3 py-1.5">{renderPayloadValue(value)}</td>
+                          <td className="w-40 px-3 py-1.5 align-top font-semibold text-cui-muted">{humanizeKey(key)}</td>
+                          <td className="break-all px-3 py-1.5">
+                            {typeof value === 'string' && value.includes('\n') ? (
+                              <AnswerLines text={value} />
+                            ) : (
+                              <span className="font-medium text-cui-text">{renderPayloadValue(value)}</span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

@@ -86,15 +86,31 @@ function buildDetails(lead: Record<string, unknown>): string | null {
   return lines.length > 0 ? lines.join('\n') : null;
 }
 
+/** Digs the submitter's identity out of the website payload, wherever it lives. */
+function extractIdentity(lead: Record<string, unknown>): { fullName: string; email: string | null; phone: string | null } {
+  const metadata = (lead.metadata ?? {}) as Record<string, unknown>;
+  const routing = (metadata.routing ?? {}) as Record<string, unknown>;
+
+  const fullName =
+    asString(lead.full_name) ??
+    asString(lead.name) ??
+    asString(lead.client_name) ??
+    asString(routing.fullName) ??
+    'Unknown Web Lead';
+
+  const emailRaw = asString(lead.email) ?? asString(routing.email);
+  const phone = asString(lead.phone) ?? asString(routing.phone);
+
+  return { fullName, email: emailRaw ? emailRaw.toLowerCase() : null, phone };
+}
+
 function normalizeExternalLead(lead: Record<string, unknown>): SyncLeadRecord {
-  const fullName = asString(lead.full_name) ?? asString(lead.name) ?? 'Unknown Web Lead';
-  const emailRaw = asString(lead.email);
-  const email = emailRaw ? emailRaw.toLowerCase() : null;
+  const identity = extractIdentity(lead);
 
   return {
-    full_name: fullName,
-    email,
-    phone: asString(lead.phone),
+    full_name: identity.fullName,
+    email: identity.email,
+    phone: identity.phone,
     details: buildDetails(lead),
     source: 'website-pull',
     status: normalizeStatus(lead.status),

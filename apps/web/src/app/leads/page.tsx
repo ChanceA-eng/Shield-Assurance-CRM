@@ -64,6 +64,15 @@ function premiumOf(lead: { estimated_premium?: number | string | null }): number
   return 0;
 }
 
+/** Displays US phone numbers as (xxx) xxx-xxxx regardless of stored format. */
+function formatPhone(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const digits = value.replace(/\D/g, '');
+  const core = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  if (core.length !== 10) return value;
+  return `(${core.slice(0, 3)}) ${core.slice(3, 6)}-${core.slice(6)}`;
+}
+
 interface LeadTaskRow {
   id: string;
   subject: string;
@@ -890,7 +899,7 @@ export default function LeadsPage(): JSX.Element {
                           <p className="truncate text-xs text-[#73818f]">{lead.line_of_business || 'No line of business'}</p>
                         </td>
                         <td className="px-3 py-2.5">
-                          <p className="max-w-40 truncate text-[#23282c]">{lead.phone || '--'}</p>
+                          <p className="max-w-40 truncate text-[#23282c]">{formatPhone(lead.phone) || '--'}</p>
                           <p className="max-w-40 truncate text-xs text-[#73818f]">{lead.email || '--'}</p>
                         </td>
                         <td className="px-3 py-2.5">
