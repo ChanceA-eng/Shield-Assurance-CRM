@@ -721,6 +721,8 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
     const value = toNumber(lead.estimated_premium);
     return value > 0 ? String(value) : '';
   });
+  const [nameDraft, setNameDraft] = useState<string>(lead.full_name ?? '');
+  const [addressDraft, setAddressDraft] = useState<string>(lead.address ?? '');
   const [phoneDraft, setPhoneDraft] = useState<string>(lead.phone ?? '');
   const [emailDraft, setEmailDraft] = useState<string>(lead.email ?? '');
   const [isSavingPremium, setIsSavingPremium] = useState(false);
@@ -889,6 +891,8 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
         body: JSON.stringify({
           id: lead.id,
           estimated_premium: premiumDraft || '0',
+          full_name: nameDraft.trim() || lead.full_name,
+          address: addressDraft.trim(),
           phone: phoneDraft.trim(),
           email: emailDraft.trim().toLowerCase(),
         }),
@@ -1172,8 +1176,16 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
             </div>
           </div>
 
-          {/* Quick edit: contact + premium */}
+          {/* Quick edit: identity + contact + premium (fix anything a client corrects on a call) */}
           <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={nameDraft}
+              onChange={(event) => setNameDraft(event.target.value)}
+              placeholder="Name"
+              title="Legal or preferred name — edit if the client corrects it"
+              className="w-48 rounded border border-cui-border px-2 py-1 text-sm"
+            />
             <input
               type="tel"
               value={phoneDraft}
@@ -1187,6 +1199,14 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
               onChange={(event) => setEmailDraft(event.target.value)}
               placeholder="Email"
               className="w-52 rounded border border-cui-border px-2 py-1 text-sm"
+            />
+            <input
+              type="text"
+              value={addressDraft}
+              onChange={(event) => setAddressDraft(event.target.value)}
+              placeholder="Address"
+              title="Street, city, state, ZIP"
+              className="w-72 min-w-48 flex-1 rounded border border-cui-border px-2 py-1 text-sm"
             />
             <div className="flex items-center gap-1">
               <span className="text-xs font-semibold text-cui-muted">$</span>

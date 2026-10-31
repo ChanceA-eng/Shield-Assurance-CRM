@@ -13,6 +13,7 @@ interface NewLeadPayload {
   full_name?: string;
   phone?: string;
   email?: string;
+  address?: string;
   zip?: string;
   state?: string;
   business?: string;
@@ -246,6 +247,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   if (typeof payload.phone === 'string') updates.phone = payload.phone.trim() || null;
   if (typeof payload.email === 'string') updates.email = payload.email.trim() || null;
   if (typeof payload.zip === 'string') updates.zip = payload.zip.trim() || null;
+  if (typeof payload.address === 'string') updates.address = payload.address.trim() || null;
   if (typeof payload.state === 'string') updates.state = payload.state.trim() || null;
   if (typeof payload.business === 'string') updates.business = payload.business.trim() || null;
   if (typeof payload.primaryCoverage === 'string') updates.primary_coverage = payload.primaryCoverage.trim() || null;

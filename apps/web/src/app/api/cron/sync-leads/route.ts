@@ -18,10 +18,6 @@ interface SyncLeadRecord {
   form_payload: Record<string, unknown>;
 }
 
-interface LeadIdRow {
-  id: string;
-}
-
 function isAuthorizedCron(request: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET?.trim();
   const authHeader = request.headers.get('authorization') ?? '';
@@ -121,6 +117,34 @@ function normalizeExternalLead(lead: Record<string, unknown>): SyncLeadRecord {
   };
 }
 
+interface RoutineLeadRow {
+  id: string;
+  full_name: string;
+  status: string | null;
+}
+
+/** Stage-aware wording so every task names the person and the actual next step. */
+function followUpTaskFor(lead: RoutineLeadRow): { subject: string; description: string } {
+  const name = lead.full_name?.trim() || 'this prospect';
+  const status = (lead.status ?? 'new').toLowerCase();
+  if (status === 'quoted') {
+    return {
+      subject: `Follow up on ${name}'s quote`,
+      description: `${name} has a quote in hand but hasn't moved. Ask where they stand and what it would take to close.`,
+    };
+  }
+  if (status === 'contacted') {
+    return {
+      subject: `Follow up with ${name}`,
+      description: `You've already reached out to ${name} — keep the conversation moving with a call or a short note.`,
+    };
+  }
+  return {
+    subject: `Make first contact with ${name}`,
+    description: `${name} is still untouched in your pipeline. Introduce yourself and qualify their interest.`,
+  };
+}
+
 async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -134,7 +158,7 @@ async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
 
   const { data: leads, error: leadsError } = await supabase
     .from('leads')
-    .select('id')
+    .select('id,full_name,status')
     .in('status', ['new', 'contacted', 'quoted']);
 
   if (leadsError || !leads || leads.length === 0) {
@@ -162,18 +186,21 @@ async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
 
   const targetDate = nextArizonaBusinessMorning(now);
 
-  const inserts = (leads as LeadIdRow[])
+  const inserts = (leads as RoutineLeadRow[])
     .filter((lead) => !existingLeadIds.has(lead.id))
-    .map((lead) => ({
-      subject: 'Check in with this prospect',
-      description: 'Scheduled check-in — no recent activity on this prospect.',
-      due_date: targetDate.toISOString(),
-      status: 'open',
-      priority: 'medium',
-      related_type: 'lead',
-      related_id: lead.id,
-      created_at: now.toISOString(),
-    }));
+    .map((lead) => {
+      const wording = followUpTaskFor(lead);
+      return {
+        subject: wording.subject,
+        description: wording.description,
+        due_date: targetDate.toISOString(),
+        status: 'open',
+        priority: 'medium',
+        related_type: 'lead',
+        related_id: lead.id,
+        created_at: now.toISOString(),
+      };
+    });
 
   if (inserts.length === 0) {
     return { created: 0 };

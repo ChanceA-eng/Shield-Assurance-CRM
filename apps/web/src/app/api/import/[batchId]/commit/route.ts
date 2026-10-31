@@ -153,10 +153,10 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
         if (!renewal.date || !renewal.type) return null;
         const due = renewalTaskDue(renewal.date);
         if (!due) return null;
-        const incumbent = renewal.carrier ? ` — incumbent: ${renewal.carrier}` : '';
+        const incumbent = renewal.carrier ? ` — currently with ${renewal.carrier}` : '';
         return {
-          subject: `Quote ${renewal.type} — ${row.full_name}`,
-          description: `${renewal.type} renews ${renewal.date}${incumbent}${renewal.broker ? ` (broker: ${renewal.broker})` : ''}. Imported from ${batchRes.data.file_name}.`,
+          subject: `${row.full_name} — ${renewal.type} renewal approaching`,
+          description: `Their ${renewal.type} policy renews ${renewal.date}${incumbent}${renewal.broker ? ` (broker: ${renewal.broker})` : ''}. Reach out early enough to get on their quote list before the renewal window closes.`,
           due_date: due,
           status: 'open',
           priority: 'medium',
