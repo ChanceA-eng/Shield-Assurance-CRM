@@ -493,17 +493,38 @@ function AnswerLines({ text }: { text: string }): JSX.Element | null {
 
 /** Paths already rendered by the structured website sections. */
 const WEBSITE_RENDERED_PATHS = new Set([
+  'id',
   'email',
   'phone',
+  'name',
+  'fullName',
+  'full_name',
   'client_name',
   'source_page',
   'risk_details',
+  'message',
+  'details',
+  'requirements',
   'created_at',
   'status',
   'source',
+  'from',
+  'line',
+  'insurance_line',
+  'intake_route',
+  'ai_status',
+  'producer_id',
+  'submission_id',
+  'submission_date',
+  'submitted_at',
+  'line_of_business',
+  'needs_enrichment',
   'previous_submissions',
   'metadata.submittedAt',
   'metadata.page',
+  'metadata.zip',
+  'metadata.businessName',
+  'metadata.preferredContactMethod',
   'metadata.guide.label',
   'metadata.guide.category',
   'metadata.guide.tier',
@@ -524,9 +545,21 @@ const WEBSITE_RENDERED_PATHS = new Set([
   'metadata.routingContext.priorityTier',
 ]);
 
+/**
+ * Whole subtrees that only duplicate the Q&A already shown in
+ * "What They Asked For" (the website mirrors answers as key-value maps).
+ */
+const WEBSITE_SKIPPED_SUBTREES = [
+  'metadata.businessReview',
+  'lead_context',
+  'metadata.notification',
+  'metadata.contactConsent',
+];
+
 /** Flattens every leaf value not already shown, so no submitted data is hidden. */
 function collectRemainingData(value: unknown, path: string, out: Array<[string, string]>): void {
   if (WEBSITE_RENDERED_PATHS.has(path)) return;
+  if (WEBSITE_SKIPPED_SUBTREES.some((subtree) => path === subtree || path.startsWith(`${subtree}.`))) return;
   if (value === null || value === undefined || value === '') return;
   if (Array.isArray(value)) {
     if (value.every((item) => typeof item !== 'object' || item === null)) {
@@ -569,15 +602,31 @@ function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): J
   const business = isRecord(assets.business) ? assets.business : {};
 
   const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value.trim() : null);
-  const submittedAt = fullDateTime(text(metadata.submittedAt) ?? text(payload.created_at as string));
+  const consent = isRecord(metadata.contactConsent) ? metadata.contactConsent : {};
+  const submittedAt = fullDateTime(
+    text(metadata.submittedAt) ??
+      text(payload.submission_date as string) ??
+      text(consent.recordedAt) ??
+      text(payload.created_at as string),
+  );
 
-  const requested = [text(guide.label) ?? text(guide.category), text(guide.tier)].filter(Boolean).join(' · ');
+  const requested =
+    [text(guide.label) ?? text(guide.category), text(guide.tier)].filter(Boolean).join(' · ') ||
+    text(payload.insurance_line as string) ||
+    text(payload.line as string) ||
+    '';
   const bundles = Array.isArray(assets.bundleSelections)
     ? (assets.bundleSelections as unknown[]).map((item) => String(item)).filter(Boolean)
     : [];
 
   const vehicle = [text(auto.year), text(auto.make), text(auto.model)].filter(Boolean).join(' ');
-  const answersText = text(guide.message) ?? text(payload.risk_details as string);
+  // The Q&A text lives in different fields depending on which website form was used.
+  const answersText =
+    text(guide.message) ??
+    text(payload.message as string) ??
+    text(payload.risk_details as string) ??
+    text(payload.details as string) ??
+    text(payload.requirements as string);
 
   const previousSubmissions = Array.isArray(payload.previous_submissions)
     ? (payload.previous_submissions as Array<Record<string, unknown>>)
@@ -590,9 +639,17 @@ function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): J
     <div className="space-y-4">
       <ProfileSection title={previousSubmissions.length > 0 ? 'Latest Website Submission' : 'Website Submission'}>
         <Field label="Submitted" value={submittedAt} />
-        <Field label="Requested" value={requested || null} />
+        <Field label="Requested" value={requested ? humanizeKey(requested) : null} />
         <Field label="Priority" value={text(routingContext.priorityTier) ? humanizeKey(String(routingContext.priorityTier)) : null} />
-        <Field label="From" value={text(routingContext.sourceChannel) ?? text(payload.source_page as string) ?? text(metadata.page)} />
+        <Field
+          label="From"
+          value={text(routingContext.sourceChannel) ?? text(payload.source_page as string) ?? text(payload.from as string) ?? text(metadata.page)}
+        />
+        <Field label="Business name" value={text(metadata.businessName)} />
+        <Field
+          label="Preferred contact"
+          value={text(metadata.preferredContactMethod) ? humanizeKey(String(metadata.preferredContactMethod)) : null}
+        />
         {bundles.length > 0 ? <Field label="Also interested in" value={bundles.join(', ')} /> : null}
       </ProfileSection>
 
@@ -612,10 +669,21 @@ function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): J
       ) : null}
 
       <ProfileSection title="Contact Provided">
-        <Field label="Name" value={text(routing.fullName) ?? text(payload.client_name as string)} />
+        <Field
+          label="Name"
+          value={
+            text(routing.fullName) ??
+            text(payload.client_name as string) ??
+            text(payload.fullName as string) ??
+            text(payload.name as string)
+          }
+        />
         <Field label="Email" value={text(routing.email) ?? text(payload.email as string)} />
         <Field label="Phone" value={formatPhone(text(routing.phone) ?? text(payload.phone as string))} />
-        <Field label="ZIP" value={text(routing.zipCode)} />
+        <Field label="ZIP" value={text(routing.zipCode) ?? text(metadata.zip)} />
+        {consent.accepted === true ? (
+          <Field label="Contact consent" value={`Accepted${text(consent.recordedAt) ? ` — ${fullDateTime(String(consent.recordedAt))}` : ''}`} />
+        ) : null}
       </ProfileSection>
 
       {previousSubmissions.length > 0 ? (
@@ -629,10 +697,13 @@ function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): J
               const prevGuide = isRecord(prevMeta.guide) ? prevMeta.guide : {};
               const prevText =
                 (typeof prevGuide.message === 'string' && prevGuide.message.trim()) ||
+                (typeof prev.message === 'string' && prev.message.trim()) ||
                 (typeof prev.risk_details === 'string' && prev.risk_details.trim()) ||
+                (typeof prev.details === 'string' && prev.details.trim()) ||
                 null;
               const when =
                 fullDateTime(typeof prevMeta.submittedAt === 'string' ? prevMeta.submittedAt : null) ??
+                fullDateTime(typeof prev.submission_date === 'string' ? prev.submission_date : null) ??
                 fullDateTime(typeof prev.created_at === 'string' ? prev.created_at : null);
               return (
                 <div key={index} className="rounded border border-cui-border/40 p-2.5">

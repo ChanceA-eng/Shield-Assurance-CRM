@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { requireApiSession } from '../../../lib/api-auth';
 import { startOfArizonaDay } from '../../../lib/arizona-time';
-import { summarizeBriefing } from '../../../lib/outreach-ai';
 
 interface BriefingTask {
   id: string;
@@ -105,21 +104,37 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     active_sequences: activeSeqRes.count ?? 0,
   };
 
-  const facts = [
-    `Overdue tasks: ${briefing.overdue_tasks}`,
-    `Tasks due today: ${briefing.today_tasks.length}${briefing.today_tasks.length > 0 ? ` (first: ${briefing.today_tasks[0].subject})` : ''}`,
-    `Unread inbound messages: ${briefing.unread_messages}`,
-    `Outreach drafts awaiting approval: ${briefing.pending_approvals}`,
-    `New leads in the last 24h: ${briefing.new_leads_24h}`,
-    briefing.recent_replies.length > 0 ? `Prospects who replied to sequences in the last 48h: ${briefing.recent_replies.join(', ')}` : null,
-    `Leads stalled in "contacted" for 7+ days: ${briefing.stalled_leads}`,
-    `Email sequences currently running: ${briefing.active_sequences}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
-
-  const withSummary = request.nextUrl.searchParams.get('summary') !== '0';
-  const summary = withSummary ? await summarizeBriefing(facts) : null;
+  // Deterministic priority summary — computed from live data, no AI involved.
+  const priorities: string[] = [];
+  if (briefing.recent_replies.length > 0) {
+    priorities.push(
+      `${briefing.recent_replies.slice(0, 2).join(' and ')} replied to your outreach — call ${briefing.recent_replies.length === 1 ? 'them' : 'back'} first while interest is fresh`,
+    );
+  }
+  if (briefing.unread_messages > 0) {
+    priorities.push(`${briefing.unread_messages} unread ${briefing.unread_messages === 1 ? 'message needs' : 'messages need'} a reply`);
+  }
+  if (briefing.overdue_tasks > 0) {
+    priorities.push(
+      `${briefing.overdue_tasks} overdue ${briefing.overdue_tasks === 1 ? 'task' : 'tasks'}${briefing.overdue_sample[0] ? ` — oldest: "${briefing.overdue_sample[0].subject}"` : ''}`,
+    );
+  }
+  if (briefing.new_leads_24h > 0) {
+    priorities.push(`${briefing.new_leads_24h} new ${briefing.new_leads_24h === 1 ? 'lead' : 'leads'} arrived in the last 24 hours`);
+  }
+  if (briefing.pending_approvals > 0) {
+    priorities.push(`${briefing.pending_approvals} outreach ${briefing.pending_approvals === 1 ? 'draft is' : 'drafts are'} waiting for your approval`);
+  }
+  if (briefing.today_tasks.length > 0) {
+    priorities.push(`${briefing.today_tasks.length} ${briefing.today_tasks.length === 1 ? 'task is' : 'tasks are'} due today`);
+  }
+  if (priorities.length === 0 && briefing.stalled_leads > 0) {
+    priorities.push(`quiet day — a good time to revive the ${briefing.stalled_leads} leads stalled for 7+ days`);
+  }
+  const summary =
+    priorities.length > 0
+      ? `Start here: ${priorities.slice(0, 3).join('; ')}.`
+      : 'All clear — nothing urgent is waiting on you right now.';
 
   return NextResponse.json({ ...briefing, summary }, { status: 200 });
 }

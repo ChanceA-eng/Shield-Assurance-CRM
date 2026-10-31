@@ -25,7 +25,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     .from('leads')
     .select('id,full_name,line_of_business,source,created_at,form_payload')
     .eq('status', 'new')
-    .or('source.ilike.%website%,source.ilike.%web%,source.ilike.%intake%')
+    .or('source.ilike.%website%,source.ilike.%web%,source.ilike.%intake%,source.ilike.%guided%,source.ilike.%quote%,source.ilike.%review%')
     .order('created_at', { ascending: false })
     .limit(50);
   if (error) return NextResponse.json({ message: error.message }, { status: 500 });

@@ -72,7 +72,16 @@ export async function scheduleIntakeTask(
 /** Website submissions carry request context; imports carry prospect_import source. */
 export function isWarmSource(source: string | null | undefined, formPayload?: unknown): boolean {
   const normalized = (source ?? '').toLowerCase();
-  if (normalized.includes('website') || normalized.includes('web') || normalized.includes('intake')) return true;
+  if (
+    normalized.includes('website') ||
+    normalized.includes('web') ||
+    normalized.includes('intake') ||
+    normalized.includes('guided') ||
+    normalized.includes('quote') ||
+    normalized.includes('review')
+  ) {
+    return true;
+  }
   if (formPayload && typeof formPayload === 'object' && formPayload !== null && '_request' in formPayload) return true;
   return false;
 }

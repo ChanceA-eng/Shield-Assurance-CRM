@@ -84,20 +84,20 @@ export default function NewLeadBanner(): JSX.Element | null {
       <UserPlus className="h-4 w-4 shrink-0 text-orange-700" />
       <p className="min-w-0 flex-1 truncate text-cui-text">
         <span className="font-bold text-orange-900">New website lead:</span>{' '}
-        <Link href={`/leads?lead=${lead.id}` as Route} className="font-semibold text-orange-800 underline decoration-orange-400 hover:text-orange-950">
+        <Link href={`/leads?lead=${lead.id}` as Route} className="font-semibold text-cui-primary hover:underline">
           {lead.full_name}
         </Link>
         {lead.line_of_business ? <span className="text-orange-900/70"> · {lead.line_of_business}</span> : null}
         <span className="text-orange-900/70"> · {relativeTime(lead.arrived_at)}</span>
         {extra > 0 ? (
-          <Link href={'/leads' as Route} className="ml-2 font-semibold text-orange-800 underline decoration-orange-400 hover:text-orange-950">
+          <Link href={'/leads' as Route} className="ml-2 font-semibold text-cui-primary hover:underline">
             +{extra} more waiting
           </Link>
         ) : null}
       </p>
       <Link
         href={`/leads?lead=${lead.id}` as Route}
-        className="shrink-0 rounded bg-orange-600 px-2.5 py-0.5 text-xs font-semibold text-white transition hover:bg-orange-700"
+        className="shrink-0 rounded bg-cui-primary px-2.5 py-0.5 text-xs font-semibold text-white transition hover:bg-cui-primary/90"
       >
         Open profile
       </Link>
