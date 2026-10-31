@@ -4,6 +4,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Circle, Clock, Flag, Plus, User } from 'lucide-react';
 import SectionLayout from '../../components/crm/SectionLayout';
 import LeadWorkspace, { type WorkspaceLead } from '../leads/LeadWorkspace';
+import { arizonaInputToIso, endOfArizonaDay, formatArizonaDateTime, startOfArizonaDay } from '../../lib/arizona-time';
+import { workspaceFetch, workspacePages } from '../../lib/workspace-fetch';
+import { useNotifications } from '../../context/NotificationContext';
 
 interface Task {
   id: string;
@@ -17,6 +20,9 @@ interface Task {
   related_name?: string | null;
   related_status?: string | null;
   created_at: string;
+  completed_at?: string | null;
+  kind?: string;
+  updated_at?: string;
 }
 
 type Scope = 'all' | 'lead' | 'client' | 'none';
@@ -28,17 +34,11 @@ interface Bucket {
   tasks: Task[];
 }
 
-function endOf(date: Date): number {
-  const d = new Date(date);
-  d.setHours(23, 59, 59, 999);
-  return d.getTime();
-}
-
 function bucketize(tasks: Task[]): Bucket[] {
   const now = Date.now();
-  const today = endOf(new Date());
-  const tomorrow = endOf(new Date(Date.now() + 86400000));
-  const week = endOf(new Date(Date.now() + 7 * 86400000));
+  const today = endOfArizonaDay(new Date()).getTime() - 1;
+  const tomorrow = today + 86400000;
+  const week = today + 7 * 86400000;
 
   const buckets: Bucket[] = [
     { key: 'overdue', label: 'Overdue', tone: 'text-cui-danger', tasks: [] },
@@ -67,12 +67,11 @@ function bucketize(tasks: Task[]): Bucket[] {
 
 function dueLabel(value: string | null | undefined): string {
   if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return `${formatArizonaDateTime(value)} AZ`;
 }
 
 export default function TasksPage(): JSX.Element {
+  const { refresh } = useNotifications();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -90,19 +89,15 @@ export default function TasksPage(): JSX.Element {
 
   const fetchTasks = useCallback(async (): Promise<void> => {
     try {
-      const [openRes, doneRes] = await Promise.all([
-        fetch('/api/tasks?status=open&sort=due_asc&limit=200&include=related', { cache: 'no-store' }),
-        fetch('/api/tasks?status=completed&sort=created_desc&limit=100&include=related', { cache: 'no-store' }),
+      const [openRows, doneRows] = await Promise.all([
+        workspacePages<Task>('/api/tasks?status=open&sort=due_asc&limit=200&include=related', 200, 'offset'),
+        workspacePages<Task>('/api/tasks?status=completed&sort=completed_desc&limit=200&include=related', 200, 'offset'),
       ]);
-      if (!openRes.ok) {
-        setError('Failed to load tasks.');
-        return;
-      }
-      setTasks((await openRes.json()) as Task[]);
-      setCompleted(doneRes.ok ? ((await doneRes.json()) as Task[]) : []);
+      setTasks(openRows);
+      setCompleted(doneRows);
       setError(null);
-    } catch {
-      setError('Network error while loading tasks.');
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Network error while loading tasks.');
     } finally {
       setLoading(false);
     }
@@ -123,48 +118,42 @@ export default function TasksPage(): JSX.Element {
   const buckets = useMemo(() => bucketize(scoped), [scoped]);
 
   const updateTask = async (taskId: string, patch: Record<string, unknown>): Promise<void> => {
+    const task = [...tasks, ...completed].find((row) => row.id === taskId);
+    if (!task) { setError('This task is no longer on the current list. Refresh before retrying.'); return; }
     setBusyId(taskId);
     try {
-      const res = await fetch('/api/tasks', {
+      await workspaceFetch('/api/tasks', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: taskId, ...patch }),
+        body: JSON.stringify({ id: taskId, expected_updated_at: task.updated_at, ...patch }),
       });
-      if (!res.ok) {
-        setError('Failed to update task.');
-        return;
-      }
       await fetchTasks();
+      await refresh();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to update this task.');
     } finally {
       setBusyId(null);
     }
   };
 
   const snooze = (task: Task, option: 'later' | 'tomorrow' | 'nextweek'): void => {
-    const due = new Date();
-    if (option === 'later') due.setHours(due.getHours() + 4);
-    else if (option === 'tomorrow') {
-      due.setDate(due.getDate() + 1);
-      due.setHours(16, 0, 0, 0);
-    } else {
-      due.setDate(due.getDate() + 7);
-      due.setHours(16, 0, 0, 0);
-    }
+    const due = option === 'later' ? new Date(Date.now() + 4 * 3600000)
+      : new Date(startOfArizonaDay(new Date()).getTime() + (option === 'tomorrow' ? 1 : 7) * 86400000 + 16 * 3600000);
     void updateTask(task.id, { due_date: due.toISOString() });
   };
 
   const quickAdd = async (): Promise<void> => {
     const subject = quickSubject.trim();
-    if (!subject) return;
+    if (!subject) { setError('Enter a task action.'); return; }
     setIsAdding(true);
     try {
       let dueIso: string;
       if (quickDue) {
-        dueIso = new Date(quickDue).toISOString();
+        const value = arizonaInputToIso(quickDue);
+        if (!value) { setError('Choose a valid Arizona date and time.'); return; }
+        dueIso = value;
       } else {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(16, 0, 0, 0);
+        const tomorrow = new Date(startOfArizonaDay(new Date()).getTime() + 86400000 + 16 * 3600000);
         dueIso = tomorrow.toISOString();
       }
       const res = await fetch('/api/tasks', {
@@ -180,6 +169,9 @@ export default function TasksPage(): JSX.Element {
       setQuickDue('');
       setQuickPriority('medium');
       await fetchTasks();
+      await refresh();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to add this task.');
     } finally {
       setIsAdding(false);
     }
@@ -193,9 +185,11 @@ export default function TasksPage(): JSX.Element {
           setDrawerLead((await res.json()) as WorkspaceLead);
           return;
         }
-      } catch {
-        // fall through
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : 'Unable to open the linked lead.');
+        return;
       }
+      setError('The linked lead could not be opened. Refresh before trying again.');
     }
     if (task.related_type === 'client' && task.related_id) {
       window.location.assign(`/clients/${task.related_id}`);
@@ -209,7 +203,7 @@ export default function TasksPage(): JSX.Element {
       {/* Quick add */}
       <div className="mb-4 flex flex-wrap items-end gap-2 rounded border border-cui-border/60 bg-white p-3 shadow-card">
         <div className="min-w-56 flex-1">
-          <label className="mb-1 block text-xs font-semibold text-cui-muted">New task</label>
+          <label className="mb-1 block text-xs font-semibold text-cui-muted">General task (use a profile to create linked work)</label>
           <input
             type="text"
             value={quickSubject}
@@ -222,7 +216,7 @@ export default function TasksPage(): JSX.Element {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-semibold text-cui-muted">Due</label>
+          <label className="mb-1 block text-xs font-semibold text-cui-muted">Due - Arizona (UTC-7)</label>
           <input
             type="datetime-local"
             value={quickDue}
@@ -325,34 +319,37 @@ export default function TasksPage(): JSX.Element {
               {bucket.tasks.map((task) => {
                 const isHigh = (task.priority ?? '').toLowerCase() === 'high';
                 return (
-                  <div key={task.id} className="flex items-center gap-3 px-4 py-2.5">
+                  <div key={task.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
                     <button
                       type="button"
                       onClick={() => void updateTask(task.id, { status: 'completed' })}
                       disabled={busyId === task.id}
                       className="shrink-0 text-cui-muted transition hover:text-cui-success disabled:opacity-50"
                       title="Mark complete"
+                      aria-label={`Complete ${task.subject}`}
                     >
                       <Circle className="h-5 w-5" />
                     </button>
 
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-[1_1_12rem]">
                       <div className="flex items-center gap-2">
                         {isHigh ? <Flag className="h-3.5 w-3.5 shrink-0 text-cui-danger" /> : null}
+                        {task.kind === 'reminder' ? <span className="rounded bg-cui-primary/10 px-1.5 text-[10px] font-semibold text-cui-primary">Reminder</span> : null}
                         <p className="truncate text-sm font-semibold text-cui-text">{task.subject}</p>
                       </div>
                       {task.description ? <p className="truncate text-xs text-cui-muted">{task.description}</p> : null}
+                      <p className="text-xs text-cui-muted md:hidden">{dueLabel(task.due_date) || 'No due date'}</p>
                     </div>
 
                     {task.related_name ? (
                       <button
                         type="button"
                         onClick={() => void openRecord(task)}
-                        className="hidden shrink-0 items-center gap-1 rounded-full border border-cui-primary/30 bg-cui-primary/5 px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/15 sm:inline-flex"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-cui-primary/30 bg-cui-primary/5 px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/15"
                         title={`Open ${task.related_name}`}
                       >
                         <User className="h-3 w-3" />
-                        <span className="max-w-36 truncate">{task.related_name}</span>
+                        <span className="max-w-36 truncate">Open {task.related_name}</span>
                       </button>
                     ) : null}
 
@@ -388,21 +385,22 @@ export default function TasksPage(): JSX.Element {
           <section>
             <div className="divide-y divide-cui-light rounded border border-cui-border/60 bg-white shadow-card">
               {completed.map((task) => (
-                <div key={task.id} className="flex items-center gap-3 px-4 py-2.5">
+                <div key={task.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
                   <CheckCircle2 className="h-5 w-5 shrink-0 text-cui-success" />
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-[1_1_12rem]">
                     <p className="truncate text-sm text-cui-muted line-through">{task.subject}</p>
                     {task.description ? <p className="truncate text-xs text-cui-muted/70">{task.description}</p> : null}
+                    <p className="text-xs text-cui-muted md:hidden">{dueLabel(task.due_date) || 'No due date'}</p>
                   </div>
                   {task.related_name ? (
                     <button
                       type="button"
                       onClick={() => void openRecord(task)}
-                      className="hidden shrink-0 items-center gap-1 rounded-full border border-cui-primary/30 bg-cui-primary/5 px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/15 sm:inline-flex"
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-cui-primary/30 bg-cui-primary/5 px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/15"
                       title={`Open ${task.related_name}`}
                     >
                       <User className="h-3 w-3" />
-                      <span className="max-w-36 truncate">{task.related_name}</span>
+                      <span className="max-w-36 truncate">Open {task.related_name}</span>
                     </button>
                   ) : null}
                   <span className="hidden shrink-0 items-center gap-1 text-xs text-cui-muted md:inline-flex">
@@ -413,6 +411,7 @@ export default function TasksPage(): JSX.Element {
                     type="button"
                     onClick={() => void updateTask(task.id, { status: 'open' })}
                     disabled={busyId === task.id}
+                    aria-label={`Reopen ${task.subject}`}
                     className="shrink-0 rounded border border-cui-primary/40 px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/10 disabled:opacity-50"
                   >
                     Reopen

@@ -10,109 +10,74 @@ interface RecentRecord {
   href: string | null;
 }
 
-/**
- * Real activity feed for the dashboard: new/updated leads, messages in and
- * out, completed tasks, and newly created clients — newest first.
- */
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const authError = await requireApiSession(request);
   if (authError) return authError;
-
   const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  }
-
-  const [leadsRes, commsRes, tasksRes, clientsRes] = await Promise.all([
-    supabase
-      .from('leads')
-      .select('id,full_name,source,created_at,last_activity_at')
-      .order('created_at', { ascending: false })
-      .limit(8),
-    supabase
-      .from('communication_log')
-      .select('id,client_id,direction,subject,channel,sent_at')
-      .order('sent_at', { ascending: false })
-      .limit(8),
-    supabase
-      .from('tasks')
-      .select('id,subject,status,created_at,due_date,related_type,related_id')
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .limit(6),
+  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  const [leads, messages, activity, clients, intake] = await Promise.all([
+    supabase.from('leads').select('id,full_name,created_at').order('created_at', { ascending: false }).limit(8),
+    supabase.from('communication_log').select('id,client_id,direction,subject,sent_at').order('sent_at', { ascending: false }).limit(8),
+    supabase.from('client_activities').select('id,client_id,lead_id,activity_type,title,occurred_at').order('occurred_at', { ascending: false }).limit(12),
     supabase.from('clients').select('id,full_name,created_at').order('created_at', { ascending: false }).limit(5),
+    supabase.from('lead_intake_events').select('id,lead_id,received_at').order('received_at', { ascending: false }).limit(8),
   ]);
-
-  const records: RecentRecord[] = [];
-
-  for (const row of leadsRes.data ?? []) {
-    records.push({
-      id: `lead-${row.id}`,
-      type: 'New Lead',
-      name: `${row.full_name}${row.source ? ` — via ${row.source}` : ''}`,
-      touchedAt: row.created_at as string,
-      href: `/leads?lead=${row.id}`,
-    });
-    // A later activity timestamp means something happened after creation (e.g. a resubmission).
-    const activity = row.last_activity_at as string | null;
-    if (activity && new Date(activity).getTime() - new Date(row.created_at as string).getTime() > 60000) {
-      records.push({
-        id: `lead-activity-${row.id}`,
-        type: 'Lead Update',
-        name: `${row.full_name} — new activity on this lead`,
-        touchedAt: activity,
-        href: `/leads?lead=${row.id}`,
-      });
-    }
+  for (const response of [leads, messages, activity, clients, intake]) {
+    if (response.error) return NextResponse.json({ message: response.error.message }, { status: 500 });
   }
-
-  // Resolve client names for messages in one query.
-  const clientIds = Array.from(
-    new Set((commsRes.data ?? []).map((row) => row.client_id as string | null).filter((id): id is string => Boolean(id))),
-  );
-  const clientNames = new Map<string, string>();
-  if (clientIds.length > 0) {
-    const { data: clientRows } = await supabase.from('clients').select('id,full_name').in('id', clientIds);
-    for (const client of clientRows ?? []) clientNames.set(client.id as string, client.full_name as string);
+  const clientIds = [...new Set([
+    ...(messages.data ?? []).flatMap((row) => row.client_id ? [row.client_id as string] : []),
+    ...(activity.data ?? []).flatMap((row) => row.client_id ? [row.client_id as string] : []),
+  ])];
+  const leadIds = [...new Set([
+    ...(activity.data ?? []).flatMap((row) => row.lead_id ? [row.lead_id as string] : []),
+    ...(intake.data ?? []).map((row) => row.lead_id as string),
+  ])];
+  const [clientNamesRes, leadNamesRes] = await Promise.all([
+    clientIds.length ? supabase.from('clients').select('id,full_name').in('id', clientIds) : Promise.resolve({ data: [], error: null }),
+    leadIds.length ? supabase.from('leads').select('id,full_name').in('id', leadIds) : Promise.resolve({ data: [], error: null }),
+  ]);
+  for (const result of [clientNamesRes, leadNamesRes]) {
+    if (result.error) return NextResponse.json({ message: result.error.message }, { status: 500 });
   }
-
-  for (const row of commsRes.data ?? []) {
-    const who = row.client_id ? clientNames.get(row.client_id as string) ?? 'Unknown contact' : 'Unknown contact';
-    const inbound = row.direction === 'inbound';
+  const clientNames = new Map((clientNamesRes.data ?? []).map((row) => [row.id, row.full_name]));
+  const leadNames = new Map((leadNamesRes.data ?? []).map((row) => [row.id, row.full_name]));
+  const records: RecentRecord[] = (leads.data ?? []).map((lead) => ({
+    id: `lead-${lead.id}`, type: 'New Lead', name: lead.full_name,
+    touchedAt: lead.created_at, href: `/leads?lead=${lead.id}`,
+  }));
+  for (const message of messages.data ?? []) {
+    const name = clientNames.get(message.client_id) ?? 'Unlinked conversation';
     records.push({
-      id: `comm-${row.id}`,
-      type: inbound ? 'Reply In' : 'Message Sent',
-      name: inbound ? `${who} replied${row.subject ? `: ${row.subject}` : ''}` : `To ${who}${row.subject ? `: ${row.subject}` : ''}`,
-      touchedAt: row.sent_at as string,
-      href: '/communication',
+      id: `message-${message.id}`, type: message.direction === 'inbound' ? 'Reply In' : 'Message Sent',
+      name: `${name}${message.subject ? `: ${message.subject}` : ''}`, touchedAt: message.sent_at,
+      href: message.client_id ? `/clients/${message.client_id}` : '/communication',
     });
   }
-
-  for (const row of tasksRes.data ?? []) {
+  const labels: Record<string, string> = {
+    note_added: 'Note', note_updated: 'Note', asset_added: 'Asset', asset_updated: 'Asset',
+    asset_archived: 'Asset', asset_restored: 'Asset', task_created: 'Task',
+    task_completed: 'Task Done', task_reopened: 'Task', task_rescheduled: 'Task',
+  };
+  for (const item of activity.data ?? []) {
+    const name = item.lead_id ? leadNames.get(item.lead_id) : item.client_id ? clientNames.get(item.client_id) : null;
     records.push({
-      id: `task-${row.id}`,
-      type: 'Task Done',
-      name: row.subject as string,
-      touchedAt: row.created_at as string,
-      href:
-        row.related_type === 'lead' && row.related_id ? `/leads?lead=${row.related_id}` : '/tasks',
+      id: `activity-${item.id}`, type: labels[item.activity_type] ?? 'Activity',
+      name: `${item.title}${name ? ` - ${name}` : ''}`, touchedAt: item.occurred_at,
+      href: item.lead_id ? `/leads?lead=${item.lead_id}` : item.client_id ? `/clients/${item.client_id}?tab=tasks` : '/tasks',
     });
   }
-
-  for (const row of clientsRes.data ?? []) {
+  for (const event of intake.data ?? []) {
     records.push({
-      id: `client-${row.id}`,
-      type: 'Client',
-      name: row.full_name as string,
-      touchedAt: row.created_at as string,
-      href: `/clients/${row.id}`,
+      id: `intake-${event.id}`, type: 'Website Request', name: leadNames.get(event.lead_id) ?? 'Website request',
+      touchedAt: event.received_at, href: `/leads?lead=${event.lead_id}`,
     });
   }
-
-  const merged = records
-    .filter((record) => record.touchedAt && !Number.isNaN(new Date(record.touchedAt).getTime()))
-    .sort((a, b) => new Date(b.touchedAt).getTime() - new Date(a.touchedAt).getTime())
-    .slice(0, 12);
-
-  return NextResponse.json(merged, { status: 200 });
+  for (const client of clients.data ?? []) {
+    records.push({ id: `account-${client.id}`, type: 'Account', name: client.full_name, touchedAt: client.created_at, href: `/clients/${client.id}` });
+  }
+  return NextResponse.json(records
+    .filter((record) => Number.isFinite(new Date(record.touchedAt).getTime()))
+    .sort((left, right) => new Date(right.touchedAt).getTime() - new Date(left.touchedAt).getTime())
+    .slice(0, 12));
 }

@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
+import { requireApiSession } from '../../../lib/api-auth';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  }
+  const dispatched = await supabase.rpc('dispatch_due_reminders');
+  if (dispatched.error) return NextResponse.json({ message: dispatched.error.message }, { status: 500 });
+  if (request.nextUrl.searchParams.get('count') === 'true') {
+    const { count, error } = await supabase.from('notifications').select('id', { count: 'exact', head: true }).eq('read', false);
+    if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ count: count ?? 0 });
   }
 
   const read = request.nextUrl.searchParams.get('read');
@@ -23,6 +33,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function PATCH(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
@@ -47,6 +59,8 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });

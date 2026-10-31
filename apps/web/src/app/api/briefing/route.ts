@@ -14,7 +14,7 @@ interface BriefingTask {
 
 /**
  * Daily agent briefing: everything the producer should act on today, computed
- * from live data, with a short AI priority summary when available.
+ * from live data, with a deterministic priority summary and no AI request.
  */
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const authError = await requireApiSession(request);
@@ -42,14 +42,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   ] = await Promise.all([
     supabase
       .from('tasks')
-      .select('id,subject,due_date,priority,related_type,related_id')
+      .select('id,subject,due_date,priority,related_type,related_id', { count: 'exact' })
       .eq('status', 'open')
-      .lt('due_date', dayStart.toISOString())
+      .lt('due_date', now.toISOString())
       .order('due_date', { ascending: true })
       .limit(5),
     supabase
       .from('tasks')
-      .select('id,subject,due_date,priority,related_type,related_id')
+      .select('id,subject,due_date,priority,related_type,related_id', { count: 'exact' })
       .eq('status', 'open')
       .gte('due_date', dayStart.toISOString())
       .lt('due_date', dayEnd.toISOString())
@@ -76,26 +76,25 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     supabase.from('sequence_enrollments').select('id', { count: 'exact', head: true }).eq('status', 'active'),
   ]);
 
-  // Count overdue precisely (list above is capped at 5).
-  const overdueCountRes = await supabase
-    .from('tasks')
-    .select('id', { count: 'exact', head: true })
-    .eq('status', 'open')
-    .lt('due_date', dayStart.toISOString());
+  for (const result of [overdueRes, todayRes, unreadRes, pendingRes, newLeadsRes, repliesRes, stalledRes, activeSeqRes]) {
+    if (result.error) return NextResponse.json({ message: result.error.message }, { status: 500 });
+  }
 
   // Resolve reply lead names.
   let replyNames: string[] = [];
   const replyLeadIds = (repliesRes.data ?? []).map((row) => row.lead_id as string);
   if (replyLeadIds.length > 0) {
-    const { data: replyLeads } = await supabase.from('leads').select('full_name').in('id', replyLeadIds);
+    const { data: replyLeads, error } = await supabase.from('leads').select('full_name').in('id', replyLeadIds);
+    if (error) return NextResponse.json({ message: error.message }, { status: 500 });
     replyNames = (replyLeads ?? []).map((lead) => lead.full_name as string);
   }
 
   const briefing = {
     date: now.toISOString(),
-    overdue_tasks: overdueCountRes.count ?? 0,
+    overdue_tasks: overdueRes.count ?? 0,
     overdue_sample: (overdueRes.data ?? []) as BriefingTask[],
     today_tasks: (todayRes.data ?? []) as BriefingTask[],
+    today_tasks_count: todayRes.count ?? 0,
     unread_messages: unreadRes.count ?? 0,
     pending_approvals: pendingRes.count ?? 0,
     new_leads_24h: newLeadsRes.count ?? 0,
@@ -125,8 +124,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (briefing.pending_approvals > 0) {
     priorities.push(`${briefing.pending_approvals} outreach ${briefing.pending_approvals === 1 ? 'draft is' : 'drafts are'} waiting for your approval`);
   }
-  if (briefing.today_tasks.length > 0) {
-    priorities.push(`${briefing.today_tasks.length} ${briefing.today_tasks.length === 1 ? 'task is' : 'tasks are'} due today`);
+  if (briefing.today_tasks_count > 0) {
+    priorities.push(`${briefing.today_tasks_count} ${briefing.today_tasks_count === 1 ? 'task is' : 'tasks are'} due today`);
   }
   if (priorities.length === 0 && briefing.stalled_leads > 0) {
     priorities.push(`quiet day — a good time to revive the ${briefing.stalled_leads} leads stalled for 7+ days`);

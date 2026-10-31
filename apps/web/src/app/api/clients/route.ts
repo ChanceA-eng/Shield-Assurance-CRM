@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { requireApiSession } from '../../../lib/api-auth';
+import { loadAccountLifecycles } from '../../../lib/account-lifecycle';
+import { workspaceApiError } from '../../../lib/workspace-api';
 
 interface NewClientPayload {
   id?: string;
@@ -58,11 +60,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ count: typeof data === 'number' ? data : 0 }, { status: 200 });
   }
 
-  const queryResult = await supabase
+  let query = supabase
     .from('clients')
-    .select('id,full_name,phone,email,address,source,account_type,assigned_producer,csr,since_date,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at')
-    .order('created_at', { ascending: false })
-    .limit(100);
+    .select('id,full_name,phone,email,address,source,account_type,assigned_producer,csr,since_date,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at');
+  const search = request.nextUrl.searchParams.get('q')?.trim();
+  if (search) query = query.ilike('full_name', `%${search.replace(/[\\%_]/g, '\\$&')}%`);
+  const queryResult = await query.order('created_at', { ascending: false }).limit(100);
 
   const { data, error } = queryResult;
 
@@ -70,7 +73,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(data ?? [], { status: 200 });
+  try {
+    const rows = data ?? [];
+    const lifecycles = await loadAccountLifecycles(supabase, rows.map((row) => row.id));
+    return NextResponse.json(rows.map((row) => ({ ...row, lifecycle: lifecycles.get(row.id) })), { status: 200 });
+  } catch (failure) {
+    return workspaceApiError(failure, 'clients/get');
+  }
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {

@@ -11,12 +11,11 @@ interface LeadRow {
   full_name: string;
   email: string | null;
   phone: string | null;
+  account_id: string | null;
 }
 
 /**
- * Lead conversation: finds the matching client record (email -> phone -> name,
- * never creates one) and returns its communication log. Lead-era messages land
- * on the client record so the full history survives conversion.
+ * Conversations use an explicit account link, never a guessed name/email match.
  */
 export async function GET(
   request: NextRequest,
@@ -38,7 +37,7 @@ export async function GET(
 
   const leadResult = await supabase
     .from('leads')
-    .select('id,full_name,email,phone')
+    .select('id,full_name,email,phone,account_id')
     .eq('id', leadId)
     .maybeSingle<LeadRow>();
 
@@ -51,46 +50,7 @@ export async function GET(
     return NextResponse.json({ message: 'Lead not found.' }, { status: 404 });
   }
 
-  let clientId: string | null = null;
-
-  if (lead.email) {
-    const byEmail = await supabase
-      .from('clients')
-      .select('id')
-      .eq('email', lead.email)
-      .limit(1)
-      .maybeSingle<{ id: string }>();
-    if (byEmail.error) {
-      return NextResponse.json({ message: byEmail.error.message }, { status: 500 });
-    }
-    clientId = byEmail.data?.id ?? null;
-  }
-
-  if (!clientId && lead.phone) {
-    const byPhone = await supabase
-      .from('clients')
-      .select('id')
-      .eq('phone', lead.phone)
-      .limit(1)
-      .maybeSingle<{ id: string }>();
-    if (byPhone.error) {
-      return NextResponse.json({ message: byPhone.error.message }, { status: 500 });
-    }
-    clientId = byPhone.data?.id ?? null;
-  }
-
-  if (!clientId && lead.full_name) {
-    const byName = await supabase
-      .from('clients')
-      .select('id')
-      .ilike('full_name', lead.full_name)
-      .limit(1)
-      .maybeSingle<{ id: string }>();
-    if (byName.error) {
-      return NextResponse.json({ message: byName.error.message }, { status: 500 });
-    }
-    clientId = byName.data?.id ?? null;
-  }
+  const clientId = lead.account_id;
 
   if (!clientId) {
     return NextResponse.json({ clientId: null, items: [] }, { status: 200 });

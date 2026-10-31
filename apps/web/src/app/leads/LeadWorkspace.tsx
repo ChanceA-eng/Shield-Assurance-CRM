@@ -1,9 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Circle, Landmark, Mail, Phone, Send, Sparkles, X } from 'lucide-react';
+import { Landmark, Mail, Phone, Send, Sparkles, X } from 'lucide-react';
 import type { FmcsaCandidate, FmcsaRecord, OshaRecord } from '../../lib/enrichment';
 import { LEAD_STATUS_LABELS, type LeadStatus } from '../../lib/lead-pipeline';
+import RecordAssetsPanel from '../../components/crm/RecordAssetsPanel';
+import RecordWorkPanel from '../../components/crm/RecordWorkPanel';
+import LeadAccountLink from '../../components/crm/LeadAccountLink';
+import { INTAKE_QUEUE_CHANGED } from '../../components/layout/NewLeadBanner';
+import { workspaceFetch } from '../../lib/workspace-fetch';
 
 export interface WorkspaceLead {
   id: string;
@@ -17,6 +22,7 @@ export interface WorkspaceLead {
   estimated_premium?: number | string | null;
   created_at: string;
   form_payload?: Record<string, unknown> | null;
+  account_id?: string | null;
 }
 
 interface LeadWorkspaceProps {
@@ -24,21 +30,6 @@ interface LeadWorkspaceProps {
   onClose: () => void;
   /** Called after any change that affects lists outside the drawer (tasks, premium, notes). */
   onChanged: () => void;
-}
-
-interface TaskRow {
-  id: string;
-  subject: string;
-  description?: string | null;
-  due_date: string | null;
-  status: string;
-  priority?: string | null;
-}
-
-interface InteractionRow {
-  id: string;
-  content: string;
-  created_at: string;
 }
 
 interface ConversationItem {
@@ -432,7 +423,7 @@ function StructuredProfile({ profile }: { profile: Record<string, unknown> }): J
   );
 }
 
-type DrawerTab = 'overview' | 'conversation' | 'tasks';
+type DrawerTab = 'overview' | 'assets' | 'notes' | 'conversation' | 'tasks';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -550,6 +541,7 @@ const WEBSITE_RENDERED_PATHS = new Set([
  * "What They Asked For" (the website mirrors answers as key-value maps).
  */
 const WEBSITE_SKIPPED_SUBTREES = [
+  '_intake',
   'metadata.businessReview',
   'lead_context',
   'metadata.notification',
@@ -792,7 +784,8 @@ function statusBadgeTone(status: string): string {
   return 'bg-cui-info/15 text-cui-info';
 }
 
-export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspaceProps): JSX.Element {
+export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }: LeadWorkspaceProps): JSX.Element {
+  const [lead, setLead] = useState(initialLead);
   const [tab, setTab] = useState<DrawerTab>('overview');
   const [error, setError] = useState<string | null>(null);
 
@@ -807,18 +800,15 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
   const [emailDraft, setEmailDraft] = useState<string>(lead.email ?? '');
   const [isSavingPremium, setIsSavingPremium] = useState(false);
 
-  // Tasks tab
-  const [tasks, setTasks] = useState<TaskRow[]>([]);
-  const [notes, setNotes] = useState<InteractionRow[]>([]);
-  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
-  const [noteDraft, setNoteDraft] = useState('');
-  const [nextTouchAt, setNextTouchAt] = useState('');
-  const [isSavingNote, setIsSavingNote] = useState(false);
-  const [rescheduleDrafts, setRescheduleDrafts] = useState<Record<string, string>>({});
+  const [openTaskCount, setOpenTaskCount] = useState(0);
+  const [compose, setCompose] = useState<{ kind: 'note' | 'reminder'; token: number }>();
+  const [assetComposeToken, setAssetComposeToken] = useState(0);
+  const [recordRefreshToken, setRecordRefreshToken] = useState(0);
+  const [intakeIds, setIntakeIds] = useState<string[]>([]);
 
   // Conversation tab
   const [conversation, setConversation] = useState<ConversationItem[]>([]);
-  const [clientId, setClientId] = useState<string | null>(null);
+  const [clientId, setClientId] = useState<string | null>(lead.account_id ?? null);
   const [isLoadingConversation, setIsLoadingConversation] = useState(false);
   const [channel, setChannel] = useState<'email' | 'sms'>('email');
   const [subjectDraft, setSubjectDraft] = useState('');
@@ -852,18 +842,36 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
 
   const loadFullPayload = useCallback(async (): Promise<void> => {
     try {
-      const res = await fetch(`/api/leads/${encodeURIComponent(lead.id)}`, { cache: 'no-store' });
-      if (!res.ok) return;
-      const detail = (await res.json()) as { form_payload?: Record<string, unknown> | null };
+      const detail = await workspaceFetch<WorkspaceLead & { intake_event_ids: string[] }>(`/api/leads/${encodeURIComponent(lead.id)}`);
+      setLead(detail);
       setFullPayload(detail.form_payload ?? null);
-    } catch {
-      // Fall back to whatever came with the list row.
+      setClientId(detail.account_id ?? null);
+      setIntakeIds(detail.intake_event_ids);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to load the full lead profile.');
     }
   }, [lead.id]);
 
   useEffect(() => {
     void loadFullPayload();
   }, [loadFullPayload]);
+
+  useEffect(() => {
+    if (!intakeIds.length) return;
+    void workspaceFetch('/api/leads/attention', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: intakeIds, action: 'opened' }),
+    }).then(() => {
+      window.dispatchEvent(new Event(INTAKE_QUEUE_CHANGED));
+    }).catch((failure: unknown) => {
+      setError(failure instanceof Error ? failure.message : 'The profile opened, but the intake queue could not be acknowledged.');
+    });
+  }, [intakeIds]);
+
+  const onAccountLinked = useCallback((id: string): void => {
+    setClientId(id);
+    setRecordRefreshToken((value) => value + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -909,23 +917,6 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
     }
   };
 
-  const loadTasks = useCallback(async (): Promise<void> => {
-    setIsLoadingTasks(true);
-    try {
-      const [tasksRes, notesRes] = await Promise.all([
-        fetch(`/api/tasks?related_type=lead&related_id=${encodeURIComponent(lead.id)}&sort=due_asc&limit=50`, { cache: 'no-store' }),
-        fetch(`/api/interactions?leadId=${encodeURIComponent(lead.id)}`, { cache: 'no-store' }),
-      ]);
-      setTasks(tasksRes.ok ? ((await tasksRes.json()) as TaskRow[]) : []);
-      setNotes(notesRes.ok ? ((await notesRes.json()) as InteractionRow[]) : []);
-    } catch {
-      setTasks([]);
-      setNotes([]);
-    } finally {
-      setIsLoadingTasks(false);
-    }
-  }, [lead.id]);
-
   const loadConversation = useCallback(async (): Promise<void> => {
     setIsLoadingConversation(true);
     try {
@@ -957,9 +948,8 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
   }, [lead.id]);
 
   useEffect(() => {
-    void loadTasks();
     void loadConversation();
-  }, [loadTasks, loadConversation]);
+  }, [loadConversation, recordRefreshToken]);
 
   const savePremium = async (): Promise<void> => {
     setIsSavingPremium(true);
@@ -978,85 +968,17 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
         }),
       });
       if (!res.ok) {
-        setError('Failed to save changes.');
+        const failure = (await res.json()) as { message?: string };
+        setError(failure.message || 'Failed to save changes.');
         return;
       }
+      const updated = (await res.json()) as WorkspaceLead;
+      setLead(updated);
       onChanged();
     } catch {
       setError('Failed to save changes.');
     } finally {
       setIsSavingPremium(false);
-    }
-  };
-
-  const saveNoteAndSchedule = async (): Promise<void> => {
-    const note = noteDraft.trim();
-    if (!note && !nextTouchAt) return;
-    setIsSavingNote(true);
-    setError(null);
-    try {
-      const requests: Promise<Response>[] = [];
-
-      if (note) {
-        requests.push(
-          fetch('/api/interactions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lead_id: lead.id, content: note }),
-          }),
-        );
-      }
-
-      if (nextTouchAt) {
-        const dueIso = new Date(nextTouchAt).toISOString();
-        requests.push(
-          fetch('/api/tasks', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              subject: note ? (note.length > 80 ? `${note.slice(0, 77)}...` : note) : `Follow up with ${lead.full_name}`,
-              description: note || null,
-              due_date: dueIso,
-              related_type: 'lead',
-              related_id: lead.id,
-            }),
-          }),
-        );
-      }
-
-      const results = await Promise.all(requests);
-      if (results.some((res) => !res.ok)) {
-        setError('Failed to save the note or schedule the follow-up.');
-        return;
-      }
-
-      setNoteDraft('');
-      setNextTouchAt('');
-      await loadTasks();
-      onChanged();
-    } catch {
-      setError('Failed to save the note or schedule the follow-up.');
-    } finally {
-      setIsSavingNote(false);
-    }
-  };
-
-  const updateTask = async (taskId: string, patch: Record<string, unknown>): Promise<void> => {
-    setError(null);
-    try {
-      const res = await fetch('/api/tasks', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: taskId, ...patch }),
-      });
-      if (!res.ok) {
-        setError('Failed to update task.');
-        return;
-      }
-      await loadTasks();
-      onChanged();
-    } catch {
-      setError('Failed to update task.');
     }
   };
 
@@ -1126,7 +1048,9 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
       // Ensure a client record exists so the conversation lands on the lifecycle record.
       let targetClientId = clientId;
       if (!targetClientId) {
-        const workspaceRes = await fetch(`/api/leads/${encodeURIComponent(lead.id)}/workspace`, { cache: 'no-store' });
+        const workspaceRes = await fetch(`/api/leads/${encodeURIComponent(lead.id)}/workspace`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ create: true }),
+        });
         if (!workspaceRes.ok) {
           setError('Could not link this lead to a client record.');
           return;
@@ -1218,9 +1142,6 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
     : [];
   const requestContext = fullPayload && isRecord(fullPayload._request) ? fullPayload._request : null;
 
-  const openTasks = tasks.filter((task) => task.status === 'open');
-  const doneTasks = tasks.filter((task) => task.status !== 'open');
-
   return (
     <div className="fixed inset-0 z-30 flex justify-end bg-black/40">
       <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
@@ -1310,13 +1231,22 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
             </button>
           </div>
 
-          {/* Tabs */}
-          <div className="mt-3 flex gap-1">
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" onClick={() => { setTab('notes'); setCompose((value) => ({ kind: 'note', token: (value?.token ?? 0) + 1 })); }}
+              className="rounded border border-cui-primary px-2.5 py-1 text-xs font-semibold text-cui-primary">Add note</button>
+            <button type="button" onClick={() => { setTab('tasks'); setCompose((value) => ({ kind: 'reminder', token: (value?.token ?? 0) + 1 })); }}
+              className="rounded border border-cui-primary px-2.5 py-1 text-xs font-semibold text-cui-primary">Add reminder</button>
+            <button type="button" onClick={() => { setTab('assets'); setAssetComposeToken((value) => value + 1); }}
+              className="rounded border border-cui-primary px-2.5 py-1 text-xs font-semibold text-cui-primary">Add asset</button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-1">
             {(
               [
                 ['overview', 'Overview'],
+                ['assets', 'Assets'],
+                ['notes', 'Notes'],
                 ['conversation', 'Conversation'],
-                ['tasks', `Tasks (${openTasks.length})`],
+                ['tasks', `Tasks (${openTaskCount})`],
               ] as Array<[DrawerTab, string]>
             ).map(([key, label]) => (
               <button
@@ -1348,8 +1278,9 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
                 <div className="break-all"><span className="font-semibold text-cui-muted">Email:</span> {lead.email || '--'}</div>
                 <div className="md:col-span-2"><span className="font-semibold text-cui-muted">Address:</span> {lead.address || '--'}</div>
                 <div><span className="font-semibold text-cui-muted">Created:</span> {prettyDateTime(lead.created_at)}</div>
-                <div><span className="font-semibold text-cui-muted">Client record:</span> {clientId ? 'Linked' : 'Not yet created'}</div>
+                <div><span className="font-semibold text-cui-muted">Account:</span> {clientId ? 'Linked' : 'Not linked'}</div>
               </div>
+              <LeadAccountLink leadId={lead.id} onLinked={onAccountLinked} />
 
               {/* Pre-call prep */}
               <div className="rounded border border-cui-primary/30">
@@ -1541,120 +1472,13 @@ export default function LeadWorkspace({ lead, onClose, onChanged }: LeadWorkspac
             </div>
           ) : null}
 
-          {tab === 'tasks' ? (
-            <div className="space-y-4">
-              <div className="rounded border border-cui-border/60">
-                <div className="border-b border-cui-border/40 bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">
-                  Open Tasks ({openTasks.length})
-                </div>
-                {isLoadingTasks ? <p className="p-3 text-sm text-cui-muted">Loading…</p> : null}
-                {!isLoadingTasks && openTasks.length === 0 ? (
-                  <p className="p-3 text-sm text-cui-muted">Nothing scheduled. Add a next touch below.</p>
-                ) : null}
-                {openTasks.map((task) => (
-                  <div key={task.id} className="border-t border-cui-light px-3 py-2.5 first:border-t-0">
-                    <div className="flex items-start gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void updateTask(task.id, { status: 'completed' })}
-                        className="mt-0.5 text-cui-muted transition hover:text-cui-success"
-                        title="Mark complete"
-                      >
-                        <Circle className="h-4 w-4" />
-                      </button>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-cui-text">{task.subject}</p>
-                        <p className="text-xs text-cui-muted">Due {prettyDateTime(task.due_date)}</p>
-                      </div>
-                    </div>
-                    <div className="mt-2 flex items-center gap-2 pl-6">
-                      <input
-                        type="datetime-local"
-                        value={rescheduleDrafts[task.id] ?? ''}
-                        onChange={(event) => setRescheduleDrafts((prev) => ({ ...prev, [task.id]: event.target.value }))}
-                        className="rounded border border-cui-border px-2 py-1 text-xs"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const draft = rescheduleDrafts[task.id];
-                          if (draft) void updateTask(task.id, { due_date: new Date(draft).toISOString() });
-                        }}
-                        className="rounded border border-cui-primary/40 bg-cui-primary/10 px-2 py-1 text-xs font-semibold text-cui-primary"
-                      >
-                        Reschedule
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* One gesture: log the note and schedule the next touch. */}
-              <div className="rounded border border-cui-border/60 p-3">
-                <p className="mb-2 text-sm font-semibold text-cui-text">Log a note / schedule next touch</p>
-                <textarea
-                  value={noteDraft}
-                  onChange={(event) => setNoteDraft(event.target.value)}
-                  placeholder="Call summary, objections, underwriting context…"
-                  className="mb-2 min-h-20 w-full rounded border border-cui-border px-3 py-2 text-sm"
-                />
-                <div className="flex items-end gap-2">
-                  <div className="flex-1">
-                    <label className="mb-1 block text-xs font-semibold text-cui-muted">Next follow-up (optional)</label>
-                    <input
-                      type="datetime-local"
-                      value={nextTouchAt}
-                      onChange={(event) => setNextTouchAt(event.target.value)}
-                      className="w-full rounded border border-cui-border px-2 py-1.5 text-sm"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void saveNoteAndSchedule()}
-                    disabled={isSavingNote || (noteDraft.trim().length === 0 && !nextTouchAt)}
-                    className="rounded bg-cui-primary px-3 py-2 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-60"
-                  >
-                    {isSavingNote ? 'Saving…' : 'Save'}
-                  </button>
-                </div>
-              </div>
-
-              {doneTasks.length > 0 ? (
-                <div className="rounded border border-cui-border/60">
-                  <div className="border-b border-cui-border/40 bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">Completed</div>
-                  {doneTasks.slice(0, 10).map((task) => (
-                    <div key={task.id} className="flex items-center gap-2 border-t border-cui-light px-3 py-2 first:border-t-0">
-                      <CheckCircle2 className="h-4 w-4 shrink-0 text-cui-success" />
-                      <p className="min-w-0 flex-1 truncate text-sm text-cui-muted line-through">{task.subject}</p>
-                      <button
-                        type="button"
-                        onClick={() => void updateTask(task.id, { status: 'open' })}
-                        className="text-xs font-semibold text-cui-primary hover:underline"
-                      >
-                        Reopen
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-
-              {notes.length > 0 ? (
-                <div className="rounded border border-cui-border/60">
-                  <div className="border-b border-cui-border/40 bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">Notes & History</div>
-                  {notes.slice(0, 15).map((note) => (
-                    <div key={note.id} className="border-t border-cui-light px-3 py-2 first:border-t-0">
-                      {note.content && note.content.includes('\n') ? (
-                        <AnswerLines text={note.content} />
-                      ) : (
-                        <p className="text-sm text-cui-text">{note.content}</p>
-                      )}
-                      <p className="mt-0.5 text-[11px] text-cui-muted">{prettyDateTime(note.created_at)}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+          <div hidden={tab !== 'assets'}>
+            <RecordAssetsPanel target={{ type: 'lead', id: lead.id }} composeToken={assetComposeToken} refreshToken={recordRefreshToken} onChanged={onChanged} />
+          </div>
+          <div hidden={tab !== 'tasks' && tab !== 'notes'}>
+            <RecordWorkPanel target={{ type: 'lead', id: lead.id }} name={lead.full_name} section={tab === 'notes' ? 'notes' : 'tasks'}
+              compose={compose} refreshToken={recordRefreshToken} onChanged={onChanged} onTaskCount={setOpenTaskCount} />
+          </div>
         </div>
 
         {/* Composer pinned to bottom on Conversation tab */}

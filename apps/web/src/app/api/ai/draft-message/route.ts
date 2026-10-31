@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { draftOutreach } from '../../../../lib/outreach-ai';
-
-interface DraftPayload {
-  prompt?: string;
-  channel?: 'email' | 'sms';
-  subject?: string;
-}
+import { recordOutreachContext } from '../../../../lib/lead-outreach-context';
+import { workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
+import { getApiSession, apiActorName } from '../../../../lib/api-auth';
+import { isUuid } from '../../../../lib/workspace-validation';
 
 function normalize(value?: string | null): string {
   return (value ?? '').trim();
@@ -22,18 +20,27 @@ function summarizeRecentContext(items: Array<{ direction?: string | null; subjec
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
   }
 
   const clientId = request.nextUrl.searchParams.get('clientId')?.trim();
-  if (!clientId) {
-    return NextResponse.json({ message: 'clientId is required.' }, { status: 400 });
+  if (!isUuid(clientId)) {
+    return NextResponse.json({ message: 'A valid clientId is required.' }, { status: 400 });
   }
 
-  const payload = (await request.json().catch(() => ({}))) as DraftPayload;
-  const prompt = normalize(payload.prompt);
+  let payload: Record<string, unknown>;
+  let contextData: Awaited<ReturnType<typeof recordOutreachContext>>;
+  try {
+    payload = await workspaceBody(request);
+    contextData = await recordOutreachContext(supabase, { type: 'client', id: clientId });
+  } catch (failure) {
+    return workspaceApiError(failure, 'account-draft/context');
+  }
+  const prompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : '';
   if (!prompt) {
     return NextResponse.json({ message: 'prompt is required.' }, { status: 400 });
   }
@@ -46,12 +53,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .eq('client_id', clientId)
       .order('sent_at', { ascending: false })
       .limit(8),
-    supabase.from('policies').select('carrier,line_of_business,renewal_date,status').eq('client_id', clientId).limit(5),
+    supabase.from('policies').select('carrier,line_of_business,effective_date,expiration_date,renewal_date,status').eq('client_id', clientId).limit(50),
   ]);
 
   if (clientRes.error) return NextResponse.json({ message: clientRes.error.message }, { status: 500 });
   if (commsRes.error) return NextResponse.json({ message: commsRes.error.message }, { status: 500 });
   if (policiesRes.error) return NextResponse.json({ message: policiesRes.error.message }, { status: 500 });
+  if (!clientRes.data) return NextResponse.json({ message: 'Client not found.' }, { status: 404 });
 
   const clientName = normalize(clientRes.data?.full_name) || 'Client';
   const recentContext = summarizeRecentContext(commsRes.data ?? []);
@@ -66,19 +74,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   })();
 
   const channel = payload.channel ?? 'email';
-  const fallbackSubject = normalize(payload.subject) || (channel === 'sms' ? `Quick Follow-up for ${clientName}` : `Follow-up for ${clientName}`);
+  if (channel !== 'email' && channel !== 'sms') return NextResponse.json({ message: 'Choose email or SMS.' }, { status: 400 });
 
   // Real AI drafting grounded on the client's policies and conversation history.
   const aiDraft = await draftOutreach(
     {
       full_name: clientName,
-      line_of_business: policyHint || null,
+      ...contextData,
+      line_of_business: (policiesRes.data ?? []).find((row) => normalize(row.status).toLowerCase() === 'active')?.line_of_business ?? null,
       form_payload: {
         profile: {
           kind: 'generic',
           extras: {
-            'Account context': policyHint || 'No active policy on file',
-            'Conversation history': recentContext,
+            'Account context': policyHint || 'Active policy details have not been confirmed.',
+            'Policy records': JSON.stringify(policiesRes.data ?? []),
+            'Conversation history': (commsRes.data ?? []).map((row) => `${row.sent_at} ${row.direction}: ${row.subject ?? ''}\n${row.body ?? ''}`).join('\n\n') || recentContext,
             'Channel': channel,
           },
         },
@@ -87,31 +97,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     prompt,
   );
 
-  const subject = aiDraft?.subject ?? fallbackSubject;
-  const text = aiDraft?.body ?? [
-    `Hi ${clientName},`,
-    '',
-    `${prompt.charAt(0).toUpperCase()}${prompt.slice(1)}.`,
-    policyHint ? `Account context: ${policyHint}.` : '',
-    '',
-    'Please reply when convenient and we will take care of the next steps right away.',
-    '',
-    'Thank you,',
-    'Shield Assurance Team',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  if (!aiDraft) return NextResponse.json({ message: 'AI drafting is unavailable. Check the AI configuration; no substitute draft has been generated.' }, { status: 503 });
+  const subject = aiDraft.subject;
+  const text = aiDraft.body;
 
-  await supabase.from('client_activities').insert([
+  const activity = await supabase.from('client_activities').insert([
     {
       client_id: clientId,
       activity_type: 'ai_draft',
       title: 'Drafted outbound message with AI',
       body: `${recentContext}\n\nPrompt: ${prompt}`,
-      metadata: { source: 'api.ai.draft-message', channel },
+      metadata: { source: 'api.ai.draft-message', channel, actor: apiActorName(session.user) },
       occurred_at: new Date().toISOString(),
     },
   ]);
+  if (activity.error) return NextResponse.json({ message: activity.error.message }, { status: 500 });
 
   return NextResponse.json({ ok: true, subject, text }, { status: 200 });
 }

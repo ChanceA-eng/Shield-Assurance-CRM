@@ -1,119 +1,107 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Route } from 'next';
 import { UserPlus, X } from 'lucide-react';
+import { formatArizonaDateTime } from '../../lib/arizona-time';
+import { workspaceFetch } from '../../lib/workspace-fetch';
 
 interface AttentionLead {
+  intake_id: string;
   id: string;
   full_name: string;
   line_of_business: string | null;
-  source: string | null;
+  business_name: string | null;
+  industry: string | null;
   arrived_at: string;
+  time_basis: 'submitted' | 'received';
+  request_kind: string;
 }
 
-const DISMISS_KEY = 'dismissed-lead-banners';
+export const INTAKE_QUEUE_CHANGED = 'crm:intake-queue-changed';
 
-function readDismissed(): Set<string> {
-  try {
-    const raw = window.localStorage.getItem(DISMISS_KEY);
-    const parsed = raw ? (JSON.parse(raw) as string[]) : [];
-    return new Set(Array.isArray(parsed) ? parsed : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function relativeTime(value: string): string {
-  const time = new Date(value).getTime();
-  if (Number.isNaN(time)) return '';
-  const minutes = Math.floor((Date.now() - time) / 60000);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-/**
- * Thin full-width banner shown on every page while a new website lead is
- * waiting in "new". Disappears automatically once the lead moves stages;
- * the producer can also dismiss it per lead.
- */
 export default function NewLeadBanner(): JSX.Element | null {
   const [leads, setLeads] = useState<AttentionLead[]>([]);
-  const [dismissed, setDismissed] = useState<Set<string>>(() => (typeof window === 'undefined' ? new Set() : readDismissed()));
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const loadVersion = useRef(0);
 
   const load = useCallback(async (): Promise<void> => {
+    const version = ++loadVersion.current;
     try {
-      const res = await fetch('/api/leads/attention', { cache: 'no-store' });
-      if (!res.ok) return;
-      const payload = (await res.json()) as { leads: AttentionLead[] };
+      const payload = await workspaceFetch<{ leads: AttentionLead[] }>('/api/leads/attention');
+      if (version !== loadVersion.current) return;
       setLeads(payload.leads);
-    } catch {
-      // Banner is best-effort.
+      setError(null);
+    } catch (failure) {
+      if (version === loadVersion.current) setError(failure instanceof Error ? failure.message : 'Unable to refresh website requests.');
     }
   }, []);
 
   useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), 30000);
-    return () => clearInterval(timer);
+    const timer = window.setInterval(() => void load(), 30000);
+    const refresh = (): void => { void load(); };
+    window.addEventListener(INTAKE_QUEUE_CHANGED, refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener(INTAKE_QUEUE_CHANGED, refresh);
+    };
   }, [load]);
 
-  const visible = leads.filter((lead) => !dismissed.has(lead.id));
-  if (visible.length === 0) return null;
-
-  const dismiss = (id: string): void => {
-    const next = new Set(dismissed);
-    next.add(id);
-    setDismissed(next);
+  const dismiss = async (id: string): Promise<void> => {
+    setBusyId(id);
     try {
-      window.localStorage.setItem(DISMISS_KEY, JSON.stringify([...next]));
-    } catch {
-      // localStorage unavailable — dismissal just won't persist.
+      await workspaceFetch('/api/leads/attention', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action: 'dismissed' }),
+      });
+      ++loadVersion.current;
+      setLeads((current) => current.filter((lead) => lead.intake_id !== id));
+      setError(null);
+      void load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to dismiss this request.');
+    } finally {
+      setBusyId(null);
     }
   };
 
-  // Every unhandled lead gets its own row; they stack until opened or dismissed.
+  if (!leads.length && !error) return null;
   return (
-    <div className="flex max-h-[50vh] shrink-0 flex-col overflow-y-auto">
-      {visible.map((lead) => (
-        <div
-          key={lead.id}
-          className="flex shrink-0 items-center gap-2.5 border-b border-orange-300 bg-orange-100 px-4 py-1.5 text-sm"
-        >
+    <section aria-label="Unreviewed website requests" className="max-h-[calc(100dvh-4rem)] shrink-0 overflow-y-auto border-b border-orange-300 bg-orange-100">
+      {error ? (
+        <div role="alert" className="flex items-center justify-between gap-2 px-4 py-2 text-sm text-orange-950">
+          <span>{error} The last loaded queue is retained.</span>
+          <button type="button" onClick={() => void load()} className="font-semibold text-cui-primary hover:underline">Retry</button>
+        </div>
+      ) : null}
+      {leads.length ? <p className="px-4 pt-1 text-[11px] font-semibold text-orange-900">{leads.length} unreviewed request{leads.length === 1 ? '' : 's'} - newest first</p> : null}
+      {leads.map((lead) => (
+        <div key={lead.intake_id} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-orange-300 px-4 py-1.5 text-sm last:border-b-0">
           <UserPlus className="h-4 w-4 shrink-0 text-orange-700" />
-          <p className="min-w-0 flex-1 truncate text-cui-text">
-            <span className="font-bold text-orange-900">New website lead:</span>{' '}
-            <Link
-              href={`/leads?lead=${lead.id}` as Route}
-              onClick={() => dismiss(lead.id)}
-              className="font-semibold text-cui-primary hover:underline"
-            >
-              {lead.full_name}
-            </Link>
-            {lead.line_of_business ? <span className="text-orange-900/70"> · {lead.line_of_business}</span> : null}
-            <span className="text-orange-900/70"> · {relativeTime(lead.arrived_at)}</span>
+          <p className="min-w-0 flex-1 break-words text-cui-text">
+            <span className="font-bold text-orange-900">{lead.request_kind}:</span>{' '}
+            <Link href={`/leads?lead=${lead.id}` as Route} className="font-semibold text-cui-primary hover:underline">{lead.full_name}</Link>
+            {lead.business_name ? <span> - {lead.business_name}</span> : null}
+            {[lead.line_of_business, lead.industry].filter(Boolean).length ? (
+              <span className="text-orange-900/80"> | {[lead.line_of_business, lead.industry].filter(Boolean).join(' / ')}</span>
+            ) : null}
+            <span className="ml-2 text-xs text-orange-900/80 sm:whitespace-nowrap">
+              {lead.time_basis === 'submitted' ? 'Submitted' : 'Received'} {formatArizonaDateTime(lead.arrived_at)} AZ
+            </span>
           </p>
-          <Link
-            href={`/leads?lead=${lead.id}` as Route}
-            onClick={() => dismiss(lead.id)}
-            className="shrink-0 rounded bg-cui-primary px-2.5 py-0.5 text-xs font-semibold text-white transition hover:bg-cui-primary/90"
-          >
+          <Link href={`/leads?lead=${lead.id}` as Route} className="shrink-0 rounded bg-cui-primary px-2.5 py-0.5 text-xs font-semibold text-white hover:brightness-95">
             Open profile
           </Link>
-          <button
-            type="button"
-            onClick={() => dismiss(lead.id)}
-            className="shrink-0 rounded p-0.5 text-orange-700 transition hover:text-orange-950"
-            aria-label="Dismiss"
-          >
+          <button type="button" onClick={() => void dismiss(lead.intake_id)} disabled={busyId === lead.intake_id}
+            className="shrink-0 rounded p-0.5 text-orange-700 hover:text-orange-950 disabled:opacity-50"
+            aria-label={`Dismiss request from ${lead.full_name}`}>
             <X className="h-4 w-4" />
           </button>
         </div>
       ))}
-    </div>
+    </section>
   );
 }

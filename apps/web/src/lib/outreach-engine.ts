@@ -6,6 +6,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { WorkspaceAsset, WorkspaceNote } from '@crm/shared';
+import { leadOutreachContext } from './lead-outreach-context';
 import { draftSequenceStep } from './outreach-ai';
 import { sendOutboundEmail } from './email-adapter';
 import { writeNotification } from './automation';
@@ -60,6 +62,8 @@ interface LeadRow {
   source: string | null;
   status: string | null;
   form_payload: Record<string, unknown> | null;
+  workspace_assets?: WorkspaceAsset[];
+  workspace_notes?: WorkspaceNote[];
 }
 
 export async function getOutreachSettings(supabase: SupabaseClient): Promise<OutreachSettings> {
@@ -98,12 +102,13 @@ function inSendWindow(settings: OutreachSettings, now: Date): boolean {
 }
 
 async function fetchLead(supabase: SupabaseClient, leadId: string): Promise<LeadRow | null> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('leads')
     .select('id,full_name,email,phone,address,line_of_business,source,status,form_payload')
     .eq('id', leadId)
     .maybeSingle<LeadRow>();
-  return data ?? null;
+  if (error) throw new Error(`Unable to load the lead for outreach: ${error.message}`);
+  return data ? { ...data, ...await leadOutreachContext(supabase, leadId) } : null;
 }
 
 /**
@@ -257,24 +262,10 @@ export async function processDueEnrollments(
 
 /** Finds (or creates) the client record a lead's conversation is logged against. */
 async function ensureClientForLead(supabase: SupabaseClient, lead: LeadRow): Promise<string | null> {
-  if (lead.email) {
-    const byEmail = await supabase.from('clients').select('id').eq('email', lead.email).limit(1).maybeSingle<{ id: string }>();
-    if (byEmail.data) return byEmail.data.id;
-  }
-  if (lead.phone) {
-    const byPhone = await supabase.from('clients').select('id').eq('phone', lead.phone).limit(1).maybeSingle<{ id: string }>();
-    if (byPhone.data) return byPhone.data.id;
-  }
-  if (lead.full_name) {
-    const byName = await supabase.from('clients').select('id').ilike('full_name', lead.full_name).limit(1).maybeSingle<{ id: string }>();
-    if (byName.data) return byName.data.id;
-  }
-  const created = await supabase
-    .from('clients')
-    .insert([{ full_name: lead.full_name, email: lead.email, phone: lead.phone, source: lead.source }])
-    .select('id')
-    .single<{ id: string }>();
-  return created.data?.id ?? null;
+  const linked = await supabase.rpc('link_lead_account', { p_lead_id: lead.id, p_client_id: null, p_create: true });
+  if (linked.error) throw new Error(linked.error.message);
+  if (typeof linked.data !== 'string') throw new Error('Account linking returned an invalid record id.');
+  return linked.data;
 }
 
 /**
@@ -303,6 +294,7 @@ export async function sendOutboxItem(
     await supabase.from('outreach_outbox').update({ status: 'rejected', error: 'Recipient opted out.' }).eq('id', outboxId);
     return { sent: false, message: 'Recipient has opted out.' };
   }
+  const clientId = await ensureClientForLead(supabase, lead);
 
   try {
     await sendOutboundEmail({ to: item.to_email, subject, body });
@@ -318,7 +310,6 @@ export async function sendOutboxItem(
     .eq('id', outboxId);
 
   // Log on the conversation so the thread shows the touch.
-  const clientId = await ensureClientForLead(supabase, lead);
   if (clientId) {
     await supabase.from('communication_log').insert([
       {

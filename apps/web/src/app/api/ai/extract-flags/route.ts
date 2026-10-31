@@ -1,25 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
+import { requireApiSession } from '../../../../lib/api-auth';
+import { isUuid } from '../../../../lib/workspace-validation';
 
 function normalize(value?: string | null): string {
   return (value ?? '').trim().toLowerCase();
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
   }
 
   const clientId = request.nextUrl.searchParams.get('clientId')?.trim();
-  if (!clientId) {
-    return NextResponse.json({ message: 'clientId is required.' }, { status: 400 });
+  if (!isUuid(clientId)) {
+    return NextResponse.json({ message: 'A valid clientId is required.' }, { status: 400 });
   }
 
   const [policiesRes, claimsRes, tasksRes, communicationsRes] = await Promise.all([
     supabase.from('policies').select('id,status,renewal_date').eq('client_id', clientId).limit(100),
     supabase.from('claims').select('id,status').eq('client_id', clientId).limit(100),
-    supabase.from('client_tasks').select('id,status,due_date').eq('client_id', clientId).limit(200),
+    supabase.from('tasks').select('id', { count: 'exact', head: true })
+      .or(`account_id.eq.${clientId},and(related_type.eq.client,related_id.eq.${clientId})`)
+      .eq('status', 'open').lt('due_date', new Date().toISOString()),
     supabase
       .from('communication_log')
       .select('id,direction,channel,sent_at')
@@ -41,11 +47,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     flags.push(`${openClaims} open claim${openClaims > 1 ? 's' : ''} require active servicing.`);
   }
 
-  const taskRows = tasksRes.data ?? [];
-  const overdueTasks = taskRows.filter((task) => {
-    if (!task.due_date || normalize(task.status) === 'completed') return false;
-    return new Date(task.due_date).getTime() < Date.now();
-  }).length;
+  const overdueTasks = tasksRes.count ?? 0;
   if (overdueTasks > 0) {
     flags.push(`${overdueTasks} overdue client task${overdueTasks > 1 ? 's' : ''} need attention.`);
   }
@@ -69,16 +71,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     flags.push('No immediate underwriting or servicing flags detected from current client activity.');
   }
 
-  await supabase.from('client_activities').insert([
+  const activity = await supabase.from('client_activities').insert([
     {
       client_id: clientId,
-      activity_type: 'ai_risk',
-      title: 'Extracted AI underwriting flags',
+      activity_type: 'account_review',
+      title: 'Reviewed account work and policy flags',
       body: flags.join(' | '),
-      metadata: { source: 'api.ai.extract-flags', flag_count: flags.length },
+      metadata: { source: 'api.ai.extract-flags', engine: 'rules', flag_count: flags.length },
       occurred_at: new Date().toISOString(),
     },
   ]);
+  if (activity.error) return NextResponse.json({ message: activity.error.message }, { status: 500 });
 
   return NextResponse.json({ ok: true, flags }, { status: 200 });
 }

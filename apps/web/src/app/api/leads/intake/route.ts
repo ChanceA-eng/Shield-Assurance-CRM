@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
-import { nextArizonaBusinessMorning } from '../../../../lib/arizona-time';
-import { requireApiSession } from '../../../../lib/api-auth';
+import { apiActorName, getApiSession } from '../../../../lib/api-auth';
 import { scheduleIntakeTask } from '../../../../lib/intake-task';
 
 type IntakePayload = {
@@ -63,10 +62,6 @@ function normalizeWebsite(input: unknown): string | null {
   return `https://${text}`;
 }
 
-function nextBusinessMorningIso(): string {
-  return nextArizonaBusinessMorning(new Date(), true).toISOString();
-}
-
 function buildSnapshotNote(input: {
   industry: string | null;
   category: string | null;
@@ -77,7 +72,7 @@ function buildSnapshotNote(input: {
   riskExposure: string | null;
 }): string {
   return [
-    'VERIFIED PROSPECT DISCOVERY PROFILE',
+    'PROSPECT DISCOVERY NOTES',
     '--------------------------------------------------',
     `Industry/Category : ${input.industry ?? '-'} / ${input.category ?? '-'}`,
     `Risk Location     : ${input.address ?? '-'}`,
@@ -90,8 +85,8 @@ function buildSnapshotNote(input: {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -163,8 +158,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     {
       lead_id: newLead.id,
       content: snapshot,
-      follow_up_completed: false,
-      follow_up_at: nextBusinessMorningIso(),
+      note_type: 'underwriting',
+      author_id: session.user.id,
+      author_name: apiActorName(session.user),
+      follow_up_completed: true,
     },
   ]);
 

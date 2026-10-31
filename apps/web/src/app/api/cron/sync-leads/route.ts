@@ -5,6 +5,7 @@ import { isArizonaWeekend, nextArizonaBusinessMorning, startOfArizonaDay } from 
 import { processDueEnrollments } from '../../../../lib/outreach-engine';
 import { applyResubmission } from '../../../../lib/resubmission';
 import { scheduleIntakeTask } from '../../../../lib/intake-task';
+import { sourceSubmissionId } from '../../../../lib/website-intake';
 
 export const runtime = 'nodejs';
 
@@ -220,8 +221,7 @@ async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
  * processed only once, even after it is archived by a later resubmission.
  */
 function externalIdOf(payload: Record<string, unknown>): string | null {
-  const metadata = (payload.metadata ?? {}) as Record<string, unknown>;
-  return asString(payload.id) ?? asString(metadata.submittedAt) ?? asString(payload.created_at);
+  return sourceSubmissionId(payload);
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -292,28 +292,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // Every website submission id we've already ingested — current payloads AND
-  // submissions archived under previous_submissions.
-  const { data: webLeadRows, error: webLeadsError } = await supabase
-    .from('leads')
-    .select('id,form_payload')
-    .eq('source', 'website-pull')
-    .limit(5000);
-  if (webLeadsError) {
-    return NextResponse.json({ message: webLeadsError.message }, { status: 500 });
-  }
+  // A durable ledger recognizes direct pushes and pulls, even after many resubmissions.
   const ingestedIds = new Set<string>();
-  for (const row of webLeadRows ?? []) {
-    const formPayload = (row.form_payload ?? {}) as Record<string, unknown>;
-    const mainId = externalIdOf(formPayload);
-    if (mainId) ingestedIds.add(mainId);
-    const history = Array.isArray(formPayload.previous_submissions)
-      ? (formPayload.previous_submissions as Array<Record<string, unknown>>)
-      : [];
-    for (const prev of history) {
-      const prevId = externalIdOf(prev);
-      if (prevId) ingestedIds.add(prevId);
+  for (let offset = 0; ; offset += 1000) {
+    const ledger = await supabase.from('lead_intake_events').select('source_submission_id').order('id').range(offset, offset + 999);
+    if (ledger.error) return NextResponse.json({ message: ledger.error.message }, { status: 500 });
+    for (const row of ledger.data ?? []) {
+      if (row.source_submission_id) ingestedIds.add(row.source_submission_id);
     }
+    if ((ledger.data ?? []).length < 1000) break;
   }
 
   // Oldest first, so when someone submitted multiple times the latest ends up current.
@@ -353,19 +340,26 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const existingId = lead.email ? matchByEmail.get(lead.email) : undefined;
 
     if (existingId) {
-      const { data: existing } = await supabase
+      const { data: existing, error: existingError } = await supabase
         .from('leads')
         .select('id,full_name,status,form_payload')
         .eq('id', existingId)
         .maybeSingle<{ id: string; full_name: string; status: string | null; form_payload: Record<string, unknown> | null }>();
-      if (existing) {
-        await applyResubmission(supabase, existing, lead.form_payload, {
-          fullName: lead.full_name !== 'Unknown Web Lead' ? lead.full_name : null,
-          email: lead.email,
-          phone: lead.phone,
-        });
-        resubmissions += 1;
+      if (existingError) {
+        errors.push(existingError.message);
         continue;
+      }
+      if (existing) {
+        try {
+          const applied = await applyResubmission(supabase, existing, lead.form_payload, {
+            fullName: lead.full_name !== 'Unknown Web Lead' ? lead.full_name : null, email: lead.email, phone: lead.phone,
+          });
+          if (applied) resubmissions += 1;
+          continue;
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : 'Website resubmission failed.');
+          continue;
+        }
       }
     }
 

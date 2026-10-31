@@ -1,3 +1,5 @@
+export * from './account-workspace';
+
 export type DealStage = 'LEAD' | 'QUOTING' | 'PRESENTED' | 'BOUND' | 'LOST';
 
 export const WORKFLOW_EVENTS = {

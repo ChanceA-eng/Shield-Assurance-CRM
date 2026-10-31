@@ -26,6 +26,37 @@ export function startOfArizonaDay(now: Date): Date {
   return arizonaLocalToUtc(arizonaLocalDate(now), 0);
 }
 
+export function endOfArizonaDay(now: Date): Date {
+  return new Date(startOfArizonaDay(now).getTime() + 24 * HOUR_MS);
+}
+
+export function arizonaDateTimeInput(value: string | Date): string {
+  const parsed = typeof value === 'string' ? new Date(value) : value;
+  if (!Number.isFinite(parsed.getTime())) return '';
+  return arizonaLocalDate(parsed).toISOString().slice(0, 16);
+}
+
+export function arizonaInputToIso(value: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
+  const parsed = new Date(`${value}:00-07:00`);
+  if (!Number.isFinite(parsed.getTime()) || arizonaDateTimeInput(parsed) !== value) return null;
+  return parsed.toISOString();
+}
+
+export function formatArizonaDateTime(value?: string | null): string {
+  if (!value) return 'Not scheduled';
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return 'Invalid date';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Phoenix',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(parsed);
+}
+
 export function nextArizonaBusinessMorning(now: Date, startTomorrow = false): Date {
   const localTarget = arizonaLocalDate(now);
 

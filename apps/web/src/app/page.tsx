@@ -7,6 +7,7 @@ import { CalendarClock, CircleDollarSign, ShieldAlert, Users } from 'lucide-reac
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, CardBody, CardHeader } from '../components/ui/Card';
 import StatWidget from '../components/ui/StatWidget';
+import { workspaceFetch } from '../lib/workspace-fetch';
 
 interface MetricsResponse {
   total_written_premium: number;
@@ -30,6 +31,11 @@ const ACTIVITY_BADGE_TONES: Record<string, string> = {
   'Reply In': 'bg-cui-danger/15 text-cui-danger',
   'Message Sent': 'bg-cui-primary/15 text-cui-primary',
   'Task Done': 'bg-cui-light text-cui-muted',
+  Note: 'bg-cui-primary/15 text-cui-primary',
+  Asset: 'bg-cui-info/15 text-cui-info',
+  Task: 'bg-cui-warning/20 text-amber-700',
+  'Website Request': 'bg-cui-warning/20 text-amber-700',
+  Account: 'bg-cui-info/15 text-cui-info',
   Client: 'bg-cui-info/15 text-cui-info',
 };
 
@@ -65,6 +71,7 @@ interface PolicyRow {
 interface BriefingResponse {
   overdue_tasks: number;
   today_tasks: Array<{ id: string; subject: string }>;
+  today_tasks_count: number;
   unread_messages: number;
   pending_approvals: number;
   new_leads_24h: number;
@@ -72,16 +79,6 @@ interface BriefingResponse {
   stalled_leads: number;
   active_sequences: number;
   summary: string | null;
-}
-
-async function safeJson<T>(url: string): Promise<T | null> {
-  try {
-    const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
 }
 
 function formatCurrency(value: number): string {
@@ -156,13 +153,18 @@ export default function DashboardPage(): JSX.Element {
   const [policies, setPolicies] = useState<PolicyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [briefing, setBriefing] = useState<BriefingResponse | null>(null);
+  const [briefingError, setBriefingError] = useState<string | null>(null);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    // The briefing loads separately: its AI summary can take a few seconds.
     void (async () => {
-      const result = await safeJson<BriefingResponse>('/api/briefing');
-      if (!cancelled) setBriefing(result);
+      try {
+        const result = await workspaceFetch<BriefingResponse>('/api/briefing');
+        if (!cancelled) { setBriefing(result); setBriefingError(null); }
+      } catch (failure) {
+        if (!cancelled) setBriefingError(failure instanceof Error ? failure.message : 'Unable to load current priorities.');
+      }
     })();
     return () => {
       cancelled = true;
@@ -173,12 +175,13 @@ export default function DashboardPage(): JSX.Element {
     let cancelled = false;
 
     const load = async (): Promise<void> => {
+      try {
       const [metricsRes, recentRes, tasksRes, renewalsRes, policiesRes] = await Promise.all([
-        safeJson<MetricsResponse>('/api/metrics/home'),
-        safeJson<RecentRecord[]>('/api/recent'),
-        safeJson<TaskRow[]>('/api/tasks?status=open&sort=due_asc'),
-        safeJson<RenewalsResponse>('/api/renewals?window=30'),
-        safeJson<PolicyRow[]>('/api/policies'),
+        workspaceFetch<MetricsResponse>('/api/metrics/home'),
+        workspaceFetch<RecentRecord[]>('/api/recent'),
+        workspaceFetch<TaskRow[]>('/api/tasks?status=open&sort=due_asc'),
+        workspaceFetch<RenewalsResponse>('/api/renewals?window=30'),
+        workspaceFetch<PolicyRow[]>('/api/policies'),
       ]);
 
       if (cancelled) return;
@@ -187,7 +190,12 @@ export default function DashboardPage(): JSX.Element {
       setTasks(Array.isArray(tasksRes) ? tasksRes : []);
       setRenewals(renewalsRes);
       setPolicies(Array.isArray(policiesRes) ? policiesRes : []);
-      setLoading(false);
+      setDashboardError(null);
+      } catch (failure) {
+        if (!cancelled) setDashboardError(failure instanceof Error ? failure.message : 'Unable to load dashboard records.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     };
 
     void load();
@@ -207,12 +215,13 @@ export default function DashboardPage(): JSX.Element {
         <h1 className="text-2xl font-bold text-cui-text">Dashboard</h1>
         <p className="mt-1 text-sm text-cui-muted">Live agency overview — all figures update from your book of business.</p>
       </div>
+      {dashboardError ? <p role="alert" className="rounded border border-cui-danger/40 bg-cui-danger/10 p-3 text-sm text-cui-danger">Dashboard data is unavailable: {dashboardError}</p> : null}
 
       {/* Morning briefing */}
       <Card>
         <CardHeader>Today&rsquo;s Briefing</CardHeader>
         <CardBody className="space-y-3">
-          {!briefing ? (
+          {briefingError ? <p role="alert" className="text-sm text-cui-danger">Priorities could not be refreshed: {briefingError}. <Link href="/tasks" className="font-semibold underline">Open Tasks</Link></p> : !briefing ? (
             <p className="text-sm text-cui-muted">Pulling today&rsquo;s priorities…</p>
           ) : (
             <>
@@ -224,7 +233,7 @@ export default function DashboardPage(): JSX.Element {
                   </Link>
                 ) : null}
                 <Link href="/tasks" className="rounded border border-cui-primary/40 bg-cui-primary/10 px-2.5 py-1 text-xs font-semibold text-cui-primary hover:bg-cui-primary/20">
-                  {briefing.today_tasks.length} due today
+                  {briefing.today_tasks_count} due today
                 </Link>
                 {briefing.unread_messages > 0 ? (
                   <Link href="/communication" className="rounded border border-cui-warning/50 bg-cui-warning/15 px-2.5 py-1 text-xs font-semibold text-amber-700 hover:bg-cui-warning/25">
@@ -266,14 +275,14 @@ export default function DashboardPage(): JSX.Element {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatWidget
           label="Total Written Premium"
-          value={loading ? '…' : formatCurrency(metrics?.total_written_premium ?? 0)}
+          value={loading ? '…' : metrics ? formatCurrency(metrics.total_written_premium) : '--'}
           color="primary"
           icon={CircleDollarSign}
           href="/policies"
         />
         <StatWidget
           label="Active Leads"
-          value={loading ? '…' : String(metrics?.active_leads ?? 0)}
+          value={loading ? '…' : metrics ? String(metrics.active_leads) : '--'}
           color="info"
           icon={Users}
           href="/leads"
@@ -288,14 +297,14 @@ export default function DashboardPage(): JSX.Element {
         />
         <StatWidget
           label="Renewals (30 Days)"
-          value={loading ? '…' : String(metrics?.renewals_30_days ?? 0)}
+          value={loading ? '…' : metrics ? String(metrics.renewals_30_days) : '--'}
           color="warning"
           icon={CalendarClock}
           href="/renewals"
         />
         <StatWidget
           label="Open Claims"
-          value={loading ? '…' : String(metrics?.open_claims ?? 0)}
+          value={loading ? '…' : metrics ? String(metrics.open_claims) : '--'}
           color="danger"
           icon={ShieldAlert}
           href="/claims"
@@ -351,7 +360,7 @@ export default function DashboardPage(): JSX.Element {
         <Card className="lg:col-span-2">
           <CardHeader>Recent Activity</CardHeader>
           <CardBody className="p-0">
-            {recent.length === 0 ? (
+            {recent.length === 0 && !dashboardError ? (
               <p className="p-6 text-center text-sm text-cui-muted">
                 {loading ? 'Loading activity…' : 'No recent clients or policies yet. Create your first client to get started.'}
               </p>

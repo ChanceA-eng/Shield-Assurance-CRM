@@ -63,14 +63,13 @@ function Breadcrumbs(): JSX.Element {
 
 export default function AppHeader(): JSX.Element {
   const { toggleNav } = useNav();
-  const { overdueCount, notifications, markRead, markAllRead } = useNotifications();
+  const { overdueCount, notifications, unreadCount, refreshError, refresh, markRead, markAllRead } = useNotifications();
   const [menuOpen, setMenuOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const bellRef = useRef<HTMLDivElement>(null);
 
-  const unreadCount = notifications.filter((item) => !item.read).length;
   const notificationCount = overdueCount + unreadCount;
 
   useEffect(() => {
@@ -158,10 +157,11 @@ export default function AppHeader(): JSX.Element {
                 </button>
               ) : null}
             </div>
+            {refreshError ? <p role="alert" className="border-b border-cui-border px-3 py-2 text-xs text-cui-danger">{refreshError} <button type="button" onClick={() => void refresh()} className="font-semibold underline">Retry</button></p> : null}
 
             {overdueCount > 0 ? (
               <Link
-                href="/leads?view=queue"
+                href="/tasks"
                 onClick={() => setBellOpen(false)}
                 className="flex items-center gap-2.5 border-b border-cui-border/40 bg-cui-danger/5 px-3 py-2.5 transition hover:bg-cui-danger/10"
               >
@@ -172,7 +172,7 @@ export default function AppHeader(): JSX.Element {
                   <span className="block text-sm font-semibold text-cui-text">
                     {overdueCount} overdue task{overdueCount === 1 ? '' : 's'}
                   </span>
-                  <span className="block text-xs text-cui-muted">Open the Work Queue to catch up</span>
+                  <span className="block text-xs text-cui-muted">Open Tasks to catch up</span>
                 </span>
               </Link>
             ) : null}

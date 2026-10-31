@@ -5,12 +5,15 @@ import { processLeadStatusChanged } from '../../../lib/automation';
 import { ACTIVE_LEAD_STATUSES, normalizeLeadStatus } from '../../../lib/lead-pipeline';
 import { scheduleIntakeTask, isWarmSource } from '../../../lib/intake-task';
 import { applyResubmission } from '../../../lib/resubmission';
+import { sourceSubmissionId } from '../../../lib/website-intake';
+import { workspaceBody, workspaceApiError } from '../../../lib/workspace-api';
 
 interface NewLeadPayload {
   id?: string;
   name?: string;
   fullName?: string;
   full_name?: string;
+  client_name?: string;
   phone?: string;
   email?: string;
   address?: string;
@@ -23,13 +26,15 @@ interface NewLeadPayload {
   message?: string;
   bundles?: string | string[];
   line_of_business?: string;
+  line?: string;
+  insurance_line?: string;
   source?: string;
   status?: string;
   estimated_premium?: number | string;
 }
 
-function normalizeText(value: string | undefined): string | null {
-  const trimmed = value?.trim();
+function normalizeText(value: unknown): string | null {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
   return trimmed ? trimmed : null;
 }
 
@@ -140,14 +145,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return jsonWithCors(request, { message: 'Supabase is not configured.' }, { status: 503 });
   }
 
-  const payload = (await request.json()) as NewLeadPayload;
-  const fullName = normalizeText(payload.full_name) ?? normalizeText(payload.fullName) ?? normalizeText(payload.name);
+  let payload: NewLeadPayload & Record<string, unknown>;
+  try {
+    payload = await workspaceBody(request);
+    for (const field of ['full_name', 'fullName', 'name', 'client_name', 'phone', 'email', 'address', 'source', 'line_of_business', 'line', 'insurance_line']) {
+      if (payload[field] !== undefined && payload[field] !== null && typeof payload[field] !== 'string') {
+        return jsonWithCors(request, { message: `${field} must be text.` }, { status: 400 });
+      }
+    }
+  } catch (error) {
+    return workspaceApiError(error, 'leads/post');
+  }
+  const fullName = normalizeText(payload.full_name) ?? normalizeText(payload.fullName) ?? normalizeText(payload.name) ?? normalizeText(payload.client_name);
   if (!fullName) {
     return jsonWithCors(request, { message: 'full_name is required.' }, { status: 400 });
   }
 
   const lineOfBusiness =
     normalizeText(payload.line_of_business) ??
+    normalizeText(payload.line) ??
+    normalizeText(payload.insurance_line) ??
     normalizeText(payload.primaryCoverage) ??
     normalizeText(payload.business) ??
     'General Request';
@@ -170,6 +187,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     form_payload: payload,
   };
 
+  const submissionId = sourceSubmissionId(payload);
+  if (submissionId) {
+    const recorded = await supabase.from('lead_intake_events').select('lead_id').eq('submission_key', `website:${submissionId}`).maybeSingle();
+    if (recorded.error) return jsonWithCors(request, { message: recorded.error.message }, { status: 500 });
+    if (recorded.data) return jsonWithCors(request, { id: recorded.data.lead_id, duplicate: true }, { status: 200 });
+  }
   // Resubmission check: a repeat inquiry is a hot signal, not a new lead.
   const email = normalizeText(payload.email)?.toLowerCase() ?? null;
   const phoneDigitsValue = (normalizeText(payload.phone) ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
@@ -182,6 +205,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle<{ id: string; full_name: string; status: string | null; form_payload: Record<string, unknown> | null }>();
+    if (byEmail.error) return jsonWithCors(request, { message: byEmail.error.message }, { status: 500 });
     existing = byEmail.data ?? null;
   }
   if (!existing && phoneDigitsValue.length === 10) {
@@ -190,6 +214,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .select('id,full_name,status,form_payload,phone')
       .order('created_at', { ascending: false })
       .limit(1000);
+    if (byPhone.error) return jsonWithCors(request, { message: byPhone.error.message }, { status: 500 });
     existing =
       (byPhone.data ?? []).find(
         (row) => ((row.phone as string | null) ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '') === phoneDigitsValue,
@@ -197,16 +222,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   if (existing) {
-    await applyResubmission(supabase, existing, payload as Record<string, unknown>, {
-      fullName: normalizeText(payload.fullName) ?? normalizeText(payload.full_name) ?? normalizeText(payload.name),
-      email,
-      phone: normalizeText(payload.phone),
-    });
-    return jsonWithCors(request, { id: existing.id, resubmission: true }, { status: 200 });
+    try {
+      const applied = await applyResubmission(supabase, existing, payload, {
+        fullName, email, phone: normalizeText(payload.phone),
+      });
+      return jsonWithCors(request, { id: existing.id, resubmission: applied, duplicate: !applied }, { status: 200 });
+    } catch (error) {
+      return workspaceApiError(error, 'leads/resubmission');
+    }
   }
 
   const { data, error } = await supabase.from('leads').insert([insertData]).select('*').single();
   if (error) {
+    if (error.code === '23505' && submissionId) {
+      const recorded = await supabase.from('lead_intake_events').select('lead_id').eq('submission_key', `website:${submissionId}`).maybeSingle();
+      if (recorded.data) return jsonWithCors(request, { id: recorded.data.lead_id, duplicate: true });
+    }
     return jsonWithCors(request, { message: error.message }, { status: 500 });
   }
 
@@ -277,7 +308,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     return jsonWithCors(request, { message: 'No update fields were provided.' }, { status: 400 });
   }
 
-  const { data, error } = await supabase.from('leads').update(updates).eq('id', payload.id).select('*').single();
+  const { data, error } = await supabase.rpc('patch_lead_profile', { p_lead_id: payload.id, p_changes: updates });
   if (error) {
     return jsonWithCors(request, { message: error.message }, { status: 500 });
   }

@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { createSupabaseBrowserAuthClient } from '../lib/supabase-auth-browser';
+import { workspaceFetch } from '../lib/workspace-fetch';
 
 export interface NotificationItem {
   id: string;
@@ -19,6 +20,8 @@ interface NotificationContextValue {
   dueTodayCount: number;
   /** Latest unread notification feed for the bell dropdown. */
   notifications: NotificationItem[];
+  unreadCount: number;
+  refreshError: string | null;
   refresh: () => Promise<void>;
   markRead: (id: string) => Promise<void>;
   markAllRead: () => Promise<void>;
@@ -30,64 +33,59 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [overdueCount, setOverdueCount] = useState(0);
   const [dueTodayCount, setDueTodayCount] = useState(0);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const supabase = useMemo(() => {
     try {
       return createSupabaseBrowserAuthClient();
-    } catch {
+    } catch (failure) {
+      console.error('[notifications] Realtime setup failed; polling remains enabled.', failure);
       return null;
     }
   }, []);
 
   const refresh = async (): Promise<void> => {
     try {
-      const [overdueRes, dueRes, notifRes] = await Promise.all([
-        fetch('/api/tasks?status=overdue&limit=200', { cache: 'no-store' }),
-        fetch('/api/tasks?status=open&due=today&limit=200', { cache: 'no-store' }),
-        fetch('/api/notifications', { cache: 'no-store' }),
+      const [overdue, due, feed, unread] = await Promise.all([
+        workspaceFetch<{ count: number }>('/api/tasks?status=overdue&count=true'),
+        workspaceFetch<{ count: number }>('/api/tasks?status=open&due=today&count=true'),
+        workspaceFetch<NotificationItem[]>('/api/notifications'),
+        workspaceFetch<{ count: number }>('/api/notifications?count=true'),
       ]);
-
-      if (overdueRes.ok) {
-        const rows = (await overdueRes.json()) as unknown[];
-        setOverdueCount(Array.isArray(rows) ? rows.length : 0);
-      }
-      if (dueRes.ok) {
-        const rows = (await dueRes.json()) as unknown[];
-        setDueTodayCount(Array.isArray(rows) ? rows.length : 0);
-      }
-      if (notifRes.ok) {
-        const rows = (await notifRes.json()) as NotificationItem[];
-        // Full recent feed — read items stay visible, just not bold.
-        setNotifications(Array.isArray(rows) ? rows.slice(0, 25) : []);
-      }
-    } catch {
-      // Keep existing values if refresh fails.
+      setOverdueCount(overdue.count);
+      setDueTodayCount(due.count);
+      setNotifications(feed);
+      setUnreadCount(unread.count);
+      setRefreshError(null);
+    } catch (failure) {
+      setRefreshError(failure instanceof Error ? failure.message : 'Unable to refresh notifications.');
     }
   };
 
   const markRead = async (id: string): Promise<void> => {
-    setNotifications((current) => current.map((item) => (item.id === id ? { ...item, read: true } : item)));
     try {
-      await fetch('/api/notifications', {
+      await workspaceFetch('/api/notifications', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: [id] }),
       });
-    } catch {
-      // best effort
+      await refresh();
+    } catch (failure) {
+      setRefreshError(failure instanceof Error ? failure.message : 'Unable to mark this notification read.');
     }
   };
 
   const markAllRead = async (): Promise<void> => {
-    setNotifications((current) => current.map((item) => ({ ...item, read: true })));
     try {
-      await fetch('/api/notifications', {
+      await workspaceFetch('/api/notifications', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ all: true }),
       });
-    } catch {
-      // best effort
+      await refresh();
+    } catch (failure) {
+      setRefreshError(failure instanceof Error ? failure.message : 'Unable to mark notifications read.');
     }
   };
 
@@ -96,7 +94,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
     const intervalId = window.setInterval(() => {
       void refresh();
-    }, 60000);
+    }, 30000);
 
     const channel = supabase
       ?.channel('global-crm-notifications')
@@ -117,7 +115,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, [supabase]);
 
   return (
-    <NotificationContext.Provider value={{ overdueCount, dueTodayCount, notifications, refresh, markRead, markAllRead }}>
+    <NotificationContext.Provider value={{ overdueCount, dueTodayCount, notifications, unreadCount, refreshError, refresh, markRead, markAllRead }}>
       {children}
     </NotificationContext.Provider>
   );

@@ -6,10 +6,6 @@ interface RouteContext {
   params: Promise<{ clientId: string }>;
 }
 
-function normalize(value?: string | null): string {
-  return (value ?? '').trim();
-}
-
 export async function GET(request: NextRequest, context: RouteContext): Promise<NextResponse> {
   const authError = await requireApiSession(request);
   if (authError) return authError;
@@ -59,7 +55,6 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     applicationsRes,
     campaignsRes,
     assetsRes,
-    clientTasksRes,
     filesRes,
     tagsRes,
     activitiesRes,
@@ -91,8 +86,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     supabase
       .from('tasks')
       .select('*')
-      .eq('related_type', 'client')
-      .eq('related_id', clientId)
+      .or(`account_id.eq.${clientId},and(related_type.eq.client,related_id.eq.${clientId})`)
       .order('due_date', { ascending: true, nullsFirst: false })
       .limit(timelineLimit),
     supabase
@@ -127,8 +121,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       .or(`account_id.eq.${clientId},account_id.is.null`)
       .order('created_at', { ascending: false })
       .limit(100),
-    supabase.from('client_assets').select('id,client_id,title,asset_type,value,metadata,created_at,updated_at').eq('client_id', clientId).order('updated_at', { ascending: false }).limit(200),
-    supabase.from('client_tasks').select('id,client_id,subject,description,due_date,status,priority,created_at,updated_at').eq('client_id', clientId).order('due_date', { ascending: true, nullsFirst: false }).limit(200),
+    supabase.from('client_assets').select('id,client_id,lead_id,title,asset_type,value,metadata,archived_at,created_at,updated_at').eq('client_id', clientId).is('archived_at', null).order('updated_at', { ascending: false }).limit(200),
     supabase.from('client_files').select('id,client_id,file_name,file_url,file_type,file_size,status,metadata,uploaded_at,created_at').eq('client_id', clientId).order('uploaded_at', { ascending: false }).limit(200),
     supabase.from('client_tags').select('id,client_id,tag,color,created_at').eq('client_id', clientId).order('created_at', { ascending: false }).limit(200),
     supabase
@@ -152,7 +145,6 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     applications: applicationsRes,
     campaigns: campaignsRes,
     assets: assetsRes,
-    clientTasks: clientTasksRes,
     files: filesRes,
     tags: tagsRes,
     activities: activitiesRes,
@@ -164,46 +156,16 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     }
   }
 
-  const email = normalize(client.email).toLowerCase();
-  const phone = normalize(client.phone);
-  const fullName = normalize(client.full_name);
-
-  const leadLookups = await Promise.all([
-    email
-      ? supabase.from('leads').select('id,full_name,phone,email,line_of_business,source,status,created_at,last_viewed_at,last_activity_at').ilike('email', email).order('created_at', { ascending: false }).limit(50)
-      : Promise.resolve({ data: [], error: null }),
-    phone
-      ? supabase.from('leads').select('id,full_name,phone,email,line_of_business,source,status,created_at,last_viewed_at,last_activity_at').eq('phone', phone).order('created_at', { ascending: false }).limit(50)
-      : Promise.resolve({ data: [], error: null }),
-    fullName
-      ? supabase.from('leads').select('id,full_name,phone,email,line_of_business,source,status,created_at,last_viewed_at,last_activity_at').ilike('full_name', fullName).order('created_at', { ascending: false }).limit(50)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-
-  const leadEntries = [
-    { key: 'leadsByEmail', result: leadLookups[0] },
-    { key: 'leadsByPhone', result: leadLookups[1] },
-    { key: 'leadsByName', result: leadLookups[2] },
-  ];
-
-  for (const entry of leadEntries) {
-    if (entry.result.error) {
-      return NextResponse.json({ message: entry.result.error.message ?? 'Failed to load leads for this client.' }, { status: 500 });
-    }
-  }
-
-  const leadMap = new Map<string, Record<string, unknown>>();
-  leadLookups.forEach((result) => {
-    (result.data ?? []).forEach((lead) => {
-      leadMap.set(lead.id as string, lead as Record<string, unknown>);
-    });
-  });
+  const linkedLeads = await supabase.from('leads')
+    .select('id,full_name,phone,email,line_of_business,source,status,created_at,last_viewed_at,last_activity_at')
+    .eq('account_id', clientId).order('created_at', { ascending: false }).limit(200);
+  if (linkedLeads.error) return NextResponse.json({ message: linkedLeads.error.message }, { status: 500 });
 
   return NextResponse.json(
     {
       client,
       policies: policiesRes.data ?? [],
-      leads: Array.from(leadMap.values()),
+      leads: linkedLeads.data ?? [],
       communications: communicationsRes.data ?? [],
       scheduledMessages: scheduledRes.data ?? [],
       notifications: notificationsRes.data ?? [],
@@ -215,7 +177,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       applications: applicationsRes.data ?? [],
       campaigns: campaignsRes.data ?? [],
       assets: assetsRes.data ?? [],
-      clientTasks: clientTasksRes.data ?? [],
+      clientTasks: tasksRes.data ?? [],
       files: filesRes.data ?? [],
       tags: tagsRes.data ?? [],
       activities: activitiesRes.data ?? [],

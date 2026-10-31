@@ -1,125 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../../lib/api-auth';
-
-interface LeadRow {
-  id: string;
-  full_name: string;
-  email: string | null;
-  phone: string | null;
-  source: string | null;
-}
+import { isUuid } from '../../../../../lib/workspace-validation';
+import { resolveRecordScope, WorkspaceError } from '../../../../../lib/record-scope';
+import { databaseError, workspaceApiError, workspaceBody } from '../../../../../lib/workspace-api';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
 }
 
-export async function GET(
-  request: NextRequest,
-  context: RouteContext,
-): Promise<NextResponse> {
+export async function GET(request: NextRequest, context: RouteContext): Promise<NextResponse> {
   const authError = await requireApiSession(request);
   if (authError) return authError;
-
   const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  try {
+    const { id } = await context.params;
+    const scope = await resolveRecordScope(supabase, { type: 'lead', id });
+    if (!scope.clientId) return NextResponse.json({ leadId: id, clientId: null, clientName: null });
+    const { data, error } = await supabase.from('clients').select('full_name').eq('id', scope.clientId).single();
+    if (error) throw databaseError(error);
+    return NextResponse.json({ leadId: id, clientId: scope.clientId, clientName: data.full_name });
+  } catch (error) {
+    return workspaceApiError(error, 'lead-workspace/get');
   }
+}
 
-  const { id } = await context.params;
-  const leadId = id?.trim();
-  if (!leadId) {
-    return NextResponse.json({ message: 'Lead id is required.' }, { status: 400 });
+export async function POST(request: NextRequest, context: RouteContext): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  try {
+    const { id } = await context.params;
+    if (!isUuid(id)) throw new WorkspaceError('A valid lead id is required.', 400);
+    const body = await workspaceBody(request);
+    if (body.client_id !== undefined && !isUuid(body.client_id)) throw new WorkspaceError('Choose a valid existing account.', 400);
+    if ((body.create === true) === isUuid(body.client_id)) throw new WorkspaceError('Choose an existing account or create a new one, not both.', 400);
+    const { data, error } = await supabase.rpc('link_lead_account', {
+      p_lead_id: id, p_client_id: body.client_id ?? null, p_create: body.create === true,
+    });
+    if (error) throw databaseError(error);
+    return NextResponse.json({ leadId: id, clientId: data });
+  } catch (error) {
+    return workspaceApiError(error, 'lead-workspace/post');
   }
-
-  const leadResult = await supabase
-    .from('leads')
-    .select('id,full_name,email,phone,source')
-    .eq('id', leadId)
-    .maybeSingle<LeadRow>();
-
-  if (leadResult.error) {
-    return NextResponse.json({ message: leadResult.error.message }, { status: 500 });
-  }
-
-  const lead = leadResult.data;
-  if (!lead) {
-    return NextResponse.json({ message: 'Lead not found.' }, { status: 404 });
-  }
-
-  let clientId: string | null = null;
-
-  if (lead.email) {
-    const byEmail = await supabase
-      .from('clients')
-      .select('id')
-      .eq('email', lead.email)
-      .limit(1)
-      .maybeSingle<{ id: string }>();
-
-    if (byEmail.error) {
-      return NextResponse.json({ message: byEmail.error.message }, { status: 500 });
-    }
-
-    clientId = byEmail.data?.id ?? null;
-  }
-
-  if (!clientId && lead.phone) {
-    const byPhone = await supabase
-      .from('clients')
-      .select('id')
-      .eq('phone', lead.phone)
-      .limit(1)
-      .maybeSingle<{ id: string }>();
-
-    if (byPhone.error) {
-      return NextResponse.json({ message: byPhone.error.message }, { status: 500 });
-    }
-
-    clientId = byPhone.data?.id ?? null;
-  }
-
-  if (!clientId && lead.full_name) {
-    const byName = await supabase
-      .from('clients')
-      .select('id')
-      .ilike('full_name', lead.full_name)
-      .limit(1)
-      .maybeSingle<{ id: string }>();
-
-    if (byName.error) {
-      return NextResponse.json({ message: byName.error.message }, { status: 500 });
-    }
-
-    clientId = byName.data?.id ?? null;
-  }
-
-  if (!clientId) {
-    const created = await supabase
-      .from('clients')
-      .insert([
-        {
-          full_name: lead.full_name,
-          email: lead.email,
-          phone: lead.phone,
-          source: lead.source,
-        },
-      ])
-      .select('id')
-      .single<{ id: string }>();
-
-    if (created.error) {
-      return NextResponse.json({ message: created.error.message }, { status: 500 });
-    }
-
-    clientId = created.data.id;
-  }
-
-  return NextResponse.json(
-    {
-      leadId: lead.id,
-      clientId,
-    },
-    { status: 200 },
-  );
 }

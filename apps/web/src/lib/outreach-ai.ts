@@ -4,6 +4,9 @@
  * Grounding payloads are built strictly from stored data; the model is
  * instructed to cite which signals it used so output can be verified.
  */
+import { ASSET_FIELDS, ASSET_LABELS, ASSET_SOURCE_LABELS, isAssetKind, isAssetSource, type WorkspaceAsset, type WorkspaceNote } from '@crm/shared';
+import { isRecord } from './workspace-validation';
+import { websiteBusinessDetails } from './website-intake';
 
 export interface OutreachDraft {
   subject: string;
@@ -25,6 +28,8 @@ interface LeadLike {
   source?: string | null;
   status?: string | null;
   form_payload?: Record<string, unknown> | null;
+  workspace_assets?: WorkspaceAsset[];
+  workspace_notes?: WorkspaceNote[];
 }
 
 function text(value: unknown): string | null {
@@ -43,6 +48,21 @@ export function buildGrounding(lead: LeadLike): string {
     section('Prospect', lead.full_name),
     section('Line of business', lead.line_of_business),
   ];
+  const business = websiteBusinessDetails(lead.form_payload ?? {});
+  lines.push(section('Business name', business.businessName), section('Actual business industry', business.industry));
+  for (const asset of lead.workspace_assets ?? []) {
+    if (asset.archived_at || !isAssetKind(asset.asset_type)) continue;
+    const source = isAssetSource(asset.metadata.source) ? ASSET_SOURCE_LABELS[asset.metadata.source] : 'Source not recorded';
+    lines.push(`Recorded ${ASSET_LABELS[asset.asset_type]}: ${asset.title} (${source}; coverage NOT confirmed)`);
+    const details = isRecord(asset.metadata.details) ? asset.metadata.details : {};
+    for (const field of ASSET_FIELDS[asset.asset_type]) {
+      if (text(details[field.key])) lines.push(`  ${field.label}: ${text(details[field.key])}`);
+    }
+    if (text(details.notes)) lines.push(`  Asset notes: ${text(details.notes)}`);
+  }
+  for (const note of lead.workspace_notes ?? []) {
+    lines.push(`Agent ${note.note_type} note (${note.updated_at}): ${note.content}`);
+  }
 
   if (kind === 'commercial') {
     const company = (profile.company ?? {}) as Record<string, unknown>;
@@ -260,24 +280,27 @@ async function chat(messages: ChatMessage[], maxTokens: number): Promise<string 
 }
 
 const DRAFT_SYSTEM_PROMPT = `You are an outreach writer for Shield Assurance, an independent insurance agency in Tucson, Arizona.
-Write a short, specific first-touch email from a producer to a prospect, grounded ONLY in the facts provided.
+Write a short, specific email from a producer, grounded ONLY in the facts provided.
 Hard rules:
-- Lead with the single most time-sensitive or unusual fact (an upcoming renewal, a fleet change, a compliance record, a coverage gap signal) and name it precisely.
-- Reference at least two concrete facts naturally; never pad with generic claims ("enhance your coverage", "improve cost efficiency") unless tied to a specific number or date.
+- For an inbound website request, answer what they asked for; do not write cold prospecting copy. For an existing call or service conversation, follow the latest agent notes rather than pretending this is first contact.
+- Reference the most relevant concrete facts naturally. If few facts are available, ask for the missing information rather than inventing details or padding.
 - Never invent facts, pricing, or coverage details not in the grounding data.
+- An asset recorded in the CRM is NOT proof of insurance, a coverage gap, a bound policy or a carrier endorsement.
+- Keep industry separate from insurance line: "commercial" is not an industry.
 - Tone: direct, professional, peer-to-peer. No hype, no emojis, no exclamation marks.
-- Length: 60-120 words. One clear ask: a brief call.
+- Length: 60-120 words. One clear next step, honoring the requested contact method.
 - Do not mention how you obtained the data or any data provider.
 - Sign as "Chance" from Shield Assurance.
 Return JSON: {"subject": string, "body": string, "cited_signals": string[]} where cited_signals lists the exact grounding facts you used.`;
 
-const POINTS_SYSTEM_PROMPT = `You prepare an insurance producer at Shield Assurance (Tucson, AZ) for a first sales call, using ONLY the facts provided.
+const POINTS_SYSTEM_PROMPT = `You prepare an insurance producer at Shield Assurance (Tucson, AZ) for a call or follow-up, using ONLY the facts provided.
 Hard rules:
 - Every point MUST be anchored to a specific fact from the grounding data (a date, carrier, broker, count, dollar figure, violation, or fleet detail). Quote the fact in the point.
 - FORBIDDEN: generic filler such as "how is the market impacting you", "what challenges do you face", "tell me about your business", or any question that could be asked of any company. If a point could apply to a different company, delete it.
 - Prefer angles a competing producer would miss: timing against a specific renewal date, the incumbent carrier/broker relationship, compliance exposure (OSHA/DOT) phrased respectfully, participant counts vs plan design, insurance spend vs revenue.
 - Format: 3-6 points, each one sentence, written as something the producer can actually say or ask on the call.
 - Never invent facts. Do not mention data sources or providers. No emojis.
+- Use the latest call notes and recorded assets. Never assume a recorded asset is insured or that a coverage change has been processed.
 Return JSON: {"points": string[], "cited_signals": string[]}.`;
 
 export async function draftOutreach(lead: LeadLike, instruction?: string): Promise<OutreachDraft | null> {

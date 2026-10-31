@@ -2,9 +2,13 @@
 
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import SectionLayout from '../../../components/crm/SectionLayout';
 import { useNotifications } from '../../../context/NotificationContext';
+import RecordAssetsPanel from '../../../components/crm/RecordAssetsPanel';
+import RecordWorkPanel from '../../../components/crm/RecordWorkPanel';
+import { accountLifecycle } from '../../../lib/account-lifecycle';
+import { workspaceFetch } from '../../../lib/workspace-fetch';
 
 interface Client {
   id: string;
@@ -32,6 +36,7 @@ interface PolicyItem {
   policy_number?: string | null;
   effective_date?: string | null;
   renewal_date?: string | null;
+  expiration_date?: string | null;
   status?: string | null;
   created_at?: string | null;
 }
@@ -231,18 +236,6 @@ const messageTemplates = [
   },
 ];
 
-const emptyAssetForm = {
-  title: '',
-  asset_type: 'general',
-  value: '',
-};
-
-const emptyTaskForm = {
-  subject: '',
-  description: '',
-  due_date: '',
-  priority: 'medium',
-};
 
 const emptyFileForm = {
   file_name: '',
@@ -250,19 +243,6 @@ const emptyFileForm = {
   file_type: 'PDF',
 };
 
-const emptyAssetEditForm = {
-  title: '',
-  asset_type: 'general',
-  value: '',
-};
-
-const emptyTaskEditForm = {
-  subject: '',
-  description: '',
-  due_date: '',
-  status: 'open',
-  priority: 'medium',
-};
 
 const emptyFileEditForm = {
   file_name: '',
@@ -296,58 +276,6 @@ function normalize(value?: string | null): string {
   return (value ?? '').trim().toLowerCase();
 }
 
-function parseDateOrNull(value?: string | null): Date | null {
-  if (!value) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed;
-}
-
-function getLeadNotificationCount(lead: LeadItem): number {
-  const lastViewedAt = parseDateOrNull(lead.last_viewed_at);
-  const lastActivityAt = parseDateOrNull(lead.last_activity_at) ?? parseDateOrNull(lead.created_at);
-  let count = 0;
-
-  if (!lastViewedAt) {
-    count += 1;
-  } else {
-    if (lastActivityAt && lastActivityAt.getTime() > lastViewedAt.getTime()) {
-      count += 1;
-    }
-    if (lastViewedAt.getTime() <= Date.now() - 24 * 60 * 60 * 1000) {
-      count += 1;
-    }
-  }
-
-  return count;
-}
-
-function getClientNotificationCount(client: Client): number {
-  const lastViewedAt = parseDateOrNull(client.last_viewed_at);
-  const lastActivityAt = parseDateOrNull(client.last_activity_at) ?? parseDateOrNull(client.created_at);
-  const policyEffectiveAt = parseDateOrNull(client.policy_effective_at);
-  const now = Date.now();
-  let count = 0;
-
-  if (lastActivityAt && lastActivityAt.getTime() > (lastViewedAt?.getTime() ?? 0)) {
-    count += 1;
-  }
-
-  if (policyEffectiveAt) {
-    const milestone30 = policyEffectiveAt.getTime() + 30 * 24 * 60 * 60 * 1000;
-    const milestone45 = policyEffectiveAt.getTime() + 45 * 24 * 60 * 60 * 1000;
-
-    if (now >= milestone30 && (!lastViewedAt || lastViewedAt.getTime() < milestone30)) {
-      count += 1;
-    }
-    if (now >= milestone45 && (!lastViewedAt || lastViewedAt.getTime() < milestone45)) {
-      count += 1;
-    }
-  }
-
-  return count;
-}
-
 async function readFileAsBase64(file: File): Promise<string> {
   return await new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -368,23 +296,6 @@ function formatCurrency(value?: number | null): string {
     currency: 'USD',
     maximumFractionDigits: 0,
   }).format(value);
-}
-
-function deriveLifecycleStage(input: { policies: PolicyItem[]; leads: LeadItem[] }): string {
-  const renewalSoon = input.policies.some((policy) => {
-    if (!policy.renewal_date) return false;
-    const diff = new Date(policy.renewal_date).getTime() - Date.now();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    return days >= 0 && days <= 90;
-  });
-  if (renewalSoon) return 'Renewal';
-
-  const bound = input.policies.some((policy) => ['issued', 'active', 'bound'].includes(normalize(policy.status)));
-  if (bound) return 'Bound';
-
-  if (input.leads.some((lead) => normalize(lead.status) === 'quoted')) return 'Quoted';
-  if (input.leads.some((lead) => ['working', 'contacted'].includes(normalize(lead.status)))) return 'Prospect';
-  return input.leads.length > 0 ? 'Lead' : 'Prospect';
 }
 
 function summarizeConversation(items: CommunicationItem[]): string {
@@ -448,29 +359,17 @@ function deriveRiskSignals(input: {
   return flags;
 }
 
-async function safeJson<T>(url: string): Promise<T | null> {
-  try {
-    const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) return null;
-    return (await response.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
 export default function ClientWorkspacePage(): JSX.Element {
   const params = useParams<{ clientId: string }>();
   const searchParams = useSearchParams();
   const { refresh: refreshNotificationCounts } = useNotifications();
   const clientId = params.clientId;
-  const leadIdFromQuery = searchParams.get('lead');
 
   const [client, setClient] = useState<Client | null>(null);
   const [policies, setPolicies] = useState<PolicyItem[]>([]);
   const [leads, setLeads] = useState<LeadItem[]>([]);
   const [communications, setCommunications] = useState<CommunicationItem[]>([]);
   const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
-  const [timelineTasks, setTimelineTasks] = useState<TimelineTask[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [notifications, setNotifications] = useState<Array<Record<string, unknown>>>([]);
   const [claims, setClaims] = useState<ClaimItem[]>([]);
@@ -499,13 +398,9 @@ export default function ClientWorkspacePage(): JSX.Element {
   const [savingMessage, setSavingMessage] = useState(false);
   const [editingMessage, setEditingMessage] = useState<ScheduledMessage | null>(null);
 
-  const [assetForm, setAssetForm] = useState(emptyAssetForm);
-  const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
-  const [assetEditForm, setAssetEditForm] = useState(emptyAssetEditForm);
-  const [noteBody, setNoteBody] = useState('');
-  const [taskForm, setTaskForm] = useState(emptyTaskForm);
-  const [editingClientTaskId, setEditingClientTaskId] = useState<string | null>(null);
-  const [clientTaskEditForm, setClientTaskEditForm] = useState(emptyTaskEditForm);
+  const [compose, setCompose] = useState<{ kind: 'note' | 'reminder'; token: number }>();
+  const [assetComposeToken, setAssetComposeToken] = useState(0);
+  const [openWorkCount, setOpenWorkCount] = useState<number | null>(null);
   const [fileForm, setFileForm] = useState(emptyFileForm);
   const [selectedUploadName, setSelectedUploadName] = useState('');
   const [selectedUploadSize, setSelectedUploadSize] = useState<number | null>(null);
@@ -520,80 +415,68 @@ export default function ClientWorkspacePage(): JSX.Element {
   const [activeTemplate, setActiveTemplate] = useState('');
   const [selectedExistingFileIds, setSelectedExistingFileIds] = useState<string[]>([]);
   const [composerUploadFile, setComposerUploadFile] = useState<File | null>(null);
+  const loadedClientId = useRef<string | null>(null);
+  const loadVersion = useRef(0);
 
   const loadData = async (): Promise<void> => {
-    setLoading(true);
+    const version = ++loadVersion.current;
     setError(null);
-
-    const payload = await safeJson<WorkspacePayload>(
-      `/api/clients/${clientId}/workspace?timelineLimit=${timelineLimit}&activityLimit=${activityLimit}`,
-    );
-    if (!payload) {
-      setError('Failed to load client workspace.');
-      setLoading(false);
-      return;
-    }
-
-    setClient(payload.client);
-    setPolicies(payload.policies ?? []);
-    setLeads(payload.leads ?? []);
-    setCommunications(payload.communications ?? []);
-    setScheduledMessages(payload.scheduledMessages ?? []);
-    setTimelineTasks(payload.timelineTasks ?? []);
-    setEvents(payload.events ?? []);
-    setNotifications(payload.notifications ?? []);
-    setClaims(payload.claims ?? []);
-    setEndorsements(payload.endorsements ?? []);
-    setCertificates(payload.certificates ?? []);
-
-    setAssets(payload.assets ?? []);
-    setClientTasks(payload.clientTasks ?? []);
-    setFiles(payload.files ?? []);
-    setTags(payload.tags ?? []);
-    setActivities(payload.activities ?? []);
-
-    if (payload.client?.email) {
-      const deliveryData = await safeJson<DeliveryAuditItem[]>(
-        `/api/communication-log/delivery?to_email=${encodeURIComponent(payload.client.email)}&limit=25`,
+    try {
+      const payload = await workspaceFetch<WorkspacePayload>(
+        `/api/clients/${clientId}/workspace?timelineLimit=${timelineLimit}&activityLimit=${activityLimit}`,
       );
-      setDeliveryAudit(deliveryData ?? []);
-    } else {
-      setDeliveryAudit([]);
+      if (version !== loadVersion.current) return;
+      loadedClientId.current = clientId;
+      setClient(payload.client);
+      setPolicies(payload.policies ?? []);
+      setLeads(payload.leads ?? []);
+      setCommunications(payload.communications ?? []);
+      setScheduledMessages(payload.scheduledMessages ?? []);
+      setEvents(payload.events ?? []);
+      setNotifications(payload.notifications ?? []);
+      setClaims(payload.claims ?? []);
+      setEndorsements(payload.endorsements ?? []);
+      setCertificates(payload.certificates ?? []);
+      setAssets(payload.assets ?? []);
+      setClientTasks(payload.clientTasks ?? []);
+      setFiles(payload.files ?? []);
+      setTags(payload.tags ?? []);
+      setActivities(payload.activities ?? []);
+      if (payload.client?.email) {
+        const deliveryData = await workspaceFetch<DeliveryAuditItem[]>(
+          `/api/communication-log/delivery?to_email=${encodeURIComponent(payload.client.email)}&limit=25`,
+        );
+        if (version === loadVersion.current) setDeliveryAudit(deliveryData);
+      } else {
+        setDeliveryAudit([]);
+      }
+    } catch (failure) {
+      if (version === loadVersion.current) setError(failure instanceof Error ? failure.message : 'Failed to load client workspace.');
+    } finally {
+      if (version === loadVersion.current) setLoading(false);
     }
-
-    setLoading(false);
   };
 
   useEffect(() => {
     if (clientId) {
+      if (loadedClientId.current !== clientId) {
+        setLoading(true);
+        setClient(null);
+      }
       void loadData();
     }
   }, [clientId, timelineLimit, activityLimit]);
 
-  const lifecycleStage = useMemo(() => deriveLifecycleStage({ policies, leads }), [policies, leads]);
+  useEffect(() => {
+    const requested = searchParams.get('tab');
+    if (requested === 'assets' || requested === 'notes' || requested === 'tasks') setProfileTab(requested);
+  }, [searchParams]);
 
-  const visibleClientTasks = useMemo<ClientTask[]>(() => {
-    if (clientTasks.length > 0) return clientTasks;
-    return timelineTasks.map((task) => ({
-      id: task.id,
-      subject: task.subject ?? 'Service task',
-      due_date: task.due_date ?? null,
-      status: task.status ?? 'open',
-      priority: 'medium',
-      description: null,
-    }));
-  }, [clientTasks, timelineTasks]);
-
-  const usingLegacyTaskStore = clientTasks.length === 0 && timelineTasks.length > 0;
+  const lifecycleStage = useMemo(() => accountLifecycle(policies), [policies]);
 
   const openClientTasks = useMemo(
-    () => visibleClientTasks.filter((task) => normalize(task.status) !== 'completed'),
-    [visibleClientTasks],
-  );
-
-  const notes = useMemo(
-    () => assets.filter((item) => normalize(item.asset_type) === 'note'),
-    [assets],
+    () => clientTasks.filter((task) => normalize(task.status) === 'open'),
+    [clientTasks],
   );
 
   const commercialSubmissionAssets = useMemo(
@@ -786,190 +669,6 @@ export default function ClientWorkspacePage(): JSX.Element {
     await loadData();
   };
 
-  const createAsset = async (): Promise<void> => {
-    if (!assetForm.title.trim()) return;
-
-    const response = await fetch(`/api/clients/${clientId}/assets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(assetForm),
-    });
-
-    if (!response.ok) {
-      setError('Unable to create asset.');
-      return;
-    }
-
-    await logActivity('asset_create', `Added asset: ${assetForm.title}`, assetForm.value || undefined);
-    setAssetForm(emptyAssetForm);
-    await loadData();
-  };
-
-  const deleteAsset = async (id: string): Promise<void> => {
-    const response = await fetch(`/api/clients/${clientId}/assets`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    });
-
-    if (!response.ok) {
-      setError('Unable to delete asset.');
-      return;
-    }
-
-    await logActivity('asset_delete', 'Deleted client asset');
-    await loadData();
-  };
-
-  const startAssetEdit = (asset: ClientAsset): void => {
-    setEditingAssetId(asset.id);
-    setAssetEditForm({
-      title: asset.title,
-      asset_type: asset.asset_type,
-      value: asset.value ?? '',
-    });
-  };
-
-  const saveAssetEdit = async (): Promise<void> => {
-    if (!editingAssetId || !assetEditForm.title.trim()) return;
-
-    const response = await fetch(`/api/clients/${clientId}/assets`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: editingAssetId,
-        title: assetEditForm.title,
-        asset_type: assetEditForm.asset_type,
-        value: assetEditForm.value,
-      }),
-    });
-
-    if (!response.ok) {
-      setError('Unable to update asset.');
-      return;
-    }
-
-    await logActivity('asset_update', `Updated asset: ${assetEditForm.title}`);
-    setEditingAssetId(null);
-    setAssetEditForm(emptyAssetEditForm);
-    await loadData();
-  };
-
-  const createNote = async (): Promise<void> => {
-    if (!noteBody.trim()) return;
-
-    const response = await fetch(`/api/clients/${clientId}/assets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: 'Internal Note',
-        asset_type: 'note',
-        value: noteBody,
-      }),
-    });
-
-    if (!response.ok) {
-      setError('Unable to save note.');
-      return;
-    }
-
-    await logActivity('note_create', 'Added internal note', noteBody);
-    setNoteBody('');
-    await loadData();
-  };
-
-  const createClientTask = async (): Promise<void> => {
-    if (!taskForm.subject.trim()) return;
-
-    const response = await fetch(`/api/clients/${clientId}/client-tasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(taskForm),
-    });
-
-    if (!response.ok) {
-      setError('Unable to create client task.');
-      return;
-    }
-
-    await logActivity('task_create', `Created client task: ${taskForm.subject}`);
-    setTaskForm(emptyTaskForm);
-    await loadData();
-  };
-
-  const updateClientTaskStatus = async (task: ClientTask, status: 'open' | 'completed'): Promise<void> => {
-    const response = await fetch(`/api/clients/${clientId}/client-tasks`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: task.id,
-        status,
-      }),
-    });
-
-    if (!response.ok) {
-      setError('Unable to update client task status.');
-      return;
-    }
-
-    await logActivity('task_update', `Task marked ${status}: ${task.subject}`);
-    await loadData();
-  };
-
-  const deleteClientTask = async (id: string): Promise<void> => {
-    const response = await fetch(`/api/clients/${clientId}/client-tasks`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    });
-
-    if (!response.ok) {
-      setError('Unable to delete client task.');
-      return;
-    }
-
-    await logActivity('task_delete', 'Deleted client task');
-    await loadData();
-  };
-
-  const startClientTaskEdit = (task: ClientTask): void => {
-    setEditingClientTaskId(task.id);
-    setClientTaskEditForm({
-      subject: task.subject,
-      description: task.description ?? '',
-      due_date: task.due_date ? task.due_date.slice(0, 10) : '',
-      status: task.status ?? 'open',
-      priority: task.priority ?? 'medium',
-    });
-  };
-
-  const saveClientTaskEdit = async (): Promise<void> => {
-    if (!editingClientTaskId || !clientTaskEditForm.subject.trim()) return;
-
-    const response = await fetch(`/api/clients/${clientId}/client-tasks`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: editingClientTaskId,
-        subject: clientTaskEditForm.subject,
-        description: clientTaskEditForm.description,
-        due_date: clientTaskEditForm.due_date || null,
-        status: clientTaskEditForm.status,
-        priority: clientTaskEditForm.priority,
-      }),
-    });
-
-    if (!response.ok) {
-      setError('Unable to update client task.');
-      return;
-    }
-
-    await logActivity('task_update', `Updated client task: ${clientTaskEditForm.subject}`);
-    setEditingClientTaskId(null);
-    setClientTaskEditForm(emptyTaskEditForm);
-    await loadData();
-  };
-
   const createFileRecord = async (): Promise<void> => {
     if (!fileForm.file_name.trim()) return;
 
@@ -1135,92 +834,7 @@ export default function ClientWorkspacePage(): JSX.Element {
     setProfileTab('tasks');
   };
 
-  const selectedLeadForNotification = useMemo(() => {
-    if (!leadIdFromQuery) {
-      return leads[0] ?? null;
-    }
-
-    return leads.find((lead) => lead.id === leadIdFromQuery) ?? leads[0] ?? null;
-  }, [leadIdFromQuery, leads]);
-
-  const leadNotificationCount = selectedLeadForNotification ? getLeadNotificationCount(selectedLeadForNotification) : 0;
-  const clientNotificationCount = client ? getClientNotificationCount(client) : 0;
-  const totalNotificationCount = leadNotificationCount + clientNotificationCount;
-
-  const notificationReasons = useMemo(() => {
-    const reasons: string[] = [];
-
-    if (selectedLeadForNotification) {
-      const lastViewed = parseDateOrNull(selectedLeadForNotification.last_viewed_at);
-      const lastActivity = parseDateOrNull(selectedLeadForNotification.last_activity_at) ?? parseDateOrNull(selectedLeadForNotification.created_at);
-
-      if (!lastViewed) {
-        reasons.push('Lead has not been reviewed yet.');
-      } else {
-        if (lastActivity && lastActivity.getTime() > lastViewed.getTime()) {
-          reasons.push('Lead has new activity since last review.');
-        }
-        if (lastViewed.getTime() <= Date.now() - 24 * 60 * 60 * 1000) {
-          reasons.push('Lead review cycle exceeded 24 hours.');
-        }
-      }
-    }
-
-    if (client) {
-      const lastViewed = parseDateOrNull(client.last_viewed_at);
-      const lastActivity = parseDateOrNull(client.last_activity_at) ?? parseDateOrNull(client.created_at);
-      const policyEffective = parseDateOrNull(client.policy_effective_at);
-
-      if (lastActivity && lastActivity.getTime() > (lastViewed?.getTime() ?? 0)) {
-        reasons.push('Client has unread inbound activity.');
-      }
-
-      if (policyEffective) {
-        const now = Date.now();
-        const day30 = policyEffective.getTime() + 30 * 24 * 60 * 60 * 1000;
-        const day45 = policyEffective.getTime() + 45 * 24 * 60 * 60 * 1000;
-
-        if (now >= day30 && (!lastViewed || lastViewed.getTime() < day30)) {
-          reasons.push('30-day policy review milestone is due.');
-        }
-
-        if (now >= day45 && (!lastViewed || lastViewed.getTime() < day45)) {
-          reasons.push('45-day policy review milestone is due.');
-        }
-      }
-    }
-
-    return reasons;
-  }, [client, selectedLeadForNotification]);
-
-  const markNotificationsComplete = async (): Promise<void> => {
-    const nowIso = new Date().toISOString();
-
-    const updates: Promise<Response>[] = [];
-    if (client) {
-      updates.push(
-        fetch('/api/clients', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: client.id, last_viewed_at: nowIso }),
-        }),
-      );
-    }
-
-    if (selectedLeadForNotification) {
-      updates.push(
-        fetch('/api/leads', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: selectedLeadForNotification.id, last_viewed_at: nowIso }),
-        }),
-      );
-    }
-
-    await Promise.all(updates).catch(() => null);
-    await refreshNotificationCounts();
-    await loadData();
-  };
+  const openAccountWork = openWorkCount ?? 0;
 
   const draftMessageWithAi = async (): Promise<void> => {
     if (!composer.body.trim()) return;
@@ -1257,13 +871,13 @@ export default function ClientWorkspacePage(): JSX.Element {
   };
 
   return (
-    <SectionLayout title="Client">
+    <SectionLayout title="Account">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link href="/clients" className="text-sm font-semibold text-[#20a8d8] hover:underline">
             Back to Clients
           </Link>
-          <h2 className="mt-1 text-2xl font-bold text-[#23282c]">{client?.full_name ?? 'Loading client workspace...'}</h2>
+          <h2 className="mt-1 text-2xl font-bold text-[#23282c]">{client?.full_name ?? 'Loading account workspace...'}</h2>
           <p className="text-sm text-[#5c6873]">
             {client?.email || '--'} · {client?.phone || '--'}
           </p>
@@ -1273,6 +887,12 @@ export default function ClientWorkspacePage(): JSX.Element {
           <span className="rounded-full bg-[#ecf8f1] px-3 py-1 font-semibold text-[#1f7a47]">SMS {smsCommunicationOn ? 'On' : 'Off'}</span>
           <span className="rounded-full bg-[#fff3de] px-3 py-1 font-semibold text-[#8a4d00]">Preferred: {client?.preferred_channel || 'email'}</span>
           <span className="rounded-full bg-[#edf4ff] px-3 py-1 font-semibold text-[#2f5c9f]">Lifecycle: {lifecycleStage}</span>
+          <button type="button" disabled={loading || !client} onClick={() => { setProfileTab('notes'); setCompose((value) => ({ kind: 'note', token: (value?.token ?? 0) + 1 })); }}
+            className="rounded border border-cui-primary bg-white px-3 py-1 font-semibold text-cui-primary">Add note</button>
+          <button type="button" disabled={loading || !client} onClick={() => { setProfileTab('tasks'); setCompose((value) => ({ kind: 'reminder', token: (value?.token ?? 0) + 1 })); }}
+            className="rounded border border-cui-primary bg-white px-3 py-1 font-semibold text-cui-primary">Add reminder</button>
+          <button type="button" disabled={loading || !client} onClick={() => { setProfileTab('assets'); setAssetComposeToken((value) => value + 1); }}
+            className="rounded border border-cui-primary bg-white px-3 py-1 font-semibold text-cui-primary">Add asset</button>
           <button
             type="button"
             className="rounded-full bg-[#167495] px-3 py-1 font-semibold text-white hover:bg-[#0a4f8f]"
@@ -1283,38 +903,31 @@ export default function ClientWorkspacePage(): JSX.Element {
         </div>
       </div>
 
-      {totalNotificationCount > 0 ? (
+      {openAccountWork > 0 ? (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#f4c7c3] bg-[#fff5f4] px-4 py-3">
           <div className="flex items-start gap-3">
             <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-rose-600 text-xs font-bold text-white">
-              {totalNotificationCount > 9 ? '9+' : totalNotificationCount}
+              {openAccountWork}
             </span>
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#9f2f2f]">Notification Center</p>
-              <p className="mt-1 text-sm text-[#5a2f2f]">Action items remain active until they are explicitly marked complete.</p>
-              <div className="mt-1 space-y-0.5 text-xs text-[#7a3a3a]">
-                {notificationReasons.map((reason) => (
-                  <p key={reason}>{reason}</p>
-                ))}
-              </div>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#9f2f2f]">Open account work</p>
+              <p className="mt-1 text-sm text-[#5a2f2f]">Review due times and complete individual tasks in Tasks. Opening this account does not complete them.</p>
             </div>
           </div>
           <button
             type="button"
-            onClick={() => {
-              void markNotificationsComplete();
-            }}
+            onClick={() => setProfileTab('tasks')}
             className="rounded border border-[#cf6a63] bg-white px-3 py-1.5 text-xs font-semibold text-[#7f2d2d] hover:bg-[#fff0ef]"
           >
-            Mark Action Complete
+            Review tasks
           </button>
         </div>
       ) : null}
 
-      {error ? <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{error}</div> : null}
+      {error ? <div role="alert" className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{error} <button type="button" onClick={() => void loadData()} className="font-semibold underline">Refresh</button></div> : null}
       {loading ? <div className="text-sm text-[#73818f]">Loading client workspace...</div> : null}
 
-      {!loading ? (
+      {!loading && client ? (
         <div className={`relative grid grid-cols-1 gap-4 transition-all duration-300 ${isConversationOpen ? 'xl:pr-[26rem]' : ''}`}>
           <section className="rounded border border-[#c8ced3] bg-white shadow-sm">
             <div className="border-b border-[#f0f3f5] px-4 py-4">
@@ -1324,8 +937,8 @@ export default function ClientWorkspacePage(): JSX.Element {
                   <p className="text-xl font-semibold text-[#14324f]">{policies.length}</p>
                 </div>
                 <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Client Tasks</p>
-                  <p className="text-xl font-semibold text-[#14324f]">{openClientTasks.length}</p>
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Open work</p>
+                  <p className="text-xl font-semibold text-[#14324f]">{openWorkCount ?? '--'}</p>
                 </div>
                 <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
                   <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Files</p>
@@ -1458,276 +1071,13 @@ export default function ClientWorkspacePage(): JSX.Element {
                 </div>
               ) : null}
 
-              {profileTab === 'assets' ? (
-                <div className="space-y-4">
-                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
-                    <h4 className="text-sm font-semibold text-[#14324f]">Add Client Asset</h4>
-                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
-                      <input
-                        className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                        placeholder="Asset title"
-                        value={assetForm.title}
-                        onChange={(e) => setAssetForm((prev) => ({ ...prev, title: e.target.value }))}
-                      />
-                      <input
-                        className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                        placeholder="Asset type"
-                        value={assetForm.asset_type}
-                        onChange={(e) => setAssetForm((prev) => ({ ...prev, asset_type: e.target.value }))}
-                      />
-                      <input
-                        className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                        placeholder="Asset details"
-                        value={assetForm.value}
-                        onChange={(e) => setAssetForm((prev) => ({ ...prev, value: e.target.value }))}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void createAsset()}
-                      className="mt-2 rounded bg-[#20a8d8] px-3 py-2 text-xs font-semibold text-white"
-                    >
-                      Save Asset
-                    </button>
-                  </section>
-
-                  <section className="space-y-2">
-                    {assets.filter((item) => normalize(item.asset_type) !== 'note').length === 0 ? (
-                      <p className="text-sm text-[#73818f]">No assets yet.</p>
-                    ) : null}
-                    {assets
-                      .filter((item) => normalize(item.asset_type) !== 'note')
-                      .map((asset) => (
-                        <article key={asset.id} className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
-                          {editingAssetId === asset.id ? (
-                            <div className="space-y-2">
-                              <input
-                                className="w-full rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                                value={assetEditForm.title}
-                                onChange={(e) => setAssetEditForm((prev) => ({ ...prev, title: e.target.value }))}
-                              />
-                              <input
-                                className="w-full rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                                value={assetEditForm.asset_type}
-                                onChange={(e) => setAssetEditForm((prev) => ({ ...prev, asset_type: e.target.value }))}
-                              />
-                              <input
-                                className="w-full rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                                value={assetEditForm.value}
-                                onChange={(e) => setAssetEditForm((prev) => ({ ...prev, value: e.target.value }))}
-                              />
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  className="rounded bg-[#20a8d8] px-3 py-1.5 text-xs font-semibold text-white"
-                                  onClick={() => void saveAssetEdit()}
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  type="button"
-                                  className="rounded bg-[#e4e5e6] px-3 py-1.5 text-xs font-semibold text-[#5c6873]"
-                                  onClick={() => setEditingAssetId(null)}
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <>
-                              <p className="text-sm font-semibold text-[#14324f]">{asset.title}</p>
-                              <p className="text-xs text-[#73818f]">{asset.asset_type} · {safeDate(asset.updated_at)}</p>
-                              <p className="mt-1 text-sm text-[#425468]">{asset.value || '--'}</p>
-                              <div className="mt-2 flex gap-2">
-                                <button
-                                  type="button"
-                                  className="rounded bg-[#e7f2ff] px-3 py-1.5 text-xs font-semibold text-[#0a4f8f]"
-                                  onClick={() => startAssetEdit(asset)}
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  className="rounded bg-[#ffe8e8] px-3 py-1.5 text-xs font-semibold text-[#9f2f2f]"
-                                  onClick={() => void deleteAsset(asset.id)}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </>
-                          )}
-                        </article>
-                      ))}
-                  </section>
-                </div>
-              ) : null}
-
-              {profileTab === 'notes' ? (
-                <div className="space-y-4">
-                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
-                    <h4 className="text-sm font-semibold text-[#14324f]">Internal Notes</h4>
-                    <textarea
-                      className="mt-2 min-h-24 w-full rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                      placeholder="Add internal note"
-                      value={noteBody}
-                      onChange={(e) => setNoteBody(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void createNote()}
-                      className="mt-2 rounded bg-[#20a8d8] px-3 py-2 text-xs font-semibold text-white"
-                    >
-                      Save Note
-                    </button>
-                  </section>
-
-                  {notes.length === 0 ? <p className="text-sm text-[#73818f]">No notes yet.</p> : null}
-                  {notes.map((note) => (
-                    <article key={note.id} className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
-                      <p className="text-xs text-[#73818f]">{safeDate(note.updated_at)}</p>
-                      <p className="mt-1 whitespace-pre-line text-sm text-[#425468]">{note.value || '--'}</p>
-                      <button
-                        type="button"
-                        className="mt-2 rounded bg-[#ffe8e8] px-3 py-1.5 text-xs font-semibold text-[#9f2f2f]"
-                        onClick={() => void deleteAsset(note.id)}
-                      >
-                        Delete
-                      </button>
-                    </article>
-                  ))}
-                </div>
-              ) : null}
-
-              {profileTab === 'tasks' ? (
-                <div className="space-y-4">
-                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
-                    <h4 className="text-sm font-semibold text-[#14324f]">Create Client Task</h4>
-                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                      <input
-                        className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                        placeholder="Task subject"
-                        value={taskForm.subject}
-                        onChange={(e) => setTaskForm((prev) => ({ ...prev, subject: e.target.value }))}
-                      />
-                      <input
-                        className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                        type="date"
-                        value={taskForm.due_date}
-                        onChange={(e) => setTaskForm((prev) => ({ ...prev, due_date: e.target.value }))}
-                      />
-                      <input
-                        className="rounded border border-[#d8e3f0] px-3 py-2 text-sm md:col-span-2"
-                        placeholder="Description"
-                        value={taskForm.description}
-                        onChange={(e) => setTaskForm((prev) => ({ ...prev, description: e.target.value }))}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void createClientTask()}
-                      className="mt-2 rounded bg-[#20a8d8] px-3 py-2 text-xs font-semibold text-white"
-                    >
-                      Save Task
-                    </button>
-                  </section>
-
-                  {visibleClientTasks.length === 0 ? <p className="text-sm text-[#73818f]">No client tasks yet.</p> : null}
-                  {usingLegacyTaskStore ? (
-                    <p className="text-xs text-[#73818f]">Showing tasks from the standard task store for this client.</p>
-                  ) : null}
-                  {visibleClientTasks.map((task) => (
-                    <article key={task.id} className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
-                      {editingClientTaskId === task.id ? (
-                        <div className="space-y-2">
-                          <input
-                            className="w-full rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                            value={clientTaskEditForm.subject}
-                            onChange={(e) => setClientTaskEditForm((prev) => ({ ...prev, subject: e.target.value }))}
-                          />
-                          <input
-                            className="w-full rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                            value={clientTaskEditForm.description}
-                            onChange={(e) => setClientTaskEditForm((prev) => ({ ...prev, description: e.target.value }))}
-                          />
-                          <div className="grid grid-cols-3 gap-2">
-                            <input
-                              className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                              type="date"
-                              value={clientTaskEditForm.due_date}
-                              onChange={(e) => setClientTaskEditForm((prev) => ({ ...prev, due_date: e.target.value }))}
-                            />
-                            <select
-                              className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                              value={clientTaskEditForm.status}
-                              onChange={(e) => setClientTaskEditForm((prev) => ({ ...prev, status: e.target.value }))}
-                            >
-                              <option value="open">Open</option>
-                              <option value="completed">Completed</option>
-                            </select>
-                            <select
-                              className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
-                              value={clientTaskEditForm.priority}
-                              onChange={(e) => setClientTaskEditForm((prev) => ({ ...prev, priority: e.target.value }))}
-                            >
-                              <option value="low">Low</option>
-                              <option value="medium">Medium</option>
-                              <option value="high">High</option>
-                            </select>
-                          </div>
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              className="rounded bg-[#20a8d8] px-3 py-1.5 text-xs font-semibold text-white"
-                              onClick={() => void saveClientTaskEdit()}
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded bg-[#e4e5e6] px-3 py-1.5 text-xs font-semibold text-[#5c6873]"
-                              onClick={() => setEditingClientTaskId(null)}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <p className="text-sm font-semibold text-[#14324f]">{task.subject}</p>
-                          <p className="text-xs text-[#73818f]">Due {safeDateOnly(task.due_date)} · {task.status || 'open'} · {task.priority || 'medium'}</p>
-                          {task.description ? <p className="mt-1 text-sm text-[#425468]">{task.description}</p> : null}
-                          <div className="mt-2 flex gap-2">
-                            <button
-                              type="button"
-                              className="rounded bg-[#e7f2ff] px-3 py-1.5 text-xs font-semibold text-[#0a4f8f]"
-                              disabled={usingLegacyTaskStore}
-                              onClick={() => void updateClientTaskStatus(task, normalize(task.status) === 'completed' ? 'open' : 'completed')}
-                            >
-                              {normalize(task.status) === 'completed' ? 'Reopen' : 'Complete'}
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded bg-[#e7f2ff] px-3 py-1.5 text-xs font-semibold text-[#0a4f8f]"
-                              disabled={usingLegacyTaskStore}
-                              onClick={() => startClientTaskEdit(task)}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded bg-[#ffe8e8] px-3 py-1.5 text-xs font-semibold text-[#9f2f2f]"
-                              disabled={usingLegacyTaskStore}
-                              onClick={() => void deleteClientTask(task.id)}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </article>
-                  ))}
-                </div>
-              ) : null}
+              <div hidden={profileTab !== 'assets'}>
+                <RecordAssetsPanel key={clientId} target={{ type: 'client', id: clientId }} composeToken={assetComposeToken} onChanged={() => void loadData()} />
+              </div>
+              <div hidden={profileTab !== 'notes' && profileTab !== 'tasks'}>
+                <RecordWorkPanel key={clientId} target={{ type: 'client', id: clientId }} name={client?.full_name ?? 'Account'} section={profileTab === 'notes' ? 'notes' : 'tasks'}
+                  compose={compose} onChanged={() => void loadData()} onTaskCount={setOpenWorkCount} />
+              </div>
 
               {profileTab === 'files' ? (
                 <div className="space-y-4">

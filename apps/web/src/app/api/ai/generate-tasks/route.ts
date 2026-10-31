@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
+import { getApiSession, apiActorName } from '../../../../lib/api-auth';
+import { isUuid } from '../../../../lib/workspace-validation';
+import { startOfArizonaDay } from '../../../../lib/arizona-time';
 
 interface TaskCandidate {
   subject: string;
@@ -9,9 +12,7 @@ interface TaskCandidate {
 }
 
 function daysFromNow(days: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+  return new Date(startOfArizonaDay(new Date()).getTime() + days * 86400000 + 16 * 3600000).toISOString();
 }
 
 function uniqueBySubject(candidates: TaskCandidate[]): TaskCandidate[] {
@@ -19,23 +20,25 @@ function uniqueBySubject(candidates: TaskCandidate[]): TaskCandidate[] {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
   }
 
   const clientId = request.nextUrl.searchParams.get('clientId')?.trim();
-  if (!clientId) {
-    return NextResponse.json({ message: 'clientId is required.' }, { status: 400 });
+  if (!isUuid(clientId)) {
+    return NextResponse.json({ message: 'A valid clientId is required.' }, { status: 400 });
   }
 
   const [clientRes, policiesRes, openClientTasksRes] = await Promise.all([
     supabase.from('clients').select('id,full_name').eq('id', clientId).maybeSingle(),
     supabase.from('policies').select('id,renewal_date').eq('client_id', clientId).limit(50),
     supabase
-      .from('client_tasks')
+      .from('tasks')
       .select('subject,status')
-      .eq('client_id', clientId)
+      .or(`account_id.eq.${clientId},and(related_type.eq.client,related_id.eq.${clientId})`)
       .neq('status', 'completed')
       .limit(200),
   ]);
@@ -86,10 +89,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   let createdCount = 0;
   if (newCandidates.length > 0) {
     const insertRes = await supabase
-      .from('client_tasks')
+      .from('tasks')
       .insert(
         newCandidates.map((item) => ({
-          client_id: clientId,
+          account_id: clientId,
+          related_type: 'client',
+          related_id: clientId,
+          created_by: apiActorName(session.user),
           subject: item.subject,
           description: item.description,
           due_date: item.due_date,
@@ -105,11 +111,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     createdCount = insertRes.data?.length ?? 0;
   }
 
-  await supabase.from('client_activities').insert([
+  const activity = await supabase.from('client_activities').insert([
     {
       client_id: clientId,
-      activity_type: 'ai_tasks',
-      title: createdCount > 0 ? 'Generated AI follow-up tasks' : 'AI follow-up tasks already covered',
+      activity_type: 'account_tasks',
+      title: createdCount > 0 ? 'Created requested rule-based follow-up tasks' : 'Requested follow-up tasks already covered',
       body:
         createdCount > 0
           ? newCandidates.map((item) => item.subject).join(' | ')
@@ -118,11 +124,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         source: 'api.ai.generate-tasks',
         created: createdCount,
         skipped: Math.max(0, candidates.length - createdCount),
-        task_store: 'client_tasks',
+        task_store: 'tasks',
+        engine: 'rules',
       },
       occurred_at: new Date().toISOString(),
     },
   ]);
+  if (activity.error) return NextResponse.json({ message: activity.error.message }, { status: 500 });
 
   return NextResponse.json(
     {

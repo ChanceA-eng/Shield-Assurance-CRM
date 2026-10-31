@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../../lib/api-auth';
 import { draftOutreach, generateTalkingPoints } from '../../../../../lib/outreach-ai';
+import { leadOutreachContext } from '../../../../../lib/lead-outreach-context';
+import { workspaceApiError } from '../../../../../lib/workspace-api';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -32,9 +34,15 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   const { data: lead, error } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
   if (error) return NextResponse.json({ message: error.message }, { status: 500 });
   if (!lead) return NextResponse.json({ message: 'Lead not found.' }, { status: 404 });
+  let contextData: Awaited<ReturnType<typeof leadOutreachContext>>;
+  try {
+    contextData = await leadOutreachContext(supabase, leadId);
+  } catch (failure) {
+    return workspaceApiError(failure, 'lead-outreach/context');
+  }
 
   if (mode === 'talking_points') {
-    const points = await generateTalkingPoints(lead);
+    const points = await generateTalkingPoints({ ...lead, ...contextData });
     if (!points) {
       return NextResponse.json(
         { message: 'AI drafting is unavailable. Check that OPENAI_API_KEY is configured.' },
@@ -45,7 +53,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   }
 
   const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : undefined;
-  const draft = await draftOutreach(lead, instruction || undefined);
+  const draft = await draftOutreach({ ...lead, ...contextData }, instruction || undefined);
   if (!draft) {
     return NextResponse.json(
       { message: 'AI drafting is unavailable. Check that OPENAI_API_KEY is configured.' },
