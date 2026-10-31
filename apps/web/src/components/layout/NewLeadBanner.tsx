@@ -80,31 +80,31 @@ export default function NewLeadBanner(): JSX.Element | null {
   };
 
   return (
-    <div className="flex shrink-0 items-center gap-2.5 border-b border-cui-warning/50 bg-cui-warning/15 px-4 py-1.5 text-sm">
-      <UserPlus className="h-4 w-4 shrink-0 text-amber-700" />
+    <div className="flex shrink-0 items-center gap-2.5 border-b border-orange-300 bg-orange-100 px-4 py-1.5 text-sm">
+      <UserPlus className="h-4 w-4 shrink-0 text-orange-700" />
       <p className="min-w-0 flex-1 truncate text-cui-text">
-        <span className="font-bold">New website lead:</span>{' '}
-        <Link href={`/leads?lead=${lead.id}` as Route} className="font-semibold text-cui-primary hover:underline">
+        <span className="font-bold text-orange-900">New website lead:</span>{' '}
+        <Link href={`/leads?lead=${lead.id}` as Route} className="font-semibold text-orange-800 underline decoration-orange-400 hover:text-orange-950">
           {lead.full_name}
         </Link>
-        {lead.line_of_business ? <span className="text-cui-muted"> · {lead.line_of_business}</span> : null}
-        <span className="text-cui-muted"> · {relativeTime(lead.arrived_at)}</span>
+        {lead.line_of_business ? <span className="text-orange-900/70"> · {lead.line_of_business}</span> : null}
+        <span className="text-orange-900/70"> · {relativeTime(lead.arrived_at)}</span>
         {extra > 0 ? (
-          <Link href={'/leads' as Route} className="ml-2 font-semibold text-cui-primary hover:underline">
+          <Link href={'/leads' as Route} className="ml-2 font-semibold text-orange-800 underline decoration-orange-400 hover:text-orange-950">
             +{extra} more waiting
           </Link>
         ) : null}
       </p>
       <Link
         href={`/leads?lead=${lead.id}` as Route}
-        className="shrink-0 rounded bg-cui-primary px-2.5 py-0.5 text-xs font-semibold text-white transition hover:bg-cui-primary/90"
+        className="shrink-0 rounded bg-orange-600 px-2.5 py-0.5 text-xs font-semibold text-white transition hover:bg-orange-700"
       >
         Open profile
       </Link>
       <button
         type="button"
         onClick={() => dismiss(lead.id)}
-        className="shrink-0 rounded p-0.5 text-cui-muted transition hover:text-cui-text"
+        className="shrink-0 rounded p-0.5 text-orange-700 transition hover:text-orange-950"
         aria-label="Dismiss"
       >
         <X className="h-4 w-4" />

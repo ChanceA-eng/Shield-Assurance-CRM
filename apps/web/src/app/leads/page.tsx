@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import SectionLayout from '../../components/crm/SectionLayout';
 import NewLeadModal from './NewLeadModal';
 import PipelineBoard from './PipelineBoard';
@@ -82,6 +83,16 @@ interface LeadTaskRow {
 }
 
 export default function LeadsPage(): JSX.Element {
+  // useSearchParams requires a Suspense boundary in the app router.
+  return (
+    <Suspense fallback={null}>
+      <LeadsPageInner />
+    </Suspense>
+  );
+}
+
+function LeadsPageInner(): JSX.Element {
+  const searchParams = useSearchParams();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -407,10 +418,6 @@ export default function LeadsPage(): JSX.Element {
     if (view === 'queue' || view === 'board' || view === 'list') {
       setViewMode(view);
     }
-    const leadParam = params.get('lead');
-    if (leadParam) {
-      setPendingLeadId(leadParam);
-    }
 
     void (async () => {
       await Promise.all([fetchLeads(true), fetchLeadTasks()]);
@@ -439,6 +446,22 @@ export default function LeadsPage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [outcomeFilter]);
 
+  // Reacts to ?lead=<id> both on first load and on in-page navigations
+  // (e.g. clicking the new-lead banner while already on this page).
+  useEffect(() => {
+    const leadParam = searchParams.get('lead');
+    if (leadParam) setPendingLeadId(leadParam);
+  }, [searchParams]);
+
+  // Once handled, strip the param so clicking the same lead again retriggers.
+  const clearLeadParam = (): void => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('lead')) {
+      url.searchParams.delete('lead');
+      window.history.replaceState(null, '', url.toString());
+    }
+  };
+
   // Deep link: /leads?lead=<id> opens the workspace drawer once leads load.
   useEffect(() => {
     if (!pendingLeadId) return;
@@ -446,6 +469,7 @@ export default function LeadsPage(): JSX.Element {
     if (target) {
       setSelectedLead(target);
       setPendingLeadId(null);
+      clearLeadParam();
       return;
     }
     if (loading) return;
@@ -460,7 +484,10 @@ export default function LeadsPage(): JSX.Element {
       } catch {
         // Lead no longer exists; nothing to open.
       } finally {
-        if (!cancelled) setPendingLeadId(null);
+        if (!cancelled) {
+          setPendingLeadId(null);
+          clearLeadParam();
+        }
       }
     })();
     return () => {
