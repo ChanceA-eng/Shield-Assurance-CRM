@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { Route } from 'next';
 import { ExternalLink, Inbox as InboxIcon, Search, Send } from 'lucide-react';
 import SectionLayout from '../../components/crm/SectionLayout';
+import { MESSAGES_READ_EVENT } from '../../context/NotificationContext';
 
 interface Conversation {
   client_id: string;
@@ -105,7 +106,10 @@ export default function CommunicationCenterPage(): JSX.Element {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ client_id: conversation.client_id }),
-          }).then(() => void loadConversations());
+          }).then(() => {
+            window.dispatchEvent(new Event(MESSAGES_READ_EVENT));
+            void loadConversations();
+          });
         }
       } catch {
         setMessages([]);

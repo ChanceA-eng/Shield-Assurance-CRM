@@ -586,7 +586,7 @@ export default function ImportCenterPage(): JSX.Element {
       {showNewLead ? (
         <NewLeadModal
           onClose={() => setShowNewLead(false)}
-          onSaved={() => {
+          onCreated={() => {
             setShowNewLead(false);
             setNotice('Lead created and added to the pipeline with a contact task.');
           }}

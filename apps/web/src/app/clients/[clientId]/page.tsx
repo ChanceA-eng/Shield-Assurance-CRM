@@ -8,7 +8,10 @@ import { useNotifications } from '../../../context/NotificationContext';
 import RecordAssetsPanel from '../../../components/crm/RecordAssetsPanel';
 import RecordWorkPanel from '../../../components/crm/RecordWorkPanel';
 import { accountLifecycle } from '../../../lib/account-lifecycle';
-import { workspaceFetch } from '../../../lib/workspace-fetch';
+import { workspaceFetch, workspacePages } from '../../../lib/workspace-fetch';
+import type { WorkspaceNote, WorkspaceTask } from '@crm/shared';
+import { Card, CardHeader, CardBody } from '../../../components/ui/Card';
+import { formatArizonaDateTime } from '../../../lib/arizona-time';
 
 interface Client {
   id: string;
@@ -24,6 +27,8 @@ interface Client {
   last_viewed_at?: string | null;
   last_activity_at?: string | null;
   created_at: string;
+  assigned_producer?: string | null;
+  account_type?: string | null;
 }
 
 interface PolicyItem {
@@ -362,7 +367,7 @@ function deriveRiskSignals(input: {
 export default function ClientWorkspacePage(): JSX.Element {
   const params = useParams<{ clientId: string }>();
   const searchParams = useSearchParams();
-  const { refresh: refreshNotificationCounts } = useNotifications();
+  const { refresh: refreshNotificationCounts, unreadMessages } = useNotifications();
   const clientId = params.clientId;
 
   const [client, setClient] = useState<Client | null>(null);
@@ -381,6 +386,7 @@ export default function ClientWorkspacePage(): JSX.Element {
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [tags, setTags] = useState<ClientTag[]>([]);
   const [activities, setActivities] = useState<ClientActivity[]>([]);
+  const [notes, setNotes] = useState<WorkspaceNote[]>([]);
 
   const [deliveryAudit, setDeliveryAudit] = useState<DeliveryAuditItem[]>([]);
 
@@ -422,9 +428,11 @@ export default function ClientWorkspacePage(): JSX.Element {
     const version = ++loadVersion.current;
     setError(null);
     try {
-      const payload = await workspaceFetch<WorkspacePayload>(
-        `/api/clients/${clientId}/workspace?timelineLimit=${timelineLimit}&activityLimit=${activityLimit}`,
-      );
+      const [payload, savedNotes, savedTasks] = await Promise.all([
+        workspaceFetch<WorkspacePayload>(`/api/clients/${clientId}/workspace?timelineLimit=${timelineLimit}&activityLimit=${activityLimit}`),
+        workspacePages<WorkspaceNote>(`/api/interactions?record_type=client&record_id=${clientId}`, 100, 'page'),
+        workspacePages<WorkspaceTask>(`/api/tasks?record_type=client&record_id=${clientId}&status=all&sort=due_asc&limit=200`, 200, 'offset'),
+      ]);
       if (version !== loadVersion.current) return;
       loadedClientId.current = clientId;
       setClient(payload.client);
@@ -438,10 +446,12 @@ export default function ClientWorkspacePage(): JSX.Element {
       setEndorsements(payload.endorsements ?? []);
       setCertificates(payload.certificates ?? []);
       setAssets(payload.assets ?? []);
-      setClientTasks(payload.clientTasks ?? []);
+      setClientTasks(savedTasks);
+      setOpenWorkCount(savedTasks.filter((task) => task.status === 'open').length);
       setFiles(payload.files ?? []);
       setTags(payload.tags ?? []);
       setActivities(payload.activities ?? []);
+      setNotes(savedNotes);
       if (payload.client?.email) {
         const deliveryData = await workspaceFetch<DeliveryAuditItem[]>(
           `/api/communication-log/delivery?to_email=${encodeURIComponent(payload.client.email)}&limit=25`,
@@ -469,8 +479,27 @@ export default function ClientWorkspacePage(): JSX.Element {
 
   useEffect(() => {
     const requested = searchParams.get('tab');
-    if (requested === 'assets' || requested === 'notes' || requested === 'tasks') setProfileTab(requested);
+    if (requested === 'overview' || requested === 'policies' || requested === 'assets' || requested === 'notes' || requested === 'tasks'
+      || requested === 'files' || requested === 'activity' || requested === 'tags' || requested === 'insights') setProfileTab(requested);
+    if (requested === 'communication') setIsConversationOpen(true);
   }, [searchParams]);
+
+  const unreadFromAccount = unreadMessages.byClient[clientId] ?? 0;
+  const markingReadRef = useRef(false);
+  useEffect(() => {
+    if (!isConversationOpen || unreadFromAccount === 0 || !clientId || markingReadRef.current) return;
+    markingReadRef.current = true;
+    void fetch('/api/communication-log/mark-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId }),
+    })
+      .then(() => refreshNotificationCounts())
+      .finally(() => {
+        markingReadRef.current = false;
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConversationOpen, unreadFromAccount, clientId]);
 
   const lifecycleStage = useMemo(() => accountLifecycle(policies), [policies]);
 
@@ -830,10 +859,6 @@ export default function ClientWorkspacePage(): JSX.Element {
     await loadData();
   };
 
-  const generateFollowUpTasks = async (): Promise<void> => {
-    setProfileTab('tasks');
-  };
-
   const openAccountWork = openWorkCount ?? 0;
 
   const draftMessageWithAi = async (): Promise<void> => {
@@ -883,9 +908,6 @@ export default function ClientWorkspacePage(): JSX.Element {
           </p>
         </div>
         <div className="flex flex-wrap gap-2 text-xs text-[#5c6873]">
-          <span className="rounded-full bg-[#e3f2ff] px-3 py-1 font-semibold text-[#0a4f8f]">Email {emailCommunicationOn ? 'On' : 'Off'}</span>
-          <span className="rounded-full bg-[#ecf8f1] px-3 py-1 font-semibold text-[#1f7a47]">SMS {smsCommunicationOn ? 'On' : 'Off'}</span>
-          <span className="rounded-full bg-[#fff3de] px-3 py-1 font-semibold text-[#8a4d00]">Preferred: {client?.preferred_channel || 'email'}</span>
           <span className="rounded-full bg-[#edf4ff] px-3 py-1 font-semibold text-[#2f5c9f]">Lifecycle: {lifecycleStage}</span>
           <button type="button" disabled={loading || !client} onClick={() => { setProfileTab('notes'); setCompose((value) => ({ kind: 'note', token: (value?.token ?? 0) + 1 })); }}
             className="rounded border border-cui-primary bg-white px-3 py-1 font-semibold text-cui-primary">Add note</button>
@@ -895,10 +917,18 @@ export default function ClientWorkspacePage(): JSX.Element {
             className="rounded border border-cui-primary bg-white px-3 py-1 font-semibold text-cui-primary">Add asset</button>
           <button
             type="button"
-            className="rounded-full bg-[#167495] px-3 py-1 font-semibold text-white hover:bg-[#0a4f8f]"
+            className="relative rounded-full bg-[#167495] px-3 py-1 font-semibold text-white hover:bg-[#0a4f8f]"
             onClick={() => setIsConversationOpen((prev) => !prev)}
           >
-            {isConversationOpen ? 'Close Conversation' : 'View Conversation'}
+            {isConversationOpen ? 'Close Communication' : 'Communication'}
+            {unreadFromAccount > 0 ? (
+              <span
+                aria-label={`${unreadFromAccount} unread messages`}
+                className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-cui-danger px-1.5 text-[11px] font-bold text-white"
+              >
+                {unreadFromAccount > 99 ? '99+' : unreadFromAccount}
+              </span>
+            ) : null}
           </button>
         </div>
       </div>
@@ -930,91 +960,104 @@ export default function ClientWorkspacePage(): JSX.Element {
       {!loading && client ? (
         <div className={`relative grid grid-cols-1 gap-4 transition-all duration-300 ${isConversationOpen ? 'xl:pr-[26rem]' : ''}`}>
           <section className="rounded border border-[#c8ced3] bg-white shadow-sm">
-            <div className="border-b border-[#f0f3f5] px-4 py-4">
-              <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-                <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Policies</p>
-                  <p className="text-xl font-semibold text-[#14324f]">{policies.length}</p>
-                </div>
-                <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Open work</p>
-                  <p className="text-xl font-semibold text-[#14324f]">{openWorkCount ?? '--'}</p>
-                </div>
-                <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Files</p>
-                  <p className="text-xl font-semibold text-[#14324f]">{files.length}</p>
-                </div>
-                <div className="rounded border border-[#e8eef7] bg-[#f8f9fa] p-2">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#73818f]">Tags</p>
-                  <p className="text-xl font-semibold text-[#14324f]">{tags.length}</p>
-                </div>
-              </div>
-
-              <section className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h4 className="text-sm font-semibold text-amber-900">Underwriting Risk Analysis</h4>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      void runRiskExtraction();
-                    }}
-                    disabled={runningAiAction === 'flags'}
-                    className="rounded bg-amber-600 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
-                  >
-                    {runningAiAction === 'flags' ? 'Extracting...' : 'Extract Underwriting Flags'}
-                  </button>
-                </div>
-              </section>
-            </div>
-
             <div className="border-b border-[#f0f3f5] px-3 py-2">
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
+              <div className="flex flex-wrap items-center gap-1" aria-label="Account sections">
                 {([
                   ['overview', 'Overview'],
                   ['policies', 'Policies'],
-                  ['assets', 'Assets'],
+                  ['assets', 'Assets & People'],
                   ['notes', 'Notes'],
                   ['tasks', 'Tasks'],
-                  ['files', 'Files'],
-                  ['tags', 'Tags'],
-                  ['activity', 'Activity'],
-                  ['insights', 'Rashi Insights'],
+                  ['files', 'Documents'],
                 ] as Array<[ProfileTab, string]>).map(([value, label]) => (
                   <button
                     key={value}
                     data-tab={value}
                     type="button"
-                    className={`w-full rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                      profileTab === value ? 'bg-[#20a8d8] text-white' : 'bg-[#f4f8ff] text-[#0f4a85] hover:bg-[#e7f1ff]'
+                    aria-pressed={profileTab === value}
+                    className={`rounded border-b-2 px-3 py-2 text-sm font-semibold transition ${
+                      profileTab === value ? 'border-cui-primary text-cui-primary' : 'border-transparent text-cui-muted hover:bg-cui-light'
                     }`}
                     onClick={() => setProfileTab(value)}
                   >
                     {label}
                   </button>
                 ))}
+                <details className="relative ml-auto">
+                  <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-cui-muted">More</summary>
+                  <div className="absolute right-0 z-20 w-44 rounded border border-cui-border bg-white p-2 shadow-lg">
+                    {([['activity', 'Activity history'], ['tags', 'Manage tags'], ['insights', 'Risk review']] as const).map(([value, label]) =>
+                      <button key={value} type="button" className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-cui-light"
+                        onClick={(event) => { setProfileTab(value); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{label}</button>)}
+                  </div>
+                </details>
               </div>
             </div>
 
-            <div className="max-h-[75vh] overflow-y-auto p-4">
+            <div className="p-4">
               {profileTab === 'overview' ? (
-                <div className="space-y-4">
-                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-4">
-                    <h4 className="text-sm font-semibold text-[#14324f]">Client Info</h4>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <Card>
+                    <CardHeader actions={<button className="text-xs font-semibold text-cui-primary" onClick={() => setProfileTab('tasks')}>All tasks</button>}>Next actions</CardHeader>
+                    <CardBody>
+                      <p className="mb-2 text-xs text-cui-muted">{openWorkCount ?? '--'} open tasks · Times in Arizona</p>
+                      {!openClientTasks.length ? <p className="text-sm text-cui-muted">No open tasks.</p> : null}
+                      {openClientTasks.slice(0, 4).map((task) => <button key={task.id} onClick={() => setProfileTab('tasks')} className="block w-full border-b border-cui-border/50 py-2 text-left">
+                        <span className="text-sm font-semibold text-cui-primary">{task.subject}</span>
+                        <span className={`block text-xs ${task.due_date && Date.parse(task.due_date) < Date.now() ? 'text-cui-danger' : 'text-cui-muted'}`}>
+                          {task.due_date ? `${formatArizonaDateTime(task.due_date)} AZ` : 'No due date'}
+                        </span>
+                      </button>)}
+                    </CardBody>
+                  </Card>
+                  <Card>
+                    <CardHeader actions={<button className="text-xs font-semibold text-cui-primary" onClick={() => setProfileTab('policies')}>All policies</button>}>Coverage & renewals</CardHeader>
+                    <CardBody>
+                      {!policies.length ? <p className="text-sm text-cui-muted">No placed coverage recorded. This is a prospect account.</p> : null}
+                      {policies.slice(0, 4).map((policy) => <button key={policy.id} onClick={() => setProfileTab('policies')} className="block w-full border-b border-cui-border/50 py-2 text-left">
+                        <span className="text-sm font-semibold text-cui-text">{policy.carrier || 'Carrier not recorded'} · {policy.line_of_business || 'Policy'}</span>
+                        <span className="block text-xs text-cui-muted">{policy.policy_number || 'Number not recorded'} · {policy.status || 'Status not recorded'}</span>
+                        <span className="block text-xs text-cui-muted">Expiration {safeDateOnly(policy.expiration_date ?? policy.renewal_date)}</span>
+                      </button>)}
+                    </CardBody>
+                  </Card>
+                  <Card>
+                    <CardHeader>Account details</CardHeader>
+                    <CardBody>
                     <div className="mt-2 grid grid-cols-1 gap-2 text-sm text-[#425468] md:grid-cols-2">
                       <p>Name: {client?.full_name || '--'}</p>
                       <p>Email: {client?.email || '--'}</p>
                       <p>Phone: {client?.phone || '--'}</p>
                       <p>Address: {client?.address || '--'}</p>
-                      <p>Business type: {leads[0]?.line_of_business || '--'}</p>
-                      <p>State: --</p>
+                      <p>Account type: {client.account_type || 'Not recorded'}</p>
+                      <p>Assigned agent: {client.assigned_producer || 'Unassigned'}</p>
+                      <p>Preferred contact: {client.preferred_channel || 'Not recorded'}</p>
+                      <p>Consent recorded: Email {client.email_consent ? 'Yes' : 'No'} · SMS {client.sms_consent ? 'Yes' : 'No'}</p>
                     </div>
-                  </section>
+                    <div className="mt-3 flex flex-wrap gap-2">{tags.map((tag) => <span key={tag.id} className="rounded bg-cui-light px-2 py-1 text-xs text-cui-muted">{tag.tag}</span>)}</div>
+                    </CardBody>
+                  </Card>
+                  <Card>
+                    <CardHeader actions={<button className="text-xs font-semibold text-cui-primary" onClick={() => setProfileTab('notes')}>All notes</button>}>Pinned notes</CardHeader>
+                    <CardBody>
+                      {!notes.some((note) => note.pinned) ? <p className="text-sm text-cui-muted">Pin important call or service notes to keep them here.</p> : null}
+                      {notes.filter((note) => note.pinned).slice(0, 3).map((note) => <article key={note.id} className="mb-3">
+                        <p className="whitespace-pre-wrap break-words text-sm text-cui-text">{note.content}</p>
+                        <p className="mt-1 text-xs text-cui-muted">{note.author_name || 'Author not recorded'} · {formatArizonaDateTime(note.updated_at)} AZ</p>
+                      </article>)}
+                    </CardBody>
+                  </Card>
+                  <Card className="lg:col-span-2">
+                    <CardHeader actions={<button className="text-xs font-semibold text-cui-primary" onClick={() => setProfileTab('activity')}>Full history</button>}>Recent history</CardHeader>
+                    <CardBody>
+                      {!activities.length ? <p className="text-sm text-cui-muted">No recorded activity yet.</p> : null}
+                      {activities.slice(0, 5).map((item) => <p key={item.id} className="border-b border-cui-border/50 py-2 text-sm text-cui-text">{item.title} <span className="text-xs text-cui-muted">{formatArizonaDateTime(item.occurred_at)} AZ</span></p>)}
+                    </CardBody>
+                  </Card>
 
-                  <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-4">
-                    <h4 className="text-sm font-semibold text-[#14324f]">Submission Snapshot</h4>
+                  <details className="rounded border border-cui-border p-4 lg:col-span-2">
+                    <summary className="cursor-pointer text-sm font-semibold text-cui-text">Linked leads & submission history</summary>
+                    <div className="mt-3 flex flex-wrap gap-2">{leads.map((lead) => <Link key={lead.id} href={`/leads?lead=${lead.id}`} className="text-sm font-semibold text-cui-primary hover:underline">{lead.full_name || 'Open linked lead'}</Link>)}</div>
 
                     {commercialSubmissionAssets.length === 0 && personalSubmissionAssets.length === 0 ? (
                       <p className="mt-2 text-sm text-[#73818f]">No linked submission data yet.</p>
@@ -1051,7 +1094,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                         </article>
                       );
                     })}
-                  </section>
+                  </details>
                 </div>
               ) : null}
 
@@ -1399,10 +1442,10 @@ export default function ClientWorkspacePage(): JSX.Element {
                         className="rounded bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
                         onClick={(e) => {
                           e.preventDefault();
-                          void generateFollowUpTasks();
+                          setProfileTab('tasks');
                         }}
                       >
-                        + Add Task
+                        View Tasks
                       </button>
                     </div>
                   </div>

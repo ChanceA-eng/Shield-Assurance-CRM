@@ -14,6 +14,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/cron/',
   '/api/messages/process-scheduled',
   '/api/messages/webhook',
+  '/api/messages/sms-webhook',
 ];
 
 /** Documented public website lead-form endpoints (POST/OPTIONS only; GET stays protected). */

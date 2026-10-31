@@ -7,6 +7,7 @@
 import { ASSET_FIELDS, ASSET_LABELS, ASSET_SOURCE_LABELS, isAssetKind, isAssetSource, type WorkspaceAsset, type WorkspaceNote } from '@crm/shared';
 import { isRecord } from './workspace-validation';
 import { websiteBusinessDetails } from './website-intake';
+import { readIntakeSections } from './agent-lead-intake';
 
 export interface OutreachDraft {
   subject: string;
@@ -50,6 +51,9 @@ export function buildGrounding(lead: LeadLike): string {
   ];
   const business = websiteBusinessDetails(lead.form_payload ?? {});
   lines.push(section('Business name', business.businessName), section('Actual business industry', business.industry));
+  for (const intakeSection of readIntakeSections(lead.form_payload)?.sections ?? []) {
+    for (const field of intakeSection.fields) lines.push(`${intakeSection.title} - ${field.label}: ${field.value}`);
+  }
   for (const asset of lead.workspace_assets ?? []) {
     if (asset.archived_at || !isAssetKind(asset.asset_type)) continue;
     const source = isAssetSource(asset.metadata.source) ? ASSET_SOURCE_LABELS[asset.metadata.source] : 'Source not recorded';

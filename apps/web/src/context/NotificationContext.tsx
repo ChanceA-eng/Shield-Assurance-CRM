@@ -21,11 +21,24 @@ interface NotificationContextValue {
   /** Latest unread notification feed for the bell dropdown. */
   notifications: NotificationItem[];
   unreadCount: number;
+  /** Unread inbound client/lead messages (email + SMS). */
+  unreadMessages: UnreadMessageCounts;
   refreshError: string | null;
   refresh: () => Promise<void>;
   markRead: (id: string) => Promise<void>;
   markAllRead: () => Promise<void>;
 }
+
+export interface UnreadMessageCounts {
+  total: number;
+  byClient: Record<string, number>;
+  byLead: Record<string, number>;
+}
+
+const EMPTY_UNREAD: UnreadMessageCounts = { total: 0, byClient: {}, byLead: {} };
+
+/** Dispatch on window after marking messages read so badges refresh immediately. */
+export const MESSAGES_READ_EVENT = 'crm:messages-read';
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
@@ -34,6 +47,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [dueTodayCount, setDueTodayCount] = useState(0);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [unreadMessages, setUnreadMessages] = useState<UnreadMessageCounts>(EMPTY_UNREAD);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const supabase = useMemo(() => {
@@ -46,6 +60,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, []);
 
   const refresh = async (): Promise<void> => {
+    void workspaceFetch<UnreadMessageCounts>('/api/communication-log/unread')
+      .then((counts) => setUnreadMessages(counts))
+      .catch(() => undefined);
     try {
       const [overdue, due, feed, unread] = await Promise.all([
         workspaceFetch<{ count: number }>('/api/tasks?status=overdue&count=true'),
@@ -95,6 +112,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     const intervalId = window.setInterval(() => {
       void refresh();
     }, 30000);
+    const onMessagesRead = (): void => {
+      void refresh();
+    };
+    window.addEventListener(MESSAGES_READ_EVENT, onMessagesRead);
 
     const channel = supabase
       ?.channel('global-crm-notifications')
@@ -104,10 +125,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
         void refresh();
       })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'communication_log' }, () => {
+        void refresh();
+      })
       .subscribe();
 
     return () => {
       window.clearInterval(intervalId);
+      window.removeEventListener(MESSAGES_READ_EVENT, onMessagesRead);
       if (channel && supabase) {
         void supabase.removeChannel(channel);
       }
@@ -115,7 +140,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, [supabase]);
 
   return (
-    <NotificationContext.Provider value={{ overdueCount, dueTodayCount, notifications, unreadCount, refreshError, refresh, markRead, markAllRead }}>
+    <NotificationContext.Provider value={{ overdueCount, dueTodayCount, notifications, unreadCount, unreadMessages, refreshError, refresh, markRead, markAllRead }}>
       {children}
     </NotificationContext.Provider>
   );

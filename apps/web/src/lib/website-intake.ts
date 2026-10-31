@@ -9,7 +9,9 @@ export function websiteBusinessDetails(payload: Record<string, unknown>): { busi
   const review = isRecord(metadata.businessReview) ? metadata.businessReview : {};
   const profile = isRecord(payload.profile) ? payload.profile : {};
   const company = isRecord(profile.company) ? profile.company : {};
-  const rawIndustry = string(review.industry) ?? string(company.industry);
+  const agentIntake = isRecord(payload.agent_intake) && isRecord(payload.agent_intake.answers) ? payload.agent_intake.answers : {};
+  const agentBusiness = isRecord(agentIntake.business) ? agentIntake.business : {};
+  const rawIndustry = string(review.industry) ?? string(company.industry) ?? string(agentBusiness.business_type);
   return {
     businessName: string(metadata.businessName) ?? string(payload.business_name),
     industry: rawIndustry && !['commercial', 'personal'].includes(rawIndustry.toLowerCase()) ? rawIndustry : null,

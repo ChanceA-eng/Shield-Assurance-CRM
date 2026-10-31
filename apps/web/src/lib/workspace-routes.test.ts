@@ -10,6 +10,7 @@ import { GET as getLead } from '../app/api/leads/[id]/route';
 import { GET as getBriefing } from '../app/api/briefing/route';
 import { GET as getRecent } from '../app/api/recent/route';
 import { GET as getAttention, PATCH as acknowledgeAttention } from '../app/api/leads/attention/route';
+import { GET as getDirectory } from '../app/api/clients/directory/route';
 
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
 vi.mock('./api-auth', () => ({ getApiSession: vi.fn(), requireApiSession: vi.fn(), apiActorName: () => 'Test agent' }));
@@ -51,6 +52,33 @@ beforeEach(() => {
 });
 
 describe('Workspace route contracts', () => {
+  it('requires authentication before directory access', async () => {
+    vi.mocked(requireApiSession).mockResolvedValue(NextResponse.json({ message: 'Unauthorized' }, { status: 401 }));
+    expect((await getDirectory(request('/api/clients/directory'))).status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects invalid directory filters and pages before querying', async () => {
+    expect((await getDirectory(request('/api/clients/directory?filter=invalid'))).status).toBe(400);
+    expect((await getDirectory(request('/api/clients/directory?page=-1'))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('paginates beyond a full database batch and searches accounts past the first hundred', async () => {
+    respond = (url) => {
+      if (!url.pathname.endsWith('/clients')) return json([]);
+      const offset = Number(url.searchParams.get('offset') ?? '0');
+      return json(Array.from({ length: offset === 0 ? 500 : 1 }, (_, index) => ({
+        id: `account-${offset + index}`, full_name: `Account ${offset + index}`, email: null, phone: null,
+        address: null, account_type: null, assigned_producer: null, created_at: now,
+      })));
+    };
+    const response = await getDirectory(request('/api/clients/directory?q=Account%20500'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ total: 1, page: 0, page_size: 25, items: [{ id: 'account-500' }] });
+    expect(calls.filter((call) => call.url.pathname.endsWith('/clients'))).toHaveLength(2);
+  });
+
   it('requires authentication before any asset database access', async () => {
     vi.mocked(getApiSession).mockResolvedValue({ user: null, error: NextResponse.json({ message: 'Unauthorized' }, { status: 401 }) });
     expect((await addAsset(request(`/api/record-assets?record_type=lead&record_id=${leadId}`, 'POST', {}))).status).toBe(401);

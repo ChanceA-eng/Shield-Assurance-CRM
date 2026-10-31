@@ -9,6 +9,8 @@ import RecordWorkPanel from '../../components/crm/RecordWorkPanel';
 import LeadAccountLink from '../../components/crm/LeadAccountLink';
 import { INTAKE_QUEUE_CHANGED } from '../../components/layout/NewLeadBanner';
 import { workspaceFetch } from '../../lib/workspace-fetch';
+import { MESSAGES_READ_EVENT } from '../../context/NotificationContext';
+import { readIntakeSections } from '../../lib/agent-lead-intake';
 
 export interface WorkspaceLead {
   id: string;
@@ -40,6 +42,7 @@ interface ConversationItem {
   body?: string | null;
   sent_at?: string | null;
   automation_type?: string | null;
+  read_at?: string | null;
 }
 
 interface ProfileRenewal {
@@ -71,6 +74,36 @@ function ProfileSection({ title, children }: { title: string; children: React.Re
     <div className="rounded border border-cui-border/60">
       <div className="border-b border-cui-border/40 bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">{title}</div>
       <div className="space-y-1 p-3">{children}</div>
+    </div>
+  );
+}
+
+/** Agent-captured intake from Lead Pipeline → New Lead, shown as labeled answers. */
+function AgentIntakeSummary({ intake }: { intake: NonNullable<ReturnType<typeof readIntakeSections>> }): JSX.Element {
+  const captured = intake.capturedAt ? new Date(intake.capturedAt).toLocaleString('en-US', { timeZone: 'America/Phoenix', dateStyle: 'medium', timeStyle: 'short' }) : null;
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-cui-muted">
+        {intake.kind === 'commercial' ? 'Commercial' : 'Personal'} lines intake captured by an agent
+        {intake.capturedBy ? <> · <span className="font-semibold">{intake.capturedBy}</span></> : null}
+        {captured ? <> · {captured} (Arizona)</> : null}
+      </p>
+      {intake.sections.map((section) => (
+        <ProfileSection key={section.title} title={section.title}>
+          {section.fields.length ? (
+            <dl className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[minmax(8rem,auto)_1fr]">
+              {section.fields.map((field) => (
+                <div key={field.label} className="contents">
+                  <dt className="text-cui-muted">{field.label}</dt>
+                  <dd className="break-words font-semibold text-cui-text">{field.value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p className="text-sm text-cui-muted">No extra details captured.</p>
+          )}
+        </ProfileSection>
+      ))}
     </div>
   );
 }
@@ -931,12 +964,15 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
       setConversation(payload.items);
 
       // Viewing the conversation marks inbound messages as read.
-      if (payload.clientId && payload.items.some((item) => (item.direction ?? '') === 'inbound')) {
+      if (payload.items.some((item) => (item.direction ?? '') === 'inbound' && !item.read_at)) {
         void fetch('/api/communication-log/mark-read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ client_id: payload.clientId }),
-        }).then(() => onChanged());
+          body: JSON.stringify({ client_id: payload.clientId ?? undefined, lead_id: lead.id }),
+        }).then(() => {
+          window.dispatchEvent(new Event(MESSAGES_READ_EVENT));
+          onChanged();
+        });
       }
     } catch {
       setConversation([]);
@@ -1130,6 +1166,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
   };
 
   const structuredProfile = isRecord(fullPayload?.profile) ? fullPayload.profile : null;
+  const agentIntake = readIntakeSections(fullPayload);
   // Website quote requests carry a routing/metadata envelope instead of a vendor profile.
   const websitePayload =
     !structuredProfile &&
@@ -1414,7 +1451,9 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
 
               {websitePayload ? <WebsiteSubmission payload={websitePayload} /> : null}
 
-              {!structuredProfile && !websitePayload && payloadEntries.length > 0 ? (
+              {agentIntake ? <AgentIntakeSummary intake={agentIntake} /> : null}
+
+              {!structuredProfile && !websitePayload && !agentIntake && payloadEntries.length > 0 ? (
                 <div className="rounded border border-cui-border/60">
                   <div className="border-b border-cui-border/40 bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">Submitted Fields</div>
                   <table className="w-full text-left text-sm">

@@ -382,14 +382,15 @@ const OPT_OUT_PATTERN = /\bunsubscribe\b|\bopt[\s-]?out\b|stop (sending|emailing
 export async function handleInboundReply(
   supabase: SupabaseClient,
   input: { clientId?: string | null; fromEmail?: string | null; body?: string | null },
-): Promise<void> {
+): Promise<{ sequenceLeadIds: string[] }> {
+  const none = { sequenceLeadIds: [] as string[] };
   try {
     let email = (input.fromEmail ?? '').trim().toLowerCase();
     if (!email && input.clientId) {
       const { data: client } = await supabase.from('clients').select('email').eq('id', input.clientId).maybeSingle();
       email = ((client?.email as string | undefined) ?? '').trim().toLowerCase();
     }
-    if (!email) return;
+    if (!email) return none;
 
     const optedOut = OPT_OUT_PATTERN.test(input.body ?? '');
     if (optedOut) {
@@ -397,7 +398,7 @@ export async function handleInboundReply(
     }
 
     const { data: leads } = await supabase.from('leads').select('id,full_name').ilike('email', email).limit(10);
-    if (!leads || leads.length === 0) return;
+    if (!leads || leads.length === 0) return none;
 
     const leadIds = leads.map((lead) => lead.id as string);
     const { data: enrollments } = await supabase
@@ -405,7 +406,7 @@ export async function handleInboundReply(
       .select('id,lead_id')
       .in('lead_id', leadIds)
       .in('status', ['active', 'paused']);
-    if (!enrollments || enrollments.length === 0) return;
+    if (!enrollments || enrollments.length === 0) return none;
 
     const now = new Date();
     const enrollmentIds = enrollments.map((enrollment) => enrollment.id as string);
@@ -448,7 +449,9 @@ export async function handleInboundReply(
         href: `/leads?lead=${enrollment.lead_id}`,
       });
     }
+    return { sequenceLeadIds: optedOut ? [] : enrollments.map((enrollment) => enrollment.lead_id as string) };
   } catch {
     // Reply handling is best-effort; logging the message must never fail because of it.
+    return none;
   }
 }

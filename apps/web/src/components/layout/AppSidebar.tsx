@@ -35,16 +35,28 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
 };
 
 function categoryContainsPath(category: NavCategory, pathname: string): boolean {
-  if (!category.sections) return category.href === pathname;
+  if (!category.sections) return category.href === pathname || Boolean(category.href && pathname.startsWith(`${category.href}/`));
   return category.sections.some((section) =>
     section.items.some((item) => item.href !== '/' && pathname.startsWith(item.href)),
+  );
+}
+
+function CountBadge({ count, label }: { count: number; label: string }): JSX.Element {
+  return (
+    <span
+      aria-label={`${count} ${label}`}
+      className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-cui-danger px-1.5 text-[11px] font-bold text-white"
+    >
+      {count > 99 ? '99+' : count}
+    </span>
   );
 }
 
 export default function AppSidebar(): JSX.Element {
   const pathname = usePathname();
   const { isNavOpen, closeNav } = useNav();
-  const { dueTodayCount } = useNotifications();
+  const { dueTodayCount, unreadMessages } = useNotifications();
+  const messageCount = unreadMessages.total;
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
     const active = navigationCategories.find((cat) => categoryContainsPath(cat, pathname));
     return new Set(active ? [active.id] : []);
@@ -111,11 +123,7 @@ export default function AppSidebar(): JSX.Element {
             >
               <Icon className="h-4 w-4 shrink-0" />
               <span className="flex-1">{category.label}</span>
-              {category.id === 'tasks' && dueTodayCount > 0 ? (
-                <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-cui-danger px-1.5 text-[11px] font-bold text-white">
-                  {dueTodayCount > 99 ? '99+' : dueTodayCount}
-                </span>
-              ) : null}
+              {category.id === 'tasks' && dueTodayCount > 0 ? <CountBadge count={dueTodayCount} label="tasks due" /> : null}
             </Link>
           );
         }
@@ -133,6 +141,7 @@ export default function AppSidebar(): JSX.Element {
             >
               <Icon className="h-4 w-4 shrink-0" />
               <span className="flex-1 text-left">{category.label}</span>
+              {category.id === 'communication' && messageCount > 0 ? <CountBadge count={messageCount} label="unread messages" /> : null}
               <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
             </button>
 
@@ -158,6 +167,9 @@ export default function AppSidebar(): JSX.Element {
                           }`}
                         >
                           {item.label}
+                          {item.href === '/communication' && messageCount > 0 ? (
+                            <span className="ml-auto"><CountBadge count={messageCount} label="unread messages" /></span>
+                          ) : null}
                         </Link>
                       );
                     })}

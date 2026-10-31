@@ -4,8 +4,9 @@ import { createServerClient } from '@supabase/ssr';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { WorkspaceAsset, WorkspaceNote, WorkspaceTask } from '@crm/shared';
-import { isRecord } from '../src/lib/workspace-validation';
+import { isRecord, isUuid } from '../src/lib/workspace-validation';
 import { namedTaskSubject } from '../src/lib/record-scope';
+import { directoryRows, type DirectoryFilter } from '../src/lib/client-directory';
 
 const root = path.resolve(__dirname, '..', '..', '..');
 const dotenv: { config: (options: { path: string }) => void } = require(require.resolve('dotenv', { paths: [path.join(root, 'apps', 'api')] }));
@@ -31,6 +32,8 @@ export class WorkspaceData {
   noteSaveIds: unknown[] = [];
   unexpected: string[] = [];
   requests: string[] = [];
+  intakeBodies: Array<Record<string, unknown>> = [];
+  unreadMessages: { total: number; byClient: Record<string, number>; byLead: Record<string, number> } = { total: 0, byClient: {}, byLead: {} };
   private counter = 0;
   lead = {
     id: leadId, full_name: 'Leo Example', email: 'leo@example.invalid', phone: '+15205550100', address: '123 Test Street',
@@ -82,6 +85,11 @@ export class WorkspaceData {
       return { json: { ok: true } };
     }
     if (url.pathname === '/api/notifications') return { json: url.searchParams.get('count') === 'true' ? { count: 0 } : method === 'GET' ? [] : { ok: true } };
+    if (url.pathname === '/api/communication-log/unread') return { json: this.unreadMessages };
+    if (url.pathname === '/api/communication-log/mark-read') {
+      this.unreadMessages = { total: 0, byClient: {}, byLead: {} };
+      return { json: { ok: true } };
+    }
     if (url.pathname === '/api/tasks') {
       if (method === 'GET') {
         const rows = this.taskRows(url);
@@ -154,6 +162,17 @@ export class WorkspaceData {
     }
     if (url.pathname === '/api/record-activity') return { json: [] };
     if (url.pathname === '/api/clients') return { json: [this.account] };
+    if (url.pathname === '/api/clients/directory') {
+      const accounts = Array.from({ length: 30 }, (_, index) => ({ ...this.account, id: index === 0 ? this.account.id : `account-${index}`,
+        full_name: index === 0 ? this.account.full_name : `Test Account ${String(index).padStart(2, '0')}`,
+        assigned_producer: null, account_type: null }));
+      const rows = directoryRows(accounts, [], [], new Map(), url.searchParams.get('q') ?? '', (url.searchParams.get('filter') ?? 'all') as DirectoryFilter);
+      const page = Number(url.searchParams.get('page') ?? '0');
+      return { json: { items: rows.slice(page * 25, page * 25 + 25), total: rows.length, page, page_size: 25 } };
+    }
+    if (url.pathname === `/api/leads/${leadId}/conversation` && method === 'GET') {
+      return { json: { clientId: this.linked ? this.account.id : null, items: [] } };
+    }
     if (url.pathname === `/api/leads/${leadId}/workspace`) {
       if (method === 'POST') {
         if (body.create) this.account = { ...this.account, id: randomUUID(), full_name: this.lead.full_name };
@@ -171,6 +190,14 @@ export class WorkspaceData {
       events: [], claims: [], endorsements: [], certificates: [], applications: [], campaigns: [],
       assets: this.assets, clientTasks: this.tasks, files: [], tags: [], activities: [],
     } };
+    if (url.pathname === '/api/leads/intake') {
+      if (method === 'GET') {
+        const email = url.searchParams.get('email')?.toLowerCase();
+        return { json: { matches: email && email === this.lead.email ? [{ type: 'lead', id: leadId, full_name: this.lead.full_name, business: null, email: this.lead.email, phone: this.lead.phone, address: this.lead.address, state: 'AZ', zip: null, status: 'new', line_of_business: 'personal', match: ['email'] }] : [] } };
+      }
+      this.intakeBodies.push(body);
+      return { status: 201, json: { id: leadId } };
+    }
     if (url.pathname === `/api/leads/${leadId}`) return { json: { ...this.lead, intake_event_ids: this.arrivals.filter((arrival) => arrival.id === leadId).map((arrival) => arrival.intake_id) } };
     if (url.pathname === '/api/leads') return { json: method === 'GET' ? [this.lead] : this.lead };
     if (url.pathname === '/api/leads/stats') return { json: { active: 1, won: 0, lost: 0, inactive: 0 } };
@@ -226,9 +253,37 @@ export const test = base.extend<{ data: WorkspaceData }, { authCookies: Array<{ 
     const context = await browser.newContext({ baseURL, viewport: { width: 1280, height: 900 }, timezoneId: 'Pacific/Honolulu' });
     await context.addCookies(authCookies.map((cookie) => ({ ...cookie, domain: new URL(baseURL ?? 'http://127.0.0.1:3000').hostname, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' })));
     try {
-      const smoke = await context.request.get('/api/tasks?status=open&count=true');
+      const [smoke, intake, clients, directory] = await Promise.all([
+        context.request.get('/api/tasks?status=open&count=true'),
+        context.request.get('/api/leads/attention'),
+        context.request.get('/api/clients'),
+        context.request.get('/api/clients/directory?q=&filter=all&page=0'),
+      ]);
       expect(smoke.status(), 'Authenticated, read-only task API smoke check').toBe(200);
-      expect(typeof (await smoke.json()).count).toBe('number');
+      const taskCount: unknown = await smoke.json();
+      expect(isRecord(taskCount) && typeof taskCount.count === 'number', 'Task count response contract').toBe(true);
+      expect(intake.status(), 'Authenticated, read-only intake queue smoke check').toBe(200);
+      const queue: unknown = await intake.json();
+      expect(isRecord(queue) && Array.isArray(queue.leads) && typeof queue.total === 'number', 'Intake queue response contract').toBe(true);
+      if (isRecord(queue) && Array.isArray(queue.leads)) {
+        const arrivals = queue.leads.map((item: unknown) => isRecord(item) && typeof item.arrived_at === 'string' ? Date.parse(item.arrived_at) : NaN);
+        expect(arrivals.every((timestamp, index) => {
+          const previous = arrivals[index - 1];
+          return Number.isFinite(timestamp) && (index === 0 || typeof previous === 'number' && previous >= timestamp);
+        }), 'The real intake API returns every arrival newest first').toBe(true);
+      }
+      expect(clients.status(), 'Authenticated, read-only account list smoke check').toBe(200);
+      expect(directory.status(), 'Authenticated, read-only directory smoke check').toBe(200);
+      const directoryData: unknown = await directory.json();
+      expect(isRecord(directoryData) && Array.isArray(directoryData.items) && typeof directoryData.total === 'number', 'Directory pagination contract').toBe(true);
+      const accounts: unknown = await clients.json();
+      expect(Array.isArray(accounts), 'Account list response contract').toBe(true);
+      const account: unknown = Array.isArray(accounts) ? accounts.find((item: unknown) => isRecord(item) && isUuid(item.id)) : undefined;
+      if (!isRecord(account) || !isUuid(account.id)) throw new Error('The read-only workspace smoke check requires an existing account.');
+      const workspace = await context.request.get(`/api/clients/${account.id}/workspace`);
+      expect(workspace.status(), 'Authenticated, read-only account workspace smoke check').toBe(200);
+      const accountWorkspace: unknown = await workspace.json();
+      expect(isRecord(accountWorkspace) && isRecord(accountWorkspace.client) && Array.isArray(accountWorkspace.timelineTasks), 'Account workspace response contract').toBe(true);
       await use(context);
     } finally { await context.close(); }
   },

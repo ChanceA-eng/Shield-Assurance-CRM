@@ -31,22 +31,10 @@ export const navigationCategories: NavCategory[] = [
     href: '/tasks',
   },
   {
-    id: 'applicants',
-    label: 'Applicants',
-    icon: 'UserPlus',
-    sections: [
-      {
-        title: 'Applicants',
-        items: [
-          { label: 'Create Personal Applicant', href: '/personal/new' },
-          { label: 'Create Commercial Applicant', href: '/commercial/intake' },
-          { label: 'Search Clients', href: '/clients' },
-          { label: 'Completed Quotes', href: '/applicants/quotes' },
-          { label: 'Import', href: '/applicants/import' },
-          { label: 'Submission Center', href: '/applicants/submissions' },
-        ],
-      },
-    ],
+    id: 'clients',
+    label: 'Accounts',
+    icon: 'Users',
+    href: '/clients',
   },
   {
     id: 'leads',
@@ -58,6 +46,7 @@ export const navigationCategories: NavCategory[] = [
         items: [
           { label: 'Lead Pipeline', href: '/leads' },
           { label: 'Work Queue', href: '/leads?view=queue' },
+          { label: 'Import Leads', href: '/leads/import' },
         ],
       },
     ],

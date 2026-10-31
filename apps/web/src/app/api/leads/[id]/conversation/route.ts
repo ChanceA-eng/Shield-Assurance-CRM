@@ -52,16 +52,12 @@ export async function GET(
 
   const clientId = lead.account_id;
 
-  if (!clientId) {
-    return NextResponse.json({ clientId: null, items: [] }, { status: 200 });
-  }
-
-  const { data, error } = await supabase
-    .from('communication_log')
-    .select('*')
-    .eq('client_id', clientId)
-    .order('sent_at', { ascending: false })
-    .limit(100);
+  // Messages from a lead with no account yet are tagged with metadata.lead_id by the inbound webhooks.
+  const query = supabase.from('communication_log').select('*');
+  const filtered = clientId
+    ? query.or(`client_id.eq.${clientId},metadata->>lead_id.eq.${lead.id}`)
+    : query.eq('metadata->>lead_id', lead.id);
+  const { data, error } = await filtered.order('sent_at', { ascending: false }).limit(100);
 
   if (error) {
     return NextResponse.json({ message: error.message }, { status: 500 });

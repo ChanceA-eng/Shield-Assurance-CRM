@@ -12,20 +12,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as { client_id?: string };
+  const body = (await request.json().catch(() => ({}))) as { client_id?: string; lead_id?: string };
   const clientId = body.client_id?.trim();
-  if (!clientId) {
-    return NextResponse.json({ message: 'client_id is required.' }, { status: 400 });
+  const leadId = body.lead_id?.trim();
+  if (!clientId && !leadId) {
+    return NextResponse.json({ message: 'client_id or lead_id is required.' }, { status: 400 });
   }
 
-  const { error } = await supabase
-    .from('communication_log')
-    .update({ read_at: new Date().toISOString() })
-    .eq('client_id', clientId)
-    .eq('direction', 'inbound')
-    .is('read_at', null);
-
-  if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+  const readAt = new Date().toISOString();
+  if (clientId) {
+    const { error } = await supabase
+      .from('communication_log')
+      .update({ read_at: readAt })
+      .eq('client_id', clientId)
+      .eq('direction', 'inbound')
+      .is('read_at', null);
+    if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+  }
+  if (leadId) {
+    const { error } = await supabase
+      .from('communication_log')
+      .update({ read_at: readAt })
+      .eq('metadata->>lead_id', leadId)
+      .eq('direction', 'inbound')
+      .is('read_at', null);
+    if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+  }
 
   return NextResponse.json({ ok: true }, { status: 200 });
 }

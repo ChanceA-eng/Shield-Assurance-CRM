@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { handleInboundReply } from '../../../../lib/outreach-engine';
+import { alertInboundMessage, resolveInboundSender } from '../../../../lib/message-alerts';
 
 /**
  * Inbound email webhook. This is the reply sensor for the outreach engine.
@@ -116,27 +117,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'Inbound payload is missing a valid from email.' }, { status: 400 });
   }
 
-  const clientLookup = await supabase
-    .from('clients')
-    .select('id,email')
-    .ilike('email', parsed.from)
-    .maybeSingle();
-
-  if (clientLookup.error) {
-    return NextResponse.json({ message: clientLookup.error.message }, { status: 500 });
-  }
+  const sender = await resolveInboundSender(supabase, { email: parsed.from });
 
   const { data, error } = await supabase
     .from('communication_log')
     .insert([
       {
-        client_id: clientLookup.data?.id ?? null,
+        client_id: sender.clientId,
         channel: 'email',
         direction: 'inbound',
         subject: parsed.subject,
         body: parsed.body,
         automation_type: 'inbound_webhook',
         sent_at: parsed.sentAt,
+        metadata: { from: parsed.from, to: parsed.to, lead_id: sender.leadId },
       },
     ])
     .select('id,client_id,channel,direction,subject,sent_at')
@@ -146,17 +140,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: error.message }, { status: 500 });
   }
 
-  // Reply sensor: stop active sequences and raise a call task for the matching lead.
-  await handleInboundReply(supabase, {
-    clientId: clientLookup.data?.id ?? null,
+  if (sender.clientId) {
+    await supabase.from('clients').update({ last_activity_at: new Date().toISOString() }).eq('id', sender.clientId);
+  }
+
+  // Reply sensor: stop active sequences (that path raises its own call task).
+  const reply = await handleInboundReply(supabase, {
+    clientId: sender.clientId,
     fromEmail: parsed.from,
     body: parsed.body,
+  });
+
+  const alert = await alertInboundMessage(supabase, {
+    sender,
+    channel: 'email',
+    fromAddress: parsed.from,
+    subject: parsed.subject,
+    body: parsed.body,
+    skipTask: reply.sequenceLeadIds.length > 0,
   });
 
   return NextResponse.json(
     {
       ok: true,
-      matchedClient: Boolean(clientLookup.data?.id),
+      matchedClient: Boolean(sender.clientId),
+      matchedLead: Boolean(sender.leadId),
+      taskCreated: alert.taskCreated,
       from: parsed.from,
       to: parsed.to,
       communication: data,

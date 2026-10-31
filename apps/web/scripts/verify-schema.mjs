@@ -18,7 +18,7 @@ const supabase = createClient(url, serviceRoleKey, {
 
 const checks = [
   supabase.from('accounts').select('id,account_type,assigned_producer,csr,since_date,email_consent,sms_consent,preferred_channel', { head: true }),
-  supabase.from('leads').select('id,account_id,confirmed_fields,last_viewed_at,last_activity_at,pipeline_stage,producer_owner,close_probability,expected_premium', { head: true }),
+  supabase.from('leads').select('id,account_id,confirmed_fields,industry,last_viewed_at,last_activity_at,pipeline_stage,producer_owner,close_probability,expected_premium', { head: true }),
   supabase.from('clients').select('id,account_type,assigned_producer,csr,since_date,policy_effective_at,last_viewed_at,last_activity_at', { head: true }),
   supabase.from('personal_applicants').select('id,lead_id,account_id,first_name,last_name,dob,gender,marital_status,ssn_masked,dl_number_masked,dl_status,dl_state,education,occupation,industry,prior_employer_years,applicant_type,lead_source,preferred_language', { head: true }),
   supabase.from('policies').select('id,client_id,account_id,policy_number,line_of_business,sub_type,premium,effective_date,renewal_date,expiration_date,status,billing_type,source,prior_policy_id', { head: true }),
@@ -32,7 +32,7 @@ const checks = [
   supabase.from('tasks').select('id,account_id,kind,note_id,completed_at,updated_at,intake_event_id,status,priority,due_date,assignee', { head: true }),
   supabase.from('client_assets').select('id,client_id,lead_id,title,asset_type,value,metadata,archived_at,created_at,updated_at', { head: true }),
   supabase.from('interactions').select('id,lead_id,client_id,note_type,pinned,author_name,updated_at', { head: true }),
-  supabase.from('lead_intake_events').select('id,lead_id,submission_key,submitted_at,opened_at,dismissed_at,handled_at', { head: true }),
+  supabase.from('lead_intake_events').select('id,lead_id,submission_key,submitted_at,received_at,time_basis,snapshot,opened_at,dismissed_at,handled_at,leads!inner(full_name,line_of_business,account_id,industry)', { head: true }),
   supabase.from('notifications').select('id,task_id,reminder_version,intake_event_id,href', { head: true }),
   supabase.from('client_tasks').select('id,client_id,subject,description,due_date,status,priority,created_at,updated_at', { head: true }),
   supabase.from('client_files').select('id,client_id,file_name,file_url,file_type,file_size,status,metadata,uploaded_at,created_at', { head: true }),

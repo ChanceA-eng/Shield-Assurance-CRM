@@ -1,8 +1,13 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import SectionLayout from '../../components/crm/SectionLayout';
+import { Card, CardBody } from '../../components/ui/Card';
+import { workspaceFetch } from '../../lib/workspace-fetch';
+import { useNotifications } from '../../context/NotificationContext';
+import { formatArizonaDateTime } from '../../lib/arizona-time';
+import type { DirectoryFilter, DirectoryResult, DirectoryRow } from '../../lib/client-directory';
 
 interface Client {
   id: string;
@@ -31,49 +36,14 @@ interface NewClientForm {
   preferred_channel: 'email' | 'sms' | 'both';
 }
 
-function parseDateOrNull(value: string | null | undefined): Date | null {
-  if (!value) {
-    return null;
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-
-  return parsed;
-}
-
-function getClientPendingCount(client: Client): number {
-  const lastViewedAt = parseDateOrNull(client.last_viewed_at);
-  const lastActivityAt = parseDateOrNull(client.last_activity_at) ?? parseDateOrNull(client.created_at);
-  const policyEffectiveAt = parseDateOrNull(client.policy_effective_at);
-  const now = Date.now();
-
-  let count = 0;
-
-  if (lastActivityAt && lastActivityAt.getTime() > (lastViewedAt?.getTime() ?? 0)) {
-    count += 1;
-  }
-
-  if (policyEffectiveAt) {
-    const milestone30 = policyEffectiveAt.getTime() + 30 * 24 * 60 * 60 * 1000;
-    const milestone45 = policyEffectiveAt.getTime() + 45 * 24 * 60 * 60 * 1000;
-
-    if (now >= milestone30 && (!lastViewedAt || lastViewedAt.getTime() < milestone30)) {
-      count += 1;
-    }
-
-    if (now >= milestone45 && (!lastViewedAt || lastViewedAt.getTime() < milestone45)) {
-      count += 1;
-    }
-  }
-
-  return count;
-}
-
 export default function ClientsPage(): JSX.Element {
-  const [clients, setClients] = useState<Client[]>([]);
+  const [clients, setClients] = useState<DirectoryRow[]>([]);
+  const [search, setSearch] = useState('');
+  const { unreadMessages } = useNotifications();
+  const [filter, setFilter] = useState<DirectoryFilter>('all');
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const loadVersion = useRef(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showNewClient, setShowNewClient] = useState(false);
@@ -95,21 +65,24 @@ export default function ClientsPage(): JSX.Element {
     setLoading(true);
     setError(null);
 
-    const res = await fetch('/api/clients', { cache: 'no-store' });
-    if (!res.ok) {
-      setError('Failed to load clients.');
-      setLoading(false);
-      return;
+    const version = ++loadVersion.current;
+    try {
+      const data = await workspaceFetch<DirectoryResult>(`/api/clients/directory?q=${encodeURIComponent(search)}&filter=${filter}&page=${page}`);
+      if (version !== loadVersion.current) return;
+      if (page > 0 && page * data.page_size >= data.total) { setPage(Math.max(0, Math.ceil(data.total / data.page_size) - 1)); return; }
+      setClients(data.items);
+      setTotal(data.total);
+    } catch (failure) {
+      if (version === loadVersion.current) setError(failure instanceof Error ? failure.message : 'Failed to load accounts.');
+    } finally {
+      if (version === loadVersion.current) setLoading(false);
     }
-
-    const data = (await res.json()) as Client[];
-    setClients(data);
-    setLoading(false);
   };
 
   useEffect(() => {
-    void fetchClients();
-  }, []);
+    const timer = setTimeout(() => void fetchClients(), 250);
+    return () => { clearTimeout(timer); loadVersion.current++; };
+  }, [search, filter, page]);
 
   const handleCreateClient = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
@@ -179,37 +152,48 @@ export default function ClientsPage(): JSX.Element {
   };
 
   return (
-    <SectionLayout title="Clients">
-      <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-[#5c6873]">Book of business: clients are auto-created from issued policies, with manual backup entry.</p>
+    <SectionLayout title="Accounts">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-cui-muted">Your book of business and prospect accounts. Client status comes from placed policies.</p>
         <button
           type="button"
           onClick={() => setShowNewClient(true)}
           className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7]"
         >
-          + New Client
+          + New Account
         </button>
       </div>
 
-      {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      <Card className="mb-4">
+        <CardBody>
+          <label className="block text-sm font-semibold text-cui-text">Search accounts
+            <input type="search" maxLength={200} value={search} onChange={(event) => { setSearch(event.target.value); setPage(0); }}
+              placeholder="Name, business, email, phone or policy number"
+              className="mt-2 w-full rounded border border-cui-border px-3 py-2 font-normal" />
+          </label>
+          <div className="mt-3 flex flex-wrap gap-2" aria-label="Account filters">
+            {([['all', 'All accounts'], ['active', 'Active clients'], ['prospect', 'Prospects'], ['former', 'Former clients'],
+              ['renewals', 'Renewals in 30 days'], ['overdue', 'Overdue work']] as const).map(([value, label]) =>
+              <button key={value} type="button" aria-pressed={filter === value} onClick={() => { setFilter(value); setPage(0); }}
+                className={`rounded border px-3 py-1.5 text-sm ${filter === value ? 'border-cui-primary bg-cui-primary text-white' : 'border-cui-border text-cui-text'}`}>{label}</button>)}
+          </div>
+        </CardBody>
+      </Card>
+      {error ? <div role="alert" className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error} <button onClick={() => void fetchClients()} className="underline">Retry</button></div> : null}
       {loading ? <div className="text-sm text-[#73818f]">Loading clients...</div> : null}
 
-      {!loading ? (
-        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
+      {!loading && !error ? (
+        <div className="overflow-x-auto rounded border border-cui-border bg-white shadow-sm">
           {clients.length === 0 ? (
             <div className="p-4 text-sm text-[#73818f]">No clients found.</div>
           ) : (
             <table className="w-full text-left text-sm">
               <thead className="bg-[#f8f9fa] text-[#73818f]">
                 <tr>
-                  <th className="px-3 py-2">Name</th>
-                  <th className="px-3 py-2">Phone</th>
-                  <th className="px-3 py-2">Email</th>
-                  <th className="px-3 py-2">Address</th>
-                  <th className="px-3 py-2">Source</th>
-                  <th className="px-3 py-2">Consent</th>
-                  <th className="px-3 py-2">Preferred</th>
-                  <th className="px-3 py-2">Created</th>
+                  <th className="px-3 py-2">Account / Contact</th>
+                  <th className="px-3 py-2">Policy status</th>
+                  <th className="px-3 py-2">Next action</th>
+                  <th className="px-3 py-2">Assigned agent</th>
                   <th className="px-3 py-2">Actions</th>
                 </tr>
               </thead>
@@ -221,25 +205,30 @@ export default function ClientsPage(): JSX.Element {
                         <Link href={`/clients/${client.id}`} className="hover:underline">
                           {client.full_name}
                         </Link>
-                        {(() => {
-                          const pendingCount = getClientPendingCount(client);
-                          return pendingCount > 0 ? (
-                            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white">
-                              {pendingCount > 9 ? '9+' : pendingCount}
-                            </span>
-                          ) : null;
-                        })()}
+                        {(unreadMessages.byClient[client.id] ?? 0) > 0 ? (
+                          <Link
+                            href={`/clients/${client.id}?tab=communication`}
+                            className="rounded-full bg-cui-danger px-2 py-0.5 text-[11px] font-bold text-white"
+                            title="Unread messages from this account"
+                          >
+                            {unreadMessages.byClient[client.id]} new message{unreadMessages.byClient[client.id] === 1 ? '' : 's'}
+                          </Link>
+                        ) : null}
                       </div>
+                      {client.business_names.map((name) => <p key={name} className="text-xs text-cui-muted">{name}</p>)}
+                      <p className="mt-1 font-normal text-cui-muted">{client.email || 'Email not recorded'}</p>
+                      <p className="font-normal text-cui-muted">{client.phone || 'Phone not recorded'}</p>
                     </td>
-                    <td className="px-3 py-2">{client.phone || '--'}</td>
-                    <td className="px-3 py-2">{client.email || '--'}</td>
-                    <td className="px-3 py-2">{client.address || '--'}</td>
-                    <td className="px-3 py-2">{client.source || '--'}</td>
-                    <td className="px-3 py-2 text-xs text-[#5c6873]">
-                      {client.email_consent ? 'Email' : 'No Email'} · {client.sms_consent ? 'SMS' : 'No SMS'}
+                    <td className="px-3 py-2"><span className="rounded bg-cui-light px-2 py-1 text-xs font-semibold">{client.lifecycle}</span>
+                      <p className="mt-2 text-xs text-cui-muted">{client.policy_count} policies</p>
+                      {client.renewal_date ? <p className="text-xs text-cui-muted">Next expiration {client.renewal_date}</p> : null}
                     </td>
-                    <td className="px-3 py-2 text-xs text-[#5c6873]">{client.preferred_channel || 'email'}</td>
-                    <td className="px-3 py-2">{new Date(client.created_at).toLocaleDateString()}</td>
+                    <td className="max-w-xs px-3 py-2">
+                      {client.next_task ? <Link href={`/clients/${client.id}?tab=tasks`} className="font-semibold text-cui-primary hover:underline">{client.next_task.subject}</Link> : 'No open tasks'}
+                      {client.next_task?.due_date ? <p className="text-xs text-cui-muted">{formatArizonaDateTime(client.next_task.due_date)} AZ</p> : null}
+                      {client.overdue_count > 0 ? <p className="text-xs font-semibold text-cui-danger">{client.overdue_count} overdue</p> : null}
+                    </td>
+                    <td className="px-3 py-2">{client.assigned_producer || 'Unassigned'}</td>
                     <td className="px-3 py-2 text-xs">
                       <button type="button" className="mr-2 font-semibold text-[#167495] hover:underline" onClick={() => setEditingClient(client)}>
                         Edit
@@ -255,11 +244,18 @@ export default function ClientsPage(): JSX.Element {
           )}
         </div>
       ) : null}
+      {!loading && !error ? <div className="mt-3 flex items-center justify-between gap-3 text-sm text-cui-muted">
+        <p role="status">{total} matching accounts · Page {page + 1} of {Math.max(1, Math.ceil(total / 25))}</p>
+        <div className="flex gap-2">
+          <button disabled={page === 0} onClick={() => setPage((value) => value - 1)} className="rounded border border-cui-border px-3 py-1 disabled:opacity-40">Previous</button>
+          <button disabled={(page + 1) * 25 >= total} onClick={() => setPage((value) => value + 1)} className="rounded border border-cui-border px-3 py-1 disabled:opacity-40">Next</button>
+        </div>
+      </div> : null}
 
       {showNewClient ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
-            <h2 className="mb-3 text-lg font-bold text-[#23282c]">New Client</h2>
+            <h2 className="mb-3 text-lg font-bold text-[#23282c]">New Account</h2>
             <form onSubmit={handleCreateClient} className="space-y-2">
               <input
                 required

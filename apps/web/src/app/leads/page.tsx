@@ -1003,8 +1003,9 @@ function LeadsPageInner(): JSX.Element {
       {showNewLead ? (
         <NewLeadModal
           onClose={() => setShowNewLead(false)}
-          onSaved={() => {
+          onCreated={(leadId) => {
             setShowNewLead(false);
+            setPendingLeadId(leadId);
             void fetchLeads();
           }}
         />

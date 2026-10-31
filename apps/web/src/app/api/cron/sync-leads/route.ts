@@ -3,6 +3,7 @@ import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../lib/api-auth';
 import { isArizonaWeekend, nextArizonaBusinessMorning, startOfArizonaDay } from '../../../../lib/arizona-time';
 import { processDueEnrollments } from '../../../../lib/outreach-engine';
+import { runRenewalRadar } from '../../../../lib/renewal-automation';
 import { applyResubmission } from '../../../../lib/resubmission';
 import { scheduleIntakeTask } from '../../../../lib/intake-task';
 import { sourceSubmissionId } from '../../../../lib/website-intake';
@@ -246,6 +247,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     console.log('[cron/sync-leads] outreach engine', outreach);
   } catch (error) {
     console.error('[cron/sync-leads] outreach engine failed', error);
+  }
+
+  // Renewal radar: internal tasks + milestone notifications for policies renewing within 45 days.
+  try {
+    const renewals = await runRenewalRadar(supabase);
+    console.log('[cron/sync-leads] renewal radar', renewals);
+  } catch (error) {
+    console.error('[cron/sync-leads] renewal radar failed', error);
   }
 
   const exportUrl = process.env.WEBSITE_LEADS_EXPORT_URL?.trim() || 'https://www.shield-assurance.com/api/export-submissions';

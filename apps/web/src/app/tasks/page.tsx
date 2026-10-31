@@ -4,8 +4,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Circle, Clock, Flag, Plus, User } from 'lucide-react';
 import SectionLayout from '../../components/crm/SectionLayout';
 import LeadWorkspace, { type WorkspaceLead } from '../leads/LeadWorkspace';
-import { arizonaInputToIso, endOfArizonaDay, formatArizonaDateTime, startOfArizonaDay } from '../../lib/arizona-time';
+import { arizonaDateTimeInput, arizonaInputToIso, endOfArizonaDay, formatArizonaDateTime, startOfArizonaDay } from '../../lib/arizona-time';
 import { workspaceFetch, workspacePages } from '../../lib/workspace-fetch';
+import { customSnoozeIso, defaultSnoozeInput, snoozePresetIso, type SnoozePreset } from '../../lib/task-snooze';
 import { useNotifications } from '../../context/NotificationContext';
 
 interface Task {
@@ -136,10 +137,21 @@ export default function TasksPage(): JSX.Element {
     }
   };
 
-  const snooze = (task: Task, option: 'later' | 'tomorrow' | 'nextweek'): void => {
-    const due = option === 'later' ? new Date(Date.now() + 4 * 3600000)
-      : new Date(startOfArizonaDay(new Date()).getTime() + (option === 'tomorrow' ? 1 : 7) * 86400000 + 16 * 3600000);
-    void updateTask(task.id, { due_date: due.toISOString() });
+  const [snoozeEditor, setSnoozeEditor] = useState<{ taskId: string; value: string; error: string | null } | null>(null);
+
+  const snooze = (task: Task, option: SnoozePreset): void => {
+    void updateTask(task.id, { due_date: snoozePresetIso(option) });
+  };
+
+  const saveCustomSnooze = async (task: Task): Promise<void> => {
+    if (!snoozeEditor || snoozeEditor.taskId !== task.id) return;
+    const result = customSnoozeIso(snoozeEditor.value);
+    if ('error' in result) {
+      setSnoozeEditor({ ...snoozeEditor, error: result.error });
+      return;
+    }
+    await updateTask(task.id, { due_date: result.iso });
+    setSnoozeEditor(null);
   };
 
   const quickAdd = async (): Promise<void> => {
@@ -361,18 +373,54 @@ export default function TasksPage(): JSX.Element {
                     <select
                       defaultValue=""
                       disabled={busyId === task.id}
+                      aria-label={`Snooze ${task.subject}`}
                       onChange={(event) => {
-                        const option = event.target.value as 'later' | 'tomorrow' | 'nextweek' | '';
+                        const option = event.target.value as SnoozePreset | 'custom' | '';
                         event.target.value = '';
-                        if (option) snooze(task, option);
+                        if (option === 'custom') setSnoozeEditor({ taskId: task.id, value: defaultSnoozeInput(), error: null });
+                        else if (option) snooze(task, option);
                       }}
                       className="shrink-0 rounded border border-cui-border bg-white px-2 py-1 text-xs text-cui-muted"
                     >
                       <option value="" disabled>Snooze…</option>
-                      <option value="later">Later today</option>
-                      <option value="tomorrow">Tomorrow 4 PM</option>
-                      <option value="nextweek">Next week</option>
+                      <option value="later">Later today (+3 hrs)</option>
+                      <option value="tomorrow">Tomorrow 9 AM</option>
+                      <option value="nextweek">Next Monday 9 AM</option>
+                      <option value="custom">Pick date &amp; time…</option>
                     </select>
+
+                    {snoozeEditor?.taskId === task.id ? (
+                      <form
+                        className="flex basis-full flex-wrap items-center justify-end gap-2 rounded border border-cui-primary/30 bg-cui-primary/5 px-3 py-2"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void saveCustomSnooze(task);
+                        }}
+                      >
+                        <label className="flex items-center gap-2 text-xs font-semibold text-cui-text">
+                          Snooze until (Arizona time)
+                          <input
+                            type="datetime-local"
+                            value={snoozeEditor.value}
+                            min={arizonaDateTimeInput(new Date())}
+                            onChange={(event) => setSnoozeEditor({ taskId: task.id, value: event.target.value, error: null })}
+                            className="rounded border border-cui-border bg-white px-2 py-1 text-xs font-normal"
+                            autoFocus
+                          />
+                        </label>
+                        <button
+                          type="submit"
+                          disabled={busyId === task.id}
+                          className="rounded bg-cui-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                        >
+                          Save snooze
+                        </button>
+                        <button type="button" onClick={() => setSnoozeEditor(null)} className="rounded border border-cui-border bg-white px-3 py-1 text-xs font-semibold text-cui-muted">
+                          Cancel
+                        </button>
+                        {snoozeEditor.error ? <p role="alert" className="basis-full text-right text-xs font-semibold text-cui-danger">{snoozeEditor.error}</p> : null}
+                      </form>
+                    ) : null}
                   </div>
                 );
               })}

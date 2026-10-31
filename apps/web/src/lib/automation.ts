@@ -4,7 +4,7 @@ import { appendAgencySignature } from './agency-signature';
 import { LEAD_STATUS_LABELS, type LeadStatus } from './lead-pipeline';
 
 export type AutomationChannel = 'email' | 'sms' | 'in_app';
-export type AutomationType = 'renewal' | 'claim' | 'endorsement' | 'lead' | 'new_lead' | 'appointment' | 'certificate' | 'outreach';
+export type AutomationType = 'renewal' | 'claim' | 'endorsement' | 'lead' | 'new_lead' | 'appointment' | 'certificate' | 'outreach' | 'message';
 
 export interface ClientPreferences {
   id: string;
@@ -241,62 +241,6 @@ async function sendSmsIfAllowed(client: ClientPreferences | null, body: string, 
     body,
     automation_type: automationType,
   });
-}
-
-export async function runRenewalAutomation(): Promise<{ processed: number }> {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) return { processed: 0 };
-
-  const reminderOffsets = [45, 30, 15, 3, 0] as const;
-  let processed = 0;
-
-  for (const daysBeforeRenewal of reminderOffsets) {
-    const reminderDate = new Date();
-    reminderDate.setUTCDate(reminderDate.getUTCDate() + daysBeforeRenewal);
-    const reminderISO = reminderDate.toISOString().slice(0, 10);
-
-    const { data: policies } = await supabase
-      .from('policies')
-      .select('id,client_id,insured_name,carrier,renewal_date,status')
-      .eq('renewal_date', reminderISO)
-      .in('status', ['active', 'issued']);
-
-    for (const policy of policies ?? []) {
-      processed += 1;
-      const client = await getClientPreferences(policy.client_id as string);
-      const renewalLabel = daysBeforeRenewal === 0 ? 'today' : `in ${daysBeforeRenewal} days`;
-      const title = `Renewal ${renewalLabel}: ${policy.insured_name ?? 'Policy'}`;
-      const body = `Policy ${policy.insured_name ?? ''} with ${policy.carrier ?? 'your carrier'} renews on ${policy.renewal_date}.`;
-
-      await queueInternalAction({
-        clientId: policy.client_id,
-        type: 'renewal',
-        title: `Call client about renewal: ${policy.insured_name ?? 'Policy'}`,
-        dueDate: policy.renewal_date,
-        relatedType: 'policy',
-        relatedId: policy.id,
-      });
-
-      await queueEvent({
-        title: `Renewal review: ${policy.insured_name ?? 'Policy'}`,
-        eventDate: policy.renewal_date,
-        relatedType: 'policy',
-        relatedId: policy.id,
-        allDay: true,
-      });
-
-      await writeNotification({
-        client_id: policy.client_id,
-        type: 'renewal',
-        message: body,
-      });
-
-      await sendEmailIfAllowed(client, title, body, 'renewal');
-      await sendSmsIfAllowed(client, `Shield Assurance: ${body}`, 'renewal');
-    }
-  }
-
-  return { processed };
 }
 
 export async function processClaimCreated(input: {
