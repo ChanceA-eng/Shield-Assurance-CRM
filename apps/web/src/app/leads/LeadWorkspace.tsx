@@ -488,6 +488,72 @@ function AnswerLines({ text }: { text: string }): JSX.Element | null {
   );
 }
 
+/** Paths already rendered by the structured website sections. */
+const WEBSITE_RENDERED_PATHS = new Set([
+  'email',
+  'phone',
+  'client_name',
+  'source_page',
+  'risk_details',
+  'created_at',
+  'status',
+  'source',
+  'previous_submissions',
+  'metadata.submittedAt',
+  'metadata.page',
+  'metadata.guide.label',
+  'metadata.guide.category',
+  'metadata.guide.tier',
+  'metadata.guide.message',
+  'metadata.guide.summary',
+  'metadata.assets.auto.year',
+  'metadata.assets.auto.make',
+  'metadata.assets.auto.model',
+  'metadata.assets.auto.vin',
+  'metadata.assets.home.address',
+  'metadata.assets.business.industry',
+  'metadata.assets.bundleSelections',
+  'metadata.routing.fullName',
+  'metadata.routing.email',
+  'metadata.routing.phone',
+  'metadata.routing.zipCode',
+  'metadata.routingContext.sourceChannel',
+  'metadata.routingContext.priorityTier',
+]);
+
+/** Flattens every leaf value not already shown, so no submitted data is hidden. */
+function collectRemainingData(value: unknown, path: string, out: Array<[string, string]>): void {
+  if (WEBSITE_RENDERED_PATHS.has(path)) return;
+  if (value === null || value === undefined || value === '') return;
+  if (Array.isArray(value)) {
+    if (value.every((item) => typeof item !== 'object' || item === null)) {
+      const joined = value.map((item) => String(item)).filter(Boolean).join(', ');
+      if (joined) out.push([path, joined]);
+      return;
+    }
+    value.forEach((item, index) => collectRemainingData(item, `${path}[${index + 1}]`, out));
+    return;
+  }
+  if (typeof value === 'object') {
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      collectRemainingData(child, path ? `${path}.${key}` : key, out);
+    }
+    return;
+  }
+  if (typeof value === 'boolean') {
+    out.push([path, value ? 'Yes' : 'No']);
+    return;
+  }
+  out.push([path, String(value)]);
+}
+
+function pathLabel(path: string): string {
+  return path
+    .split('.')
+    .map((segment) => humanizeKey(segment))
+    .join(' · ');
+}
+
 /** Structured view of a website quote-request submission. */
 function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): JSX.Element {
   const metadata = isRecord(payload.metadata) ? payload.metadata : {};
@@ -510,11 +576,19 @@ function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): J
   const vehicle = [text(auto.year), text(auto.make), text(auto.model)].filter(Boolean).join(' ');
   const answersText = text(guide.message) ?? text(payload.risk_details as string);
 
+  const previousSubmissions = Array.isArray(payload.previous_submissions)
+    ? (payload.previous_submissions as Array<Record<string, unknown>>)
+    : [];
+
+  const remaining: Array<[string, string]> = [];
+  collectRemainingData(payload, '', remaining);
+
   return (
     <div className="space-y-4">
-      <ProfileSection title="Website Submission">
+      <ProfileSection title={previousSubmissions.length > 0 ? 'Latest Website Submission' : 'Website Submission'}>
         <Field label="Submitted" value={submittedAt} />
         <Field label="Requested" value={requested || null} />
+        <Field label="Priority" value={text(routingContext.priorityTier) ? humanizeKey(String(routingContext.priorityTier)) : null} />
         <Field label="From" value={text(routingContext.sourceChannel) ?? text(payload.source_page as string) ?? text(metadata.page)} />
         {bundles.length > 0 ? <Field label="Also interested in" value={bundles.join(', ')} /> : null}
       </ProfileSection>
@@ -540,6 +614,51 @@ function WebsiteSubmission({ payload }: { payload: Record<string, unknown> }): J
         <Field label="Phone" value={formatPhone(text(routing.phone) ?? text(payload.phone as string))} />
         <Field label="ZIP" value={text(routing.zipCode)} />
       </ProfileSection>
+
+      {previousSubmissions.length > 0 ? (
+        <details className="rounded border border-cui-border/60">
+          <summary className="cursor-pointer border-b border-cui-border/40 bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">
+            Previous Submissions ({previousSubmissions.length})
+          </summary>
+          <div className="space-y-3 p-3">
+            {[...previousSubmissions].reverse().map((prev, index) => {
+              const prevMeta = isRecord(prev.metadata) ? prev.metadata : {};
+              const prevGuide = isRecord(prevMeta.guide) ? prevMeta.guide : {};
+              const prevText =
+                (typeof prevGuide.message === 'string' && prevGuide.message.trim()) ||
+                (typeof prev.risk_details === 'string' && prev.risk_details.trim()) ||
+                null;
+              const when =
+                fullDateTime(typeof prevMeta.submittedAt === 'string' ? prevMeta.submittedAt : null) ??
+                fullDateTime(typeof prev.created_at === 'string' ? prev.created_at : null);
+              return (
+                <div key={index} className="rounded border border-cui-border/40 p-2.5">
+                  <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-cui-muted">{when ?? `Submission ${previousSubmissions.length - index}`}</p>
+                  {prevText ? <AnswerLines text={prevText} /> : <p className="text-sm text-cui-muted">No details captured.</p>}
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      ) : null}
+
+      {remaining.length > 0 ? (
+        <details className="rounded border border-cui-border/60">
+          <summary className="cursor-pointer border-b border-cui-border/40 bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">
+            Additional Details ({remaining.length})
+          </summary>
+          <table className="w-full text-left text-sm">
+            <tbody>
+              {remaining.map(([path, value]) => (
+                <tr key={path} className="border-t border-cui-light first:border-t-0">
+                  <td className="w-56 px-3 py-1.5 align-top font-semibold text-cui-muted">{pathLabel(path)}</td>
+                  <td className="break-all px-3 py-1.5 font-medium text-cui-text">{value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      ) : null}
     </div>
   );
 }

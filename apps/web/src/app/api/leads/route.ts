@@ -4,7 +4,7 @@ import { requireApiSession } from '../../../lib/api-auth';
 import { processLeadStatusChanged } from '../../../lib/automation';
 import { ACTIVE_LEAD_STATUSES, normalizeLeadStatus } from '../../../lib/lead-pipeline';
 import { scheduleIntakeTask, isWarmSource } from '../../../lib/intake-task';
-import { writeNotification } from '../../../lib/automation';
+import { applyResubmission } from '../../../lib/resubmission';
 
 interface NewLeadPayload {
   id?: string;
@@ -172,23 +172,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   // Resubmission check: a repeat inquiry is a hot signal, not a new lead.
   const email = normalizeText(payload.email)?.toLowerCase() ?? null;
   const phoneDigitsValue = (normalizeText(payload.phone) ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
-  let existing: { id: string; full_name: string } | null = null;
+  let existing: { id: string; full_name: string; status: string | null; form_payload: Record<string, unknown> | null } | null = null;
   if (email) {
     const byEmail = await supabase
       .from('leads')
-      .select('id,full_name')
+      .select('id,full_name,status,form_payload')
       .eq('email', email)
-      .in('status', ['new', 'contacted', 'quoted'])
+      .order('created_at', { ascending: false })
       .limit(1)
-      .maybeSingle<{ id: string; full_name: string }>();
+      .maybeSingle<{ id: string; full_name: string; status: string | null; form_payload: Record<string, unknown> | null }>();
     existing = byEmail.data ?? null;
   }
   if (!existing && phoneDigitsValue.length === 10) {
     const byPhone = await supabase
       .from('leads')
-      .select('id,full_name,phone')
-      .in('status', ['new', 'contacted', 'quoted'])
-      .limit(500);
+      .select('id,full_name,status,form_payload,phone')
+      .order('created_at', { ascending: false })
+      .limit(1000);
     existing =
       (byPhone.data ?? []).find(
         (row) => ((row.phone as string | null) ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '') === phoneDigitsValue,
@@ -196,33 +196,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   if (existing) {
-    await supabase
-      .from('leads')
-      .update({ last_activity_at: new Date().toISOString() })
-      .eq('id', existing.id);
-    await supabase.from('interactions').insert([
-      {
-        lead_id: existing.id,
-        content: `Lead resubmitted via website: ${JSON.stringify(payload).slice(0, 800)}`,
-        follow_up_completed: true,
-      },
-    ]);
-    const hotDue = new Date(Date.now() + 2 * 3600 * 1000);
-    await supabase.from('tasks').insert([
-      {
-        subject: `${existing.full_name} submitted another request — call now`,
-        description: 'They filled out the website form again. Repeat inquiries close fast.',
-        due_date: hotDue.toISOString(),
-        status: 'open',
-        priority: 'high',
-        related_type: 'lead',
-        related_id: existing.id,
-      },
-    ]);
-    await writeNotification({
-      type: 'new_lead',
-      message: `${existing.full_name} submitted another request — strike while it's hot`,
-      href: `/leads?lead=${existing.id}`,
+    await applyResubmission(supabase, existing, payload as Record<string, unknown>, {
+      fullName: normalizeText(payload.fullName) ?? normalizeText(payload.full_name) ?? normalizeText(payload.name),
+      email,
+      phone: normalizeText(payload.phone),
     });
     return jsonWithCors(request, { id: existing.id, resubmission: true }, { status: 200 });
   }

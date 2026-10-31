@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
+import { requireApiSession } from '../../../../lib/api-auth';
 import { isArizonaWeekend, nextArizonaBusinessMorning, startOfArizonaDay } from '../../../../lib/arizona-time';
 import { processDueEnrollments } from '../../../../lib/outreach-engine';
+import { applyResubmission } from '../../../../lib/resubmission';
+import { scheduleIntakeTask } from '../../../../lib/intake-task';
 
 export const runtime = 'nodejs';
 
@@ -184,14 +187,27 @@ async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
   return { created: inserts.length };
 }
 
+/**
+ * The export returns ALL submissions every time, so each one is identified by
+ * its website id (falling back to its submission timestamp). A submission is
+ * processed only once, even after it is archived by a later resubmission.
+ */
+function externalIdOf(payload: Record<string, unknown>): string | null {
+  const metadata = (payload.metadata ?? {}) as Record<string, unknown>;
+  return asString(payload.id) ?? asString(metadata.submittedAt) ?? asString(payload.created_at);
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
   }
 
+  // Scheduled runs authorize via CRON_SECRET/vercel-cron; a logged-in producer
+  // can also trigger a pull on demand by visiting this route.
   if (!isAuthorizedCron(request)) {
-    return NextResponse.json({ message: 'Unauthorized cron request.' }, { status: 401 });
+    const sessionError = await requireApiSession(request);
+    if (sessionError) return sessionError;
   }
 
   const followUpRoutine = await enforceDefaultFollowUpRoutine();
@@ -214,6 +230,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         ok: true,
         pulled: 0,
         inserted: 0,
+        resubmissions: 0,
         skippedExisting: 0,
         followUpsCreated: followUpRoutine.created,
         syncSkipped: 'WEBSITE_SYNC_TOKEN is not configured.',
@@ -242,54 +259,108 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const externalLeads = extractLeadArray(responsePayload);
 
   if (externalLeads.length === 0) {
-    return NextResponse.json({ ok: true, pulled: 0, inserted: 0, skippedExisting: 0, followUpsCreated: followUpRoutine.created }, { status: 200 });
-  }
-
-  const normalizedLeads = externalLeads.map(normalizeExternalLead);
-  const candidateEmails = Array.from(new Set(normalizedLeads.map((lead) => lead.email).filter((email): email is string => Boolean(email))));
-
-  let existingEmails = new Set<string>();
-  if (candidateEmails.length > 0) {
-    const existingResult = await supabase.from('leads').select('email').in('email', candidateEmails);
-    if (existingResult.error) {
-      return NextResponse.json({ message: existingResult.error.message }, { status: 500 });
-    }
-
-    existingEmails = new Set(
-      (existingResult.data ?? [])
-        .map((row) => asString((row as { email?: unknown }).email)?.toLowerCase())
-        .filter((email): email is string => Boolean(email)),
-    );
-  }
-
-  const insertRecords = normalizedLeads.filter((lead) => !(lead.email && existingEmails.has(lead.email)));
-  const skippedExisting = normalizedLeads.length - insertRecords.length;
-
-  if (insertRecords.length === 0) {
     return NextResponse.json(
-      {
-        ok: true,
-        pulled: normalizedLeads.length,
-        inserted: 0,
-        skippedExisting,
-        followUpsCreated: followUpRoutine.created,
-      },
+      { ok: true, pulled: 0, inserted: 0, resubmissions: 0, skippedExisting: 0, followUpsCreated: followUpRoutine.created },
       { status: 200 },
     );
   }
 
-  const insertResult = await supabase.from('leads').insert(insertRecords).select('id');
-  if (insertResult.error) {
-    return NextResponse.json({ message: insertResult.error.message }, { status: 500 });
+  // Every website submission id we've already ingested — current payloads AND
+  // submissions archived under previous_submissions.
+  const { data: webLeadRows, error: webLeadsError } = await supabase
+    .from('leads')
+    .select('id,form_payload')
+    .eq('source', 'website-pull')
+    .limit(5000);
+  if (webLeadsError) {
+    return NextResponse.json({ message: webLeadsError.message }, { status: 500 });
+  }
+  const ingestedIds = new Set<string>();
+  for (const row of webLeadRows ?? []) {
+    const formPayload = (row.form_payload ?? {}) as Record<string, unknown>;
+    const mainId = externalIdOf(formPayload);
+    if (mainId) ingestedIds.add(mainId);
+    const history = Array.isArray(formPayload.previous_submissions)
+      ? (formPayload.previous_submissions as Array<Record<string, unknown>>)
+      : [];
+    for (const prev of history) {
+      const prevId = externalIdOf(prev);
+      if (prevId) ingestedIds.add(prevId);
+    }
+  }
+
+  // Oldest first, so when someone submitted multiple times the latest ends up current.
+  const normalizedLeads = externalLeads
+    .map(normalizeExternalLead)
+    .sort((a, b) => (externalIdOf(a.form_payload) ?? '').localeCompare(externalIdOf(b.form_payload) ?? '', undefined, { numeric: true }));
+
+  const fresh = normalizedLeads.filter((lead) => {
+    const externalId = externalIdOf(lead.form_payload);
+    return !externalId || !ingestedIds.has(externalId);
+  });
+  const skippedExisting = normalizedLeads.length - fresh.length;
+
+  // Match fresh submissions to existing leads by email (resubmission detection).
+  const candidateEmails = Array.from(new Set(fresh.map((lead) => lead.email).filter((email): email is string => Boolean(email))));
+  const matchByEmail = new Map<string, string>();
+  if (candidateEmails.length > 0) {
+    const { data: matches, error: matchError } = await supabase
+      .from('leads')
+      .select('id,email,created_at')
+      .in('email', candidateEmails)
+      .order('created_at', { ascending: false });
+    if (matchError) {
+      return NextResponse.json({ message: matchError.message }, { status: 500 });
+    }
+    for (const match of matches ?? []) {
+      const email = asString(match.email)?.toLowerCase();
+      if (email && !matchByEmail.has(email)) matchByEmail.set(email, match.id as string);
+    }
+  }
+
+  let inserted = 0;
+  let resubmissions = 0;
+  const errors: string[] = [];
+
+  for (const lead of fresh) {
+    const existingId = lead.email ? matchByEmail.get(lead.email) : undefined;
+
+    if (existingId) {
+      const { data: existing } = await supabase
+        .from('leads')
+        .select('id,full_name,status,form_payload')
+        .eq('id', existingId)
+        .maybeSingle<{ id: string; full_name: string; status: string | null; form_payload: Record<string, unknown> | null }>();
+      if (existing) {
+        await applyResubmission(supabase, existing, lead.form_payload, {
+          fullName: lead.full_name !== 'Unknown Web Lead' ? lead.full_name : null,
+          email: lead.email,
+          phone: lead.phone,
+        });
+        resubmissions += 1;
+        continue;
+      }
+    }
+
+    const insertResult = await supabase.from('leads').insert([lead]).select('id,full_name').single<{ id: string; full_name: string }>();
+    if (insertResult.error) {
+      errors.push(insertResult.error.message);
+      continue;
+    }
+    inserted += 1;
+    if (lead.email) matchByEmail.set(lead.email, insertResult.data.id);
+    await scheduleIntakeTask(supabase, { leadId: insertResult.data.id, name: insertResult.data.full_name, warm: true });
   }
 
   return NextResponse.json(
     {
-      ok: true,
+      ok: errors.length === 0,
       pulled: normalizedLeads.length,
-      inserted: insertResult.data?.length ?? insertRecords.length,
+      inserted,
+      resubmissions,
       skippedExisting,
       followUpsCreated: followUpRoutine.created,
+      ...(errors.length > 0 ? { errors: errors.slice(0, 5) } : {}),
     },
     { status: 200 },
   );
