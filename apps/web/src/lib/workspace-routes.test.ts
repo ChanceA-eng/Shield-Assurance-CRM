@@ -11,6 +11,9 @@ import { GET as getBriefing } from '../app/api/briefing/route';
 import { GET as getRecent } from '../app/api/recent/route';
 import { GET as getAttention, PATCH as acknowledgeAttention } from '../app/api/leads/attention/route';
 import { GET as getDirectory } from '../app/api/clients/directory/route';
+import { GET as getQuotes } from '../app/api/quote-options/route';
+import { GET as getAccountContext } from '../app/api/clients/[clientId]/context/route';
+import { GET as getInsuredAssets } from '../app/api/policies/insured-assets/route';
 
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
 vi.mock('./api-auth', () => ({ getApiSession: vi.fn(), requireApiSession: vi.fn(), apiActorName: () => 'Test agent' }));
@@ -52,6 +55,150 @@ beforeEach(() => {
 });
 
 describe('Workspace route contracts', () => {
+  it('requires authentication before reading policy insured-asset choices', async () => {
+    vi.mocked(requireApiSession).mockResolvedValue(NextResponse.json({ message: 'Unauthorized' }, { status: 401 }));
+    expect((await getInsuredAssets(request(`/api/policies/insured-assets?account_id=${leadId}`))).status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('limits policy schedule candidates to active assets on the selected account', async () => {
+    respond = (url) => url.pathname.endsWith('/clients')
+      ? json({ id: leadId }) : json([{ id: itemId, title: 'Truck', asset_type: 'vehicle' }]);
+    const response = await getInsuredAssets(request(`/api/policies/insured-assets?account_id=${leadId}`));
+    expect(response.status).toBe(200);
+    const result = calls.find((call) => call.url.pathname.endsWith('/client_assets'))!;
+    expect(result.url.searchParams.get('client_id')).toBe(`eq.${leadId}`);
+    expect(result.url.searchParams.get('archived_at')).toBe('is.null');
+    expect(result.url.searchParams.get('asset_type')).toBe('neq.note');
+  });
+
+  it('paginates account insured-asset choices and rejects invalid pages', async () => {
+    respond = (url) => url.pathname.endsWith('/clients') ? json({ id: leadId }) : json([]);
+    expect((await getInsuredAssets(request(`/api/policies/insured-assets?account_id=${leadId}&page=2`))).status).toBe(200);
+    const assetsCall = calls.find((call) => call.url.pathname.endsWith('/client_assets'))!;
+    expect(assetsCall.url.searchParams.get('offset')).toBe('200');
+    expect(assetsCall.url.searchParams.get('limit')).toBe('100');
+    calls.length = 0;
+    expect((await getInsuredAssets(request(`/api/policies/insured-assets?account_id=${leadId}&page=-1`))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('returns selected policy schedule snapshots with exact policy context', async () => {
+    const scheduleAsset = { id: 'a7fe12d8-a8bc-4f0c-aeab-3c800d246124', asset_id: itemId, snapshot: { title: 'Truck 1' } };
+    respond = (url) => {
+      if (url.pathname.endsWith('/policies') && url.searchParams.get('id') === `eq.${itemId}`) return json({ id: itemId, client_id: leadId });
+      if (url.pathname.endsWith('/policy_insured_assets')) return json([scheduleAsset]);
+      return json([]);
+    };
+    const response = await getAccountContext(request(`/api/clients/${leadId}/context?type=policy&id=${itemId}`), { params: Promise.resolve({ clientId: leadId }) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ record: { insured_asset_schedule: [scheduleAsset] } });
+    expect(calls.find((call) => call.url.pathname.endsWith('/policy_insured_assets'))?.url.searchParams.get('policy_id')).toBe(`eq.${itemId}`);
+  });
+
+  it('loads prior policy term only from the same account', async () => {
+    const priorId = 'c3db2f75-a682-4d14-8c76-693b4f123456';
+    respond = (url) => {
+      if (url.pathname.endsWith('/policy_insured_assets')) return json([]);
+      if (url.pathname.endsWith('/policies') && url.searchParams.get('id') === `eq.${itemId}`) {
+        return json({ id: itemId, client_id: leadId, prior_policy_id: priorId, policy_number: 'NEW-1' });
+      }
+      if (url.pathname.endsWith('/policies')) {
+        return json({ id: priorId, client_id: leadId, policy_number: 'OLD-1', status: 'expired' });
+      }
+      return json({ message: 'Unexpected request' }, 500);
+    };
+    const response = await getAccountContext(request(`/api/clients/${leadId}/context?type=policy&id=${itemId}`), { params: Promise.resolve({ clientId: leadId }) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ record: { related_prior_term: { id: priorId, policy_number: 'OLD-1' } } });
+    const policyCalls = calls.filter((call) => call.url.pathname.endsWith('/policies'));
+    expect(policyCalls).toHaveLength(2);
+    expect(policyCalls[1].url.searchParams.get('client_id')).toBe(`eq.${leadId}`);
+    expect(policyCalls[1].url.searchParams.get('id')).toBe(`eq.${priorId}`);
+  });
+
+  it('does not expose a prior policy from another account', async () => {
+    const otherAccount = 'b87952de-6c8c-4c0d-a5ef-2a7f8054dbad';
+    const priorId = 'c3db2f75-a682-4d14-8c76-693b4f123456';
+    respond = (url) => {
+      if (url.pathname.endsWith('/policy_insured_assets')) return json([]);
+      if (url.pathname.endsWith('/policies') && url.searchParams.get('id') === `eq.${itemId}`) {
+        return json({ id: itemId, client_id: leadId, prior_policy_id: priorId });
+      }
+      return json(null);
+    };
+    const response = await getAccountContext(request(`/api/clients/${leadId}/context?type=policy&id=${itemId}`), { params: Promise.resolve({ clientId: leadId }) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ record: { related_prior_term: null } });
+    const priorCall = calls.find((call) => call.url.pathname.endsWith('/policies') && call.url.searchParams.get('id') === `eq.${priorId}`)!;
+    expect(priorCall.url.searchParams.get('client_id')).toBe(`eq.${leadId}`);
+    expect(priorCall.url.searchParams.get('client_id')).not.toBe(`eq.${otherAccount}`);
+  });
+
+  it('requires authentication before quote history access', async () => {
+    vi.mocked(getApiSession).mockResolvedValue({ user: null, error: NextResponse.json({ message: 'Unauthorized' }, { status: 401 }) });
+    expect((await getQuotes(request(`/api/quote-options?record_type=client&record_id=${leadId}&history_quote_id=${itemId}`))).status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('loads only the selected account quote history using a lossless descending cursor', async () => {
+    respond = (url) => {
+      if (url.pathname.endsWith('/clients')) return json({ id: leadId, full_name: 'Account' });
+      if (url.pathname.endsWith('/quote_options')) return json({ id: itemId });
+      return json([{ id: '9007199254740993', quote_id: itemId, snapshot: { status: 'draft' } }]);
+    };
+    const response = await getQuotes(request(`/api/quote-options?record_type=client&record_id=${leadId}&history_quote_id=${itemId}&before_id=9007199254740994`));
+    expect(response.status).toBe(200);
+    expect((await response.json())[0].id).toBe('9007199254740993');
+    const quote = calls.find((call) => call.url.pathname.endsWith('/quote_options'))!;
+    expect(quote.url.searchParams.get('client_id')).toBe(`eq.${leadId}`);
+    const history = calls.find((call) => call.url.pathname.endsWith('/quote_option_history'))!;
+    expect(history.url.searchParams.get('quote_id')).toBe(`eq.${itemId}`);
+    expect(history.url.searchParams.get('id')).toBe('lt.9007199254740994');
+    expect(history.url.searchParams.get('select')).toContain('id::text');
+    expect(history.url.searchParams.get('order')).toBe('id.desc');
+    expect(history.url.searchParams.get('limit')).toBe('100');
+    expect(calls.every((call) => call.method === 'GET')).toBe(true);
+  });
+
+  it('resolves linked leads to their canonical account for quote history', async () => {
+    respond = (url) => {
+      if (url.pathname.endsWith('/leads')) return json({ id: leadId, full_name: 'Lead', account_id: leadId });
+      if (url.pathname.endsWith('/quote_options')) return json({ id: itemId });
+      return json([]);
+    };
+    expect((await getQuotes(request(`/api/quote-options?record_type=lead&record_id=${leadId}&history_quote_id=${itemId}`))).status).toBe(200);
+    expect(calls.find((call) => call.url.pathname.endsWith('/quote_options'))?.url.searchParams.get('client_id')).toBe(`eq.${leadId}`);
+  });
+
+  it('does not query history for a quote outside the selected account or an unlinked lead', async () => {
+    respond = (url) => url.pathname.endsWith('/leads') || url.pathname.endsWith('/clients')
+      ? json({ id: leadId, full_name: 'Record', account_id: null }) : json(null);
+    for (const type of ['client', 'lead']) {
+      expect((await getQuotes(request(`/api/quote-options?record_type=${type}&record_id=${leadId}&history_quote_id=${itemId}`))).status).toBe(404);
+    }
+    expect(calls.some((call) => call.url.pathname.endsWith('/quote_option_history'))).toBe(false);
+  });
+
+  it('rejects malformed quote history IDs and out-of-range cursors', async () => {
+    respond = () => json({ id: leadId, full_name: 'Account' });
+    for (const query of ['history_quote_id=invalid', ...['0', '-1', '1.5', 'abc', '9223372036854775808'].map((cursor) => `history_quote_id=${itemId}&before_id=${cursor}`)]) {
+      expect((await getQuotes(request(`/api/quote-options?record_type=client&record_id=${leadId}&${query}`))).status).toBe(400);
+    }
+    expect(calls.some((call) => call.url.pathname.endsWith('/quote_option_history'))).toBe(false);
+  });
+
+  it('reports history query failure rather than an empty successful history', async () => {
+    respond = (url) => {
+      if (url.pathname.endsWith('/clients')) return json({ id: leadId, full_name: 'Account' });
+      if (url.pathname.endsWith('/quote_options')) return json({ id: itemId });
+      return json({ message: 'History temporarily unavailable' }, 500);
+    };
+    const response = await getQuotes(request(`/api/quote-options?record_type=client&record_id=${leadId}&history_quote_id=${itemId}`));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ message: 'History temporarily unavailable' });
+  });
+
   it('requires authentication before directory access', async () => {
     vi.mocked(requireApiSession).mockResolvedValue(NextResponse.json({ message: 'Unauthorized' }, { status: 401 }));
     expect((await getDirectory(request('/api/clients/directory'))).status).toBe(401);

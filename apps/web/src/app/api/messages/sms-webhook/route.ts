@@ -1,7 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
-import { alertInboundMessage, resolveInboundSender, twilioSignature } from '../../../../lib/message-alerts';
+import { alertInboundMessage, inboundEventKey, ingestInboundMessage, resolveInboundSender, twilioSignature } from '../../../../lib/message-alerts';
+import { handleInboundReply } from '../../../../lib/outreach-engine';
 
 export const runtime = 'nodejs';
 
@@ -53,31 +54,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const from = (params.From ?? '').trim();
   const body = (params.Body ?? '').trim() || '(empty text message)';
-  if (!from) return twiml();
+  if (!from || !params.MessageSid?.trim()) {
+    return NextResponse.json({ message: 'Twilio From and MessageSid are required.' }, { status: 400 });
+  }
 
-  const sender = await resolveInboundSender(supabase, { phone: from });
-
-  const { error } = await supabase.from('communication_log').insert([
-    {
-      client_id: sender.clientId,
-      channel: 'sms',
-      direction: 'inbound',
-      subject: 'Text message',
-      body,
-      automation_type: 'inbound_sms',
-      sent_at: new Date().toISOString(),
-      metadata: { from, to: params.To ?? null, message_sid: params.MessageSid ?? null, lead_id: sender.leadId },
-    },
-  ]);
-  if (error) {
-    console.error('[sms-webhook] failed to log inbound text', error.message);
+  try {
+    const sender = await resolveInboundSender(supabase, { phone: from });
+    const data = await ingestInboundMessage(supabase, {
+      eventKey: inboundEventKey('sms', params.MessageSid, null), sender, channel: 'sms',
+      from, to: params.To ?? null, subject: 'Text message', body,
+      sentAt: new Date().toISOString(), providerId: params.MessageSid,
+    });
+    await handleInboundReply(supabase, { clientId: sender.clientId, fromPhone: from, body, logId: data.id });
+    await alertInboundMessage(supabase, { logId: data.id, sender, channel: 'sms', fromAddress: from, subject: null, body });
+    return twiml();
+  } catch (error) {
+    console.error('[sms-webhook] inbound processing failed', error instanceof Error ? error.message : error);
     return twiml(500);
   }
-
-  if (sender.clientId) {
-    await supabase.from('clients').update({ last_activity_at: new Date().toISOString() }).eq('id', sender.clientId);
-  }
-
-  await alertInboundMessage(supabase, { sender, channel: 'sms', fromAddress: from, subject: null, body });
-  return twiml();
 }

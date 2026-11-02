@@ -8,6 +8,9 @@ import NewLeadModal from './NewLeadModal';
 import PipelineBoard from './PipelineBoard';
 import LeadWorkspace from './LeadWorkspace';
 import { LEAD_STATUS_LABELS, type LeadStatus, type LostReason } from '../../lib/lead-pipeline';
+import TaskSnooze from '../../components/crm/TaskSnooze';
+import { arizonaInputToIso, endOfArizonaDay, formatArizonaDateTime } from '../../lib/arizona-time';
+import { workspaceFetch, workspacePages } from '../../lib/workspace-fetch';
 
 interface Lead {
   id: string;
@@ -80,6 +83,7 @@ interface LeadTaskRow {
   due_date: string | null;
   status: string;
   related_id: string | null;
+  updated_at?: string;
 }
 
 export default function LeadsPage(): JSX.Element {
@@ -146,19 +150,16 @@ function LeadsPageInner(): JSX.Element {
 
   const fetchLeadTasks = async (): Promise<void> => {
     try {
-      const [tasksRes, unreadRes, statsRes] = await Promise.all([
-        fetch('/api/tasks?status=open&related_type=lead&sort=due_asc&limit=200', { cache: 'no-store' }),
-        fetch('/api/communication-log/unread-by-lead', { cache: 'no-store' }),
-        fetch('/api/leads/stats', { cache: 'no-store' }),
+      const [taskRows, unread, counts] = await Promise.all([
+        workspacePages<LeadTaskRow>('/api/tasks?status=open&related_type=lead&sort=due_asc&limit=200', 200, 'offset'),
+        workspaceFetch<Record<string, number>>('/api/communication-log/unread-by-lead'),
+        workspaceFetch<{ active: number; won: number; lost: number; inactive: number }>('/api/leads/stats'),
       ]);
-      setLeadTasks(tasksRes.ok ? ((await tasksRes.json()) as LeadTaskRow[]) : []);
-      setUnreadByLead(unreadRes.ok ? ((await unreadRes.json()) as Record<string, number>) : {});
-      if (statsRes.ok) {
-        setStats((await statsRes.json()) as { active: number; won: number; lost: number; inactive: number });
-      }
-    } catch {
-      setLeadTasks([]);
-      setUnreadByLead({});
+      setLeadTasks(taskRows);
+      setUnreadByLead(unread);
+      setStats(counts);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to refresh lead work. Last loaded work is retained.');
     }
   };
 
@@ -179,8 +180,7 @@ function LeadsPageInner(): JSX.Element {
   // Work queue: open lead tasks due today or overdue, worst first.
   // Scoped to currently-loaded active leads so stale or foreign tasks never clutter the queue.
   const queueTasks = useMemo(() => {
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
+    const endOfToday = endOfArizonaDay(new Date());
     return leadTasks
       .filter(
         (task) =>
@@ -293,7 +293,8 @@ function LeadsPageInner(): JSX.Element {
 
   const bulkScheduleFollowUp = async (): Promise<void> => {
     if (!bulkFollowUpAt) return;
-    const dueIso = new Date(bulkFollowUpAt).toISOString();
+    const dueIso = arizonaInputToIso(bulkFollowUpAt);
+    if (!dueIso) { setError('Choose a valid Arizona date and time.'); return; }
     await runBulk((leadId) => {
       const lead = leadById.get(leadId);
       return fetch('/api/tasks', {
@@ -311,13 +312,13 @@ function LeadsPageInner(): JSX.Element {
   };
 
   const completeQueueTask = async (task: LeadTaskRow, advance: boolean): Promise<void> => {
-    const res = await fetch('/api/tasks', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: task.id, status: 'completed' }),
-    });
-    if (!res.ok) {
-      setError('Failed to complete task.');
+    try {
+      await workspaceFetch('/api/tasks', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: task.id, status: 'completed', expected_updated_at: task.updated_at }),
+      });
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to complete task.');
       return;
     }
     await fetchLeadTasks();
@@ -328,28 +329,18 @@ function LeadsPageInner(): JSX.Element {
     }
   };
 
-  const snoozeQueueTask = async (task: LeadTaskRow, option: 'later' | 'tomorrow' | 'nextweek'): Promise<void> => {
-    const due = new Date();
-    if (option === 'later') {
-      due.setHours(due.getHours() + 4);
-    } else if (option === 'tomorrow') {
-      due.setDate(due.getDate() + 1);
-      due.setHours(9, 0, 0, 0);
-    } else {
-      due.setDate(due.getDate() + 7);
-      due.setHours(9, 0, 0, 0);
+  const snoozeQueueTask = async (task: LeadTaskRow, iso: string): Promise<boolean> => {
+    try {
+      await workspaceFetch('/api/tasks', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: task.id, due_date: iso, expected_updated_at: task.updated_at }),
+      });
+      await fetchLeadTasks();
+      return true;
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to snooze task.');
+      return false;
     }
-
-    const res = await fetch('/api/tasks', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: task.id, due_date: due.toISOString() }),
-    });
-    if (!res.ok) {
-      setError('Failed to snooze task.');
-      return;
-    }
-    await fetchLeadTasks();
   };
 
   const fetchLeads = async (showLoader = true): Promise<void> => {
@@ -413,11 +404,13 @@ function LeadsPageInner(): JSX.Element {
   };
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const view = params.get('view');
+    const view = searchParams.get('view');
     if (view === 'queue' || view === 'board' || view === 'list') {
       setViewMode(view);
-    }
+    } else setViewMode('board');
+  }, [searchParams]);
+
+  useEffect(() => {
 
     void (async () => {
       await Promise.all([fetchLeads(true), fetchLeadTasks()]);
@@ -687,7 +680,7 @@ function LeadsPageInner(): JSX.Element {
         </div>
       ) : null}
 
-      {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <div role="alert" className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
 
       {loading ? <div className="text-sm text-[#73818f]">Loading leads...</div> : null}
 
@@ -708,7 +701,7 @@ function LeadsPageInner(): JSX.Element {
                 const due = task.due_date ? new Date(task.due_date) : null;
                 const overdue = due ? due.getTime() < Date.now() : false;
                 return (
-                  <li key={task.id} className="flex items-center gap-3 px-4 py-3">
+                  <li key={task.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                     <span
                       className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
                         overdue ? 'bg-[#f86c6b] text-white' : 'bg-[#ffc107]/25 text-amber-800'
@@ -728,22 +721,9 @@ function LeadsPageInner(): JSX.Element {
                       <p className="truncate text-xs text-[#73818f]">{task.subject}</p>
                     </button>
                     <span className="shrink-0 text-xs text-[#73818f]">
-                      {due ? due.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '--'}
+                      {task.due_date ? `${formatArizonaDateTime(task.due_date)} AZ` : '--'}
                     </span>
-                    <select
-                      defaultValue=""
-                      onChange={(event) => {
-                        const option = event.target.value as 'later' | 'tomorrow' | 'nextweek' | '';
-                        event.target.value = '';
-                        if (option) void snoozeQueueTask(task, option);
-                      }}
-                      className="shrink-0 rounded border border-[#c8ced3] px-2 py-1 text-xs text-[#5c6873]"
-                    >
-                      <option value="" disabled>Snooze…</option>
-                      <option value="later">Later today</option>
-                      <option value="tomorrow">Tomorrow 9 AM</option>
-                      <option value="nextweek">Next week</option>
-                    </select>
+                    <TaskSnooze subject={task.subject} onSave={(iso) => snoozeQueueTask(task, iso)} />
                     <button
                       type="button"
                       onClick={() => void completeQueueTask(task, true)}

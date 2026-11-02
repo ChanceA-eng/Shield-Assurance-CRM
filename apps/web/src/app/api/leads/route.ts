@@ -124,6 +124,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       : 'id,full_name,industry,category,phone,email,address,source,line_of_business,status,created_at,website,est_employees,est_revenue,estimated_premium,stage_changed_at,lost_reason,last_viewed_at,last_activity_at';
 
   let query = supabase.from('leads').select(columns).order('created_at', { ascending: false }).limit(limit);
+  const search = searchParams.get('q')?.trim();
+  if (search) query = query.ilike('full_name', `%${search.replace(/[\\%_]/g, '\\$&')}%`);
   if (status === 'open') {
     query = query.in('status', [...ACTIVE_LEAD_STATUSES]);
   } else if (status && ['won', 'lost', 'inactive'].includes(status)) {

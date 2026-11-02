@@ -60,22 +60,10 @@ export const navigationCategories: NavCategory[] = [
         title: 'Policies',
         items: [
           { label: 'All Policies', href: '/policies' },
-          { label: 'Policy Transactions', href: '/policies/transactions' },
-          { label: 'Policy Rewrites', href: '/policies/rewrites' },
           { label: 'Renewals', href: '/renewals' },
           { label: 'Claims', href: '/claims' },
           { label: 'Endorsements', href: '/endorsements' },
           { label: 'Certificates', href: '/certificates' },
-          { label: 'ACORD Library', href: '/policies/acord' },
-        ],
-      },
-      {
-        title: 'Commissions',
-        items: [
-          { label: 'Statements', href: '/commissions/statements' },
-          { label: 'Service Team Rules', href: '/commissions/rules' },
-          { label: 'Manage Service Team', href: '/commissions/team' },
-          { label: 'Commission Reports', href: '/commissions/reports' },
         ],
       },
     ],
@@ -90,23 +78,7 @@ export const navigationCategories: NavCategory[] = [
         items: [
           { label: 'Inbox', href: '/communication' },
           { label: 'Outreach Sequences', href: '/outreach' },
-          { label: 'Scheduler', href: '/scheduler' },
-          { label: 'Events', href: '/events' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'accounting',
-    label: 'Accounting',
-    icon: 'DollarSign',
-    sections: [
-      {
-        title: 'Financial Management',
-        items: [
-          { label: 'Billing', href: '/billing' },
-          { label: 'Accounting Center', href: '/accounting' },
-          { label: 'Financial Reports', href: '/reports' },
+          { label: 'Calendar & Events', href: '/scheduler' },
         ],
       },
     ],
@@ -120,44 +92,48 @@ export const navigationCategories: NavCategory[] = [
         title: 'Reports',
         items: [
           { label: 'All Reports', href: '/reports' },
-          { label: 'Favorite Reports', href: '/reports/favorites' },
-          { label: 'Scheduled Reports', href: '/reports/scheduled' },
-          { label: 'Shared Reports', href: '/reports/shared' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'knowledge',
+    label: 'Knowledge & Training',
+    icon: 'BookOpen',
+    sections: [
+      {
+        title: 'Resources',
+        items: [
+          { label: 'Knowledge Center', href: '/rashi' },
+          { label: 'Training', href: '/learning' },
         ],
       },
     ],
   },
   {
     id: 'settings',
-    label: 'Settings',
+    label: 'Release & Setup',
     icon: 'Settings',
-    sections: [
-      {
-        title: 'Configuration',
-        items: [
-          { label: 'Agency Settings', href: '/settings' },
-          { label: 'Manage Carriers', href: '/carriers' },
-          { label: 'Security and Access', href: '/security' },
-          { label: 'Integrations', href: '/marketplace' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'support',
-    label: 'Support',
-    icon: 'BookOpen',
-    sections: [
-      {
-        title: 'Help and Resources',
-        items: [
-          { label: 'Solution Center', href: '/support' },
-          { label: 'Training', href: '/learning' },
-        ],
-      },
-    ],
+    href: '/settings',
   },
 ];
+
+export function isNavigationActive(href: string, pathname: string, search: string): boolean {
+  const target = new URL(href, 'https://crm.local');
+  if (pathname !== target.pathname && !pathname.startsWith(`${target.pathname}/`)) return false;
+  const current = new URLSearchParams(search);
+  if (target.searchParams.has('view')) return current.get('view') === target.searchParams.get('view');
+  if (target.pathname === '/leads' && pathname === '/leads') return current.get('view') !== 'queue';
+  return true;
+}
+
+export function activeNavigationHref(pathname: string, search: string): string | undefined {
+  const hrefs = navigationCategories.flatMap((category) => category.sections
+    ? category.sections.flatMap((section) => section.items.map((item) => item.href))
+    : category.href ? [category.href] : []);
+  return hrefs.filter((href) => isNavigationActive(href, pathname, search))
+    .sort((a, b) => b.length - a.length)[0];
+}
 
 /**
  * Navigation Helper: Get category by ID

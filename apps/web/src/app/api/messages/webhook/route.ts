@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { handleInboundReply } from '../../../../lib/outreach-engine';
-import { alertInboundMessage, resolveInboundSender } from '../../../../lib/message-alerts';
+import { alertInboundMessage, inboundEventKey, ingestInboundMessage, resolveInboundSender } from '../../../../lib/message-alerts';
 
 /**
  * Inbound email webhook. This is the reply sensor for the outreach engine.
@@ -28,6 +28,7 @@ interface InboundPayload {
   date?: string;
   'message-id'?: string;
   MessageID?: string;
+  headers?: string;
 }
 
 function normalize(value?: string | null): string {
@@ -117,59 +118,48 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'Inbound payload is missing a valid from email.' }, { status: 400 });
   }
 
-  const sender = await resolveInboundSender(supabase, { email: parsed.from });
+  try {
+    const sender = await resolveInboundSender(supabase, { email: parsed.from });
+    const providerId = normalize(payload['message-id']) || normalize(payload.MessageID) ||
+      normalize(payload.headers?.match(/^message-id:\s*(.+)$/im)?.[1]);
+    const eventKey = inboundEventKey('email', providerId, {
+      from: parsed.from, to: parsed.to, subject: parsed.subject, body: parsed.body,
+      date: normalize(payload.date ?? payload.Date), headers: normalize(payload.headers),
+    });
+    const data = await ingestInboundMessage(supabase, {
+      eventKey, sender, channel: 'email', from: parsed.from, to: parsed.to,
+      subject: parsed.subject, body: parsed.body, sentAt: parsed.sentAt, providerId,
+    });
 
-  const { data, error } = await supabase
-    .from('communication_log')
-    .insert([
+    await handleInboundReply(supabase, {
+      clientId: sender.clientId,
+      fromEmail: parsed.from,
+      body: parsed.body,
+      logId: data.id,
+    });
+
+    const alert = await alertInboundMessage(supabase, {
+      logId: data.id,
+      sender,
+      channel: 'email',
+      fromAddress: parsed.from,
+      subject: parsed.subject,
+      body: parsed.body,
+    });
+
+    return NextResponse.json(
       {
-        client_id: sender.clientId,
-        channel: 'email',
-        direction: 'inbound',
-        subject: parsed.subject,
-        body: parsed.body,
-        automation_type: 'inbound_webhook',
-        sent_at: parsed.sentAt,
-        metadata: { from: parsed.from, to: parsed.to, lead_id: sender.leadId },
+        ok: true,
+        matchedClient: Boolean(sender.clientId),
+        matchedLead: Boolean(sender.leadId),
+        taskCreated: alert.taskCreated,
+        from: parsed.from,
+        to: parsed.to,
+        communication: data,
       },
-    ])
-    .select('id,client_id,channel,direction,subject,sent_at')
-    .single();
-
-  if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+      { status: 200 },
+    );
+  } catch (error) {
+    return NextResponse.json({ message: error instanceof Error ? error.message : 'Inbound email processing failed.' }, { status: 500 });
   }
-
-  if (sender.clientId) {
-    await supabase.from('clients').update({ last_activity_at: new Date().toISOString() }).eq('id', sender.clientId);
-  }
-
-  // Reply sensor: stop active sequences (that path raises its own call task).
-  const reply = await handleInboundReply(supabase, {
-    clientId: sender.clientId,
-    fromEmail: parsed.from,
-    body: parsed.body,
-  });
-
-  const alert = await alertInboundMessage(supabase, {
-    sender,
-    channel: 'email',
-    fromAddress: parsed.from,
-    subject: parsed.subject,
-    body: parsed.body,
-    skipTask: reply.sequenceLeadIds.length > 0,
-  });
-
-  return NextResponse.json(
-    {
-      ok: true,
-      matchedClient: Boolean(sender.clientId),
-      matchedLead: Boolean(sender.leadId),
-      taskCreated: alert.taskCreated,
-      from: parsed.from,
-      to: parsed.to,
-      communication: data,
-    },
-    { status: 200 },
-  );
 }

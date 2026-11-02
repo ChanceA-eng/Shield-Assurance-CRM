@@ -40,6 +40,8 @@ const checks = [
   supabase.from('client_activities').select('id,client_id,activity_type,title,body,metadata,occurred_at,created_at', { head: true }),
   supabase.from('campaigns').select('id,name,status,account_id,list_name,scheduled_at,sent_at', { head: true }),
   supabase.from('campaign_sends').select('id,campaign_id,account_id,email,status,sent_at,error_message', { head: true }),
+  supabase.from('outreach_settings').select('id,sender_profile', { head: true }),
+  supabase.from('outreach_marketing_profiles').select('id,lead_id,client_id,profile,updated_at', { head: true }),
   supabase.from('workflow_rules').select('id,trigger_type,action_type,template_id,content,offset_days,active', { head: true }),
   supabase.from('events').select('id,title,description,event_time,all_day,status,related_type,related_id,task_id', { head: true }),
   supabase.rpc('get_actionable_leads_count'),

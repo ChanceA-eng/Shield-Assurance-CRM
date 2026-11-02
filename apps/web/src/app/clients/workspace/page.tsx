@@ -1,67 +1,9 @@
-'use client';
+import { redirect } from 'next/navigation';
+import type { Route } from 'next';
 
-import { Suspense, useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import SectionLayout from '../../../components/crm/SectionLayout';
-
-interface WorkspaceResolution {
-  leadId: string;
-  clientId: string;
-}
-
-function LeadWorkspaceResolverContent(): JSX.Element {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const leadId = searchParams.get('lead');
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!leadId) {
-      setError('Missing lead id. Open this page from the Leads queue.');
-      return;
-    }
-
-    void (async () => {
-      await fetch(`/api/leads/${leadId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Prospect' }),
-      }).catch(() => null);
-
-      const response = await fetch(`/api/leads/${leadId}/workspace`, { cache: 'no-store' });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({ message: 'Unable to open workspace.' }))) as { message?: string };
-        setError(payload.message ?? 'Unable to open workspace.');
-        return;
-      }
-
-      const data = (await response.json()) as WorkspaceResolution;
-      router.replace(`/clients/${data.clientId}?lead=${data.leadId}`);
-    })();
-  }, [leadId, router]);
-
-  return (
-    <SectionLayout title="Client">
-      <div className="rounded border border-[#c8ced3] bg-white p-4 shadow-sm">
-        {!error ? <p className="text-sm text-[#5c6873]">Opening client workspace...</p> : null}
-        {error ? <p className="text-sm text-rose-700">{error}</p> : null}
-      </div>
-    </SectionLayout>
-  );
-}
-
-export default function LeadWorkspaceResolverPage(): JSX.Element {
-  return (
-    <Suspense
-      fallback={
-        <SectionLayout title="Client">
-          <div className="rounded border border-[#c8ced3] bg-white p-4 shadow-sm">
-            <p className="text-sm text-[#5c6873]">Opening client workspace...</p>
-          </div>
-        </SectionLayout>
-      }
-    >
-      <LeadWorkspaceResolverContent />
-    </Suspense>
-  );
+export default async function LegacyWorkspacePage({
+  searchParams,
+}: { searchParams: Promise<{ lead?: string }> }): Promise<never> {
+  const { lead } = await searchParams;
+  redirect((lead ? `/leads?lead=${encodeURIComponent(lead)}` : '/clients') as Route);
 }

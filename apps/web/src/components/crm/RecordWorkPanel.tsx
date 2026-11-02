@@ -7,6 +7,8 @@ import { arizonaDateTimeInput, arizonaInputToIso, formatArizonaDateTime } from '
 import { workspaceFetch, workspacePages } from '../../lib/workspace-fetch';
 import { useNotifications } from '../../context/NotificationContext';
 import RecordHistory from './RecordHistory';
+import TaskSnooze from './TaskSnooze';
+import MarketingProfilePanel from './MarketingProfilePanel';
 
 interface Props {
   target: RecordTarget;
@@ -149,6 +151,20 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
     finally { setBusy(false); }
   };
 
+  const snoozeTask = async (task: WorkspaceTask, iso: string): Promise<boolean> => {
+    setBusy(true); setNotice(null); setError(null);
+    try {
+      await workspaceFetch('/api/tasks', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: task.id, due_date: iso, expected_updated_at: task.updated_at }) });
+      await afterSave();
+      setNotice('Task snoozed.');
+      return true;
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to snooze this task.');
+      return false;
+    } finally { setBusy(false); }
+  };
+
   const visibleTasks = tasks.filter((task) => view === 'open' ? task.status === 'open' : task.status === 'completed')
     .sort((left, right) => view === 'completed'
       ? new Date(right.completed_at ?? right.created_at).getTime() - new Date(left.completed_at ?? left.created_at).getTime()
@@ -156,6 +172,7 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
 
   return (
     <div className="space-y-3">
+      {section === 'notes' ? <MarketingProfilePanel key={`${target.type}:${target.id}`} target={target} /> : null}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div><h3 className="text-sm font-bold text-cui-text">{section === 'notes' ? 'Notes & history' : 'Tasks & reminders'}</h3>
           <p className="text-xs text-cui-muted">For {name}. Saved work stays attached when the lead is linked to a client account.</p></div>
@@ -260,6 +277,7 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
                   setPriority(task.priority); setDescription(task.description ?? ''); setMode('reminder'); setAlsoRemind(false);
                 }} className="shrink-0 text-xs font-semibold text-cui-primary disabled:opacity-50">{view === 'completed' ? 'Reopen' : 'Edit / reschedule'}</button>
               </div>
+              {view === 'open' ? <div className="mt-3 flex flex-wrap justify-end gap-2"><TaskSnooze subject={task.subject} disabled={busy} onSave={(iso) => snoozeTask(task, iso)} /></div> : null}
             </article>
           ))}
         </>

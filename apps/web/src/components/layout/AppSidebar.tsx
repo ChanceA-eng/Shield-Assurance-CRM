@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import type { Route } from 'next';
-import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
 import {
   BarChart3,
   BookOpen,
@@ -17,7 +17,7 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react';
-import { navigationCategories, type NavCategory } from '../../config/navigation';
+import { navigationCategories, activeNavigationHref, type NavCategory } from '../../config/navigation';
 import { useNav } from '../../context/NavContext';
 import { useNotifications } from '../../context/NotificationContext';
 
@@ -34,10 +34,10 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   CheckSquare,
 };
 
-function categoryContainsPath(category: NavCategory, pathname: string): boolean {
-  if (!category.sections) return category.href === pathname || Boolean(category.href && pathname.startsWith(`${category.href}/`));
+function categoryContainsPath(category: NavCategory, activeHref: string | undefined): boolean {
+  if (!category.sections) return category.href === activeHref;
   return category.sections.some((section) =>
-    section.items.some((item) => item.href !== '/' && pathname.startsWith(item.href)),
+    section.items.some((item) => item.href === activeHref),
   );
 }
 
@@ -52,19 +52,21 @@ function CountBadge({ count, label }: { count: number; label: string }): JSX.Ele
   );
 }
 
-export default function AppSidebar(): JSX.Element {
+function SidebarNavigation(): JSX.Element {
   const pathname = usePathname();
+  const search = useSearchParams().toString();
+  const activeHref = activeNavigationHref(pathname, search);
   const { isNavOpen, closeNav } = useNav();
   const { dueTodayCount, unreadMessages } = useNotifications();
   const messageCount = unreadMessages.total;
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
-    const active = navigationCategories.find((cat) => categoryContainsPath(cat, pathname));
+    const active = navigationCategories.find((cat) => categoryContainsPath(cat, activeHref));
     return new Set(active ? [active.id] : []);
   });
 
   // Auto-open the group for the current route on navigation
   useEffect(() => {
-    const active = navigationCategories.find((cat) => categoryContainsPath(cat, pathname));
+    const active = navigationCategories.find((cat) => categoryContainsPath(cat, activeHref));
     if (active) {
       setOpenGroups((current) => {
         if (current.has(active.id)) return current;
@@ -73,7 +75,11 @@ export default function AppSidebar(): JSX.Element {
         return next;
       });
     }
-  }, [pathname]);
+  }, [activeHref]);
+
+  const closeMobileNav = (): void => {
+    if (window.matchMedia('(max-width: 767px)').matches) closeNav();
+  };
 
   const toggleGroup = (id: string): void => {
     setOpenGroups((current) => {
@@ -88,9 +94,10 @@ export default function AppSidebar(): JSX.Element {
   };
 
   const sidebarBody = (
-    <nav className="flex-1 overflow-y-auto py-2">
+    <nav aria-label="Main navigation" className="flex-1 overflow-y-auto py-2">
       <Link
         href="/"
+        aria-current={pathname === '/' ? 'page' : undefined}
         className={`flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
           pathname === '/'
             ? 'border-l-4 border-cui-primary bg-cui-sidebar-item pl-3 font-semibold text-white'
@@ -106,15 +113,17 @@ export default function AppSidebar(): JSX.Element {
       {navigationCategories.map((category) => {
         const Icon = iconMap[category.icon] ?? LayoutGrid;
         const isOpen = openGroups.has(category.id);
-        const isActiveGroup = categoryContainsPath(category, pathname);
+        const isActiveGroup = categoryContainsPath(category, activeHref);
 
         // Section-less categories render as direct links
         if (!category.sections && category.href) {
-          const isActive = pathname.startsWith(category.href);
+          const isActive = activeHref === category.href;
           return (
             <Link
               key={category.id}
               href={category.href as Route}
+              aria-current={isActive ? 'page' : undefined}
+              onClick={closeMobileNav}
               className={`flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
                 isActive
                   ? 'border-l-4 border-cui-primary bg-cui-sidebar-item pl-3 font-semibold text-white'
@@ -133,6 +142,7 @@ export default function AppSidebar(): JSX.Element {
             <button
               type="button"
               onClick={() => toggleGroup(category.id)}
+              aria-expanded={isOpen}
               className={`flex w-full items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
                 isActiveGroup && !isOpen
                   ? 'bg-cui-sidebar-item text-white'
@@ -155,11 +165,13 @@ export default function AppSidebar(): JSX.Element {
                       </p>
                     ) : null}
                     {section.items.map((item) => {
-                      const isActive = item.href !== '/' && pathname.startsWith(item.href);
+                      const isActive = item.href === activeHref;
                       return (
                         <Link
                           key={`${item.href}-${item.label}`}
                           href={item.href as Route}
+                          aria-current={isActive ? 'page' : undefined}
+                          onClick={closeMobileNav}
                           className={`flex items-center py-2 pl-11 pr-4 text-[13px] transition-colors ${
                             isActive
                               ? 'border-l-4 border-cui-primary bg-cui-sidebar-item pl-10 font-semibold text-white'
@@ -205,4 +217,8 @@ export default function AppSidebar(): JSX.Element {
       ) : null}
     </>
   );
+}
+
+export default function AppSidebar(): JSX.Element {
+  return <Suspense fallback={<aside className="hidden w-56 shrink-0 bg-cui-sidebar md:block" />}><SidebarNavigation /></Suspense>;
 }

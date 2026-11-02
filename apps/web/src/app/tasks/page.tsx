@@ -4,10 +4,12 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Circle, Clock, Flag, Plus, User } from 'lucide-react';
 import SectionLayout from '../../components/crm/SectionLayout';
 import LeadWorkspace, { type WorkspaceLead } from '../leads/LeadWorkspace';
-import { arizonaDateTimeInput, arizonaInputToIso, endOfArizonaDay, formatArizonaDateTime, startOfArizonaDay } from '../../lib/arizona-time';
+import { arizonaInputToIso, endOfArizonaDay, formatArizonaDateTime, startOfArizonaDay } from '../../lib/arizona-time';
 import { workspaceFetch, workspacePages } from '../../lib/workspace-fetch';
-import { customSnoozeIso, defaultSnoozeInput, snoozePresetIso, type SnoozePreset } from '../../lib/task-snooze';
+import TaskSnooze from '../../components/crm/TaskSnooze';
 import { useNotifications } from '../../context/NotificationContext';
+import { taskRecordHref } from '../../lib/task-links';
+import RecordPicker from '../../components/crm/RecordPicker';
 
 interface Task {
   id: string;
@@ -20,10 +22,15 @@ interface Task {
   related_id?: string | null;
   related_name?: string | null;
   related_status?: string | null;
+  related_href?: string | null;
+  account_id?: string | null;
   created_at: string;
   completed_at?: string | null;
   kind?: string;
   updated_at?: string;
+  assignee?: string | null;
+  action_href?: string | null;
+  action_category?: string | null;
 }
 
 type Scope = 'all' | 'lead' | 'client' | 'none';
@@ -81,12 +88,17 @@ export default function TasksPage(): JSX.Element {
   const [completed, setCompleted] = useState<Task[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [drawerLead, setDrawerLead] = useState<WorkspaceLead | null>(null);
+  const [assignment, setAssignment] = useState<{ id: string; name: string } | null>(null);
 
   // Quick add
   const [quickSubject, setQuickSubject] = useState('');
   const [quickDue, setQuickDue] = useState('');
   const [quickPriority, setQuickPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [isAdding, setIsAdding] = useState(false);
+  const [quickRecordType, setQuickRecordType] = useState<'' | 'lead' | 'client'>('');
+  const [quickRecordId, setQuickRecordId] = useState('');
+  const [quickAssignee, setQuickAssignee] = useState('');
+  const [quickId, setQuickId] = useState<string | null>(null);
 
   const fetchTasks = useCallback(async (): Promise<void> => {
     try {
@@ -113,15 +125,17 @@ export default function TasksPage(): JSX.Element {
   const scoped = useMemo(() => {
     if (scope === 'all') return tasks;
     if (scope === 'none') return tasks.filter((task) => !task.related_type);
+    if (scope === 'client') return tasks.filter((task) => task.related_type === 'client' || Boolean(task.account_id));
     return tasks.filter((task) => task.related_type === scope);
   }, [tasks, scope]);
 
   const buckets = useMemo(() => bucketize(scoped), [scoped]);
 
-  const updateTask = async (taskId: string, patch: Record<string, unknown>): Promise<void> => {
+  const updateTask = async (taskId: string, patch: Record<string, unknown>): Promise<boolean> => {
     const task = [...tasks, ...completed].find((row) => row.id === taskId);
-    if (!task) { setError('This task is no longer on the current list. Refresh before retrying.'); return; }
+    if (!task) { setError('This task is no longer on the current list. Refresh before retrying.'); return false; }
     setBusyId(taskId);
+    setError(null);
     try {
       await workspaceFetch('/api/tasks', {
         method: 'PATCH',
@@ -130,33 +144,20 @@ export default function TasksPage(): JSX.Element {
       });
       await fetchTasks();
       await refresh();
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Unable to update this task.');
+      return false;
     } finally {
       setBusyId(null);
     }
   };
 
-  const [snoozeEditor, setSnoozeEditor] = useState<{ taskId: string; value: string; error: string | null } | null>(null);
-
-  const snooze = (task: Task, option: SnoozePreset): void => {
-    void updateTask(task.id, { due_date: snoozePresetIso(option) });
-  };
-
-  const saveCustomSnooze = async (task: Task): Promise<void> => {
-    if (!snoozeEditor || snoozeEditor.taskId !== task.id) return;
-    const result = customSnoozeIso(snoozeEditor.value);
-    if ('error' in result) {
-      setSnoozeEditor({ ...snoozeEditor, error: result.error });
-      return;
-    }
-    await updateTask(task.id, { due_date: result.iso });
-    setSnoozeEditor(null);
-  };
-
   const quickAdd = async (): Promise<void> => {
+    if (isAdding) return;
     const subject = quickSubject.trim();
     if (!subject) { setError('Enter a task action.'); return; }
+    if (quickRecordType && !quickRecordId) { setError('Choose the related lead or account.'); return; }
     setIsAdding(true);
     try {
       let dueIso: string;
@@ -168,18 +169,18 @@ export default function TasksPage(): JSX.Element {
         const tomorrow = new Date(startOfArizonaDay(new Date()).getTime() + 86400000 + 16 * 3600000);
         dueIso = tomorrow.toISOString();
       }
-      const res = await fetch('/api/tasks', {
+      const id = quickId ?? crypto.randomUUID();
+      setQuickId(id);
+      await workspaceFetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject, due_date: dueIso, priority: quickPriority }),
+        body: JSON.stringify({ id, subject, due_date: dueIso, priority: quickPriority, assignee: quickAssignee.trim() || null, related_type: quickRecordType || null, related_id: quickRecordId || null }),
       });
-      if (!res.ok) {
-        setError('Failed to add task.');
-        return;
-      }
+      setQuickId(null);
       setQuickSubject('');
       setQuickDue('');
       setQuickPriority('medium');
+      setQuickRecordType(''); setQuickRecordId(''); setQuickAssignee('');
       await fetchTasks();
       await refresh();
     } catch (failure) {
@@ -190,6 +191,10 @@ export default function TasksPage(): JSX.Element {
   };
 
   const openRecord = async (task: Task): Promise<void> => {
+    if (task.action_href) {
+      const href = taskRecordHref(task);
+      if (href) { window.location.assign(href); return; }
+    }
     if (task.related_type === 'lead' && task.related_id) {
       try {
         const res = await fetch(`/api/leads/${encodeURIComponent(task.related_id)}`, { cache: 'no-store' });
@@ -203,9 +208,9 @@ export default function TasksPage(): JSX.Element {
       }
       setError('The linked lead could not be opened. Refresh before trying again.');
     }
-    if (task.related_type === 'client' && task.related_id) {
-      window.location.assign(`/clients/${task.related_id}`);
-    }
+    const href = task.related_href ?? taskRecordHref(task);
+    if (href && task.related_type !== 'lead') window.location.assign(href);
+    else if (task.related_type !== 'lead') setError('This task has no available linked record. Open its profile or repair the relationship before retrying.');
   };
 
   const openCount = scoped.length;
@@ -215,8 +220,9 @@ export default function TasksPage(): JSX.Element {
       {/* Quick add */}
       <div className="mb-4 flex flex-wrap items-end gap-2 rounded border border-cui-border/60 bg-white p-3 shadow-card">
         <div className="min-w-56 flex-1">
-          <label className="mb-1 block text-xs font-semibold text-cui-muted">General task (use a profile to create linked work)</label>
+          <label className="mb-1 block text-xs font-semibold text-cui-muted">Task action</label>
           <input
+            aria-label="Task action"
             type="text"
             value={quickSubject}
             onChange={(event) => setQuickSubject(event.target.value)}
@@ -227,6 +233,9 @@ export default function TasksPage(): JSX.Element {
             className="w-full rounded border border-cui-border px-3 py-2 text-sm"
           />
         </div>
+        <div><label className="mb-1 block text-xs font-semibold text-cui-muted">Link to</label><select aria-label="Task record type" value={quickRecordType} onChange={(event) => { setQuickRecordType(event.target.value === 'lead' ? 'lead' : event.target.value === 'client' ? 'client' : ''); setQuickRecordId(''); }} className="rounded border border-cui-border px-3 py-2 text-sm"><option value="">General task</option><option value="lead">Lead</option><option value="client">Account</option></select></div>
+        <div><label className="mb-1 block text-xs font-semibold text-cui-muted">Assignee (optional)</label><input aria-label="Task assignee" maxLength={120} value={quickAssignee} onChange={(event) => setQuickAssignee(event.target.value)} placeholder="Agent name" className="rounded border border-cui-border px-3 py-2 text-sm" /></div>
+        {quickRecordType ? <div className="basis-full"><RecordPicker type={quickRecordType} value={quickRecordId} onChange={setQuickRecordId} /></div> : null}
         <div>
           <label className="mb-1 block text-xs font-semibold text-cui-muted">Due - Arizona (UTC-7)</label>
           <input
@@ -282,7 +291,7 @@ export default function TasksPage(): JSX.Element {
               [
                 ['all', `All (${tasks.length})`],
                 ['lead', `Leads (${tasks.filter((t) => t.related_type === 'lead').length})`],
-                ['client', `Clients (${tasks.filter((t) => t.related_type === 'client').length})`],
+                ['client', `Accounts (${tasks.filter((t) => t.related_type === 'client' || Boolean(t.account_id)).length})`],
                 ['none', `Unlinked (${tasks.filter((t) => !t.related_type).length})`],
               ] as Array<[Scope, string]>
             ).map(([key, label]) => (
@@ -300,13 +309,21 @@ export default function TasksPage(): JSX.Element {
           : null}
       </div>
 
-      {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {assignment ? <form aria-label="Reassign task" className="mb-4 flex flex-wrap items-end gap-3 rounded border border-cui-border bg-white p-3" onSubmit={(event) => {
+        event.preventDefault();
+        void updateTask(assignment.id, { assignee: assignment.name.trim() || null }).then((ok) => { if (ok) setAssignment(null); });
+      }}>
+        <label className="text-xs font-semibold">Assignee<input aria-label="New assignee" autoFocus maxLength={120} value={assignment.name} onChange={(event) => setAssignment({ ...assignment, name: event.target.value })} className="mt-1 block rounded border border-cui-border p-2" /></label>
+        <button disabled={busyId !== null} className="rounded bg-cui-primary px-3 py-2 text-xs text-white">Save assignment</button>
+        <button type="button" disabled={busyId !== null} onClick={() => setAssignment(null)} className="text-xs text-cui-muted">Cancel</button>
+      </form> : null}
+      {error ? <div role="alert" className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error} <button type="button" onClick={() => void fetchTasks()} className="font-semibold underline">Refresh tasks</button></div> : null}
       {loading ? <p className="text-sm text-cui-muted">Loading tasks…</p> : null}
 
       {!loading && view === 'open' && openCount === 0 ? (
         <div className="rounded border border-dashed border-cui-border bg-white p-10 text-center">
           <CheckCircle2 className="mx-auto h-8 w-8 text-cui-success" />
-          <p className="mt-2 text-sm font-semibold text-cui-text">All clear</p>
+          <p className="mt-2 text-sm font-semibold text-cui-text">No saved tasks</p>
           <p className="text-xs text-cui-muted">No open tasks in this view.</p>
         </div>
       ) : null}
@@ -347,21 +364,23 @@ export default function TasksPage(): JSX.Element {
                       <div className="flex items-center gap-2">
                         {isHigh ? <Flag className="h-3.5 w-3.5 shrink-0 text-cui-danger" /> : null}
                         {task.kind === 'reminder' ? <span className="rounded bg-cui-primary/10 px-1.5 text-[10px] font-semibold text-cui-primary">Reminder</span> : null}
+                        {task.action_category ? <span className="rounded bg-cui-light px-1.5 text-[10px] font-semibold text-cui-muted">{task.action_category === 'reply' ? 'Message' : task.action_category === 'service' ? 'Service request' : task.action_category === 'approval' ? 'Approval' : 'Delivery issue'}</span> : null}
                         <p className="truncate text-sm font-semibold text-cui-text">{task.subject}</p>
                       </div>
                       {task.description ? <p className="truncate text-xs text-cui-muted">{task.description}</p> : null}
+                      {task.assignee ? <p className="text-xs text-cui-muted">{task.assignee}</p> : null}
                       <p className="text-xs text-cui-muted md:hidden">{dueLabel(task.due_date) || 'No due date'}</p>
                     </div>
 
-                    {task.related_name ? (
+                    {task.related_name || task.action_href ? (
                       <button
                         type="button"
                         onClick={() => void openRecord(task)}
                         className="inline-flex shrink-0 items-center gap-1 rounded-full border border-cui-primary/30 bg-cui-primary/5 px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/15"
-                        title={`Open ${task.related_name}`}
+                        title={`Open ${task.related_name || 'request'}`}
                       >
                         <User className="h-3 w-3" />
-                        <span className="max-w-36 truncate">Open {task.related_name}</span>
+                        <span className="max-w-36 truncate">Open {task.related_name || 'request'}</span>
                       </button>
                     ) : null}
 
@@ -370,57 +389,8 @@ export default function TasksPage(): JSX.Element {
                       {dueLabel(task.due_date) || 'No due date'}
                     </span>
 
-                    <select
-                      defaultValue=""
-                      disabled={busyId === task.id}
-                      aria-label={`Snooze ${task.subject}`}
-                      onChange={(event) => {
-                        const option = event.target.value as SnoozePreset | 'custom' | '';
-                        event.target.value = '';
-                        if (option === 'custom') setSnoozeEditor({ taskId: task.id, value: defaultSnoozeInput(), error: null });
-                        else if (option) snooze(task, option);
-                      }}
-                      className="shrink-0 rounded border border-cui-border bg-white px-2 py-1 text-xs text-cui-muted"
-                    >
-                      <option value="" disabled>Snooze…</option>
-                      <option value="later">Later today (+3 hrs)</option>
-                      <option value="tomorrow">Tomorrow 9 AM</option>
-                      <option value="nextweek">Next Monday 9 AM</option>
-                      <option value="custom">Pick date &amp; time…</option>
-                    </select>
-
-                    {snoozeEditor?.taskId === task.id ? (
-                      <form
-                        className="flex basis-full flex-wrap items-center justify-end gap-2 rounded border border-cui-primary/30 bg-cui-primary/5 px-3 py-2"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void saveCustomSnooze(task);
-                        }}
-                      >
-                        <label className="flex items-center gap-2 text-xs font-semibold text-cui-text">
-                          Snooze until (Arizona time)
-                          <input
-                            type="datetime-local"
-                            value={snoozeEditor.value}
-                            min={arizonaDateTimeInput(new Date())}
-                            onChange={(event) => setSnoozeEditor({ taskId: task.id, value: event.target.value, error: null })}
-                            className="rounded border border-cui-border bg-white px-2 py-1 text-xs font-normal"
-                            autoFocus
-                          />
-                        </label>
-                        <button
-                          type="submit"
-                          disabled={busyId === task.id}
-                          className="rounded bg-cui-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
-                        >
-                          Save snooze
-                        </button>
-                        <button type="button" onClick={() => setSnoozeEditor(null)} className="rounded border border-cui-border bg-white px-3 py-1 text-xs font-semibold text-cui-muted">
-                          Cancel
-                        </button>
-                        {snoozeEditor.error ? <p role="alert" className="basis-full text-right text-xs font-semibold text-cui-danger">{snoozeEditor.error}</p> : null}
-                      </form>
-                    ) : null}
+                    <button aria-label={`Reassign ${task.subject}`} disabled={busyId !== null} onClick={() => setAssignment({ id: task.id, name: task.assignee || '' })} className="text-xs font-semibold text-cui-primary">Reassign</button>
+                    <TaskSnooze subject={task.subject} disabled={busyId === task.id} onSave={(iso) => updateTask(task.id, { due_date: iso })} />
                   </div>
                 );
               })}
@@ -440,15 +410,15 @@ export default function TasksPage(): JSX.Element {
                     {task.description ? <p className="truncate text-xs text-cui-muted/70">{task.description}</p> : null}
                     <p className="text-xs text-cui-muted md:hidden">{dueLabel(task.due_date) || 'No due date'}</p>
                   </div>
-                  {task.related_name ? (
+                  {task.related_name || task.action_href ? (
                     <button
                       type="button"
                       onClick={() => void openRecord(task)}
                       className="inline-flex shrink-0 items-center gap-1 rounded-full border border-cui-primary/30 bg-cui-primary/5 px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/15"
-                      title={`Open ${task.related_name}`}
+                      title={`Open ${task.related_name || 'request'}`}
                     >
                       <User className="h-3 w-3" />
-                      <span className="max-w-36 truncate">Open {task.related_name}</span>
+                      <span className="max-w-36 truncate">Open {task.related_name || 'request'}</span>
                     </button>
                   ) : null}
                   <span className="hidden shrink-0 items-center gap-1 text-xs text-cui-muted md:inline-flex">

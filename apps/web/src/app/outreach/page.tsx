@@ -1,11 +1,15 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import type { Route } from 'next';
 import { Inbox, Mail, Pause, Play, RefreshCw, Send, Settings2, UserX, X } from 'lucide-react';
 import SectionLayout from '../../components/crm/SectionLayout';
 import { Card, CardBody, CardHeader } from '../../components/ui/Card';
+import { activityFilters, DeliveryState } from './DeliveryState';
+import type { OutreachSender } from '@crm/shared';
+import { outreachQualityIssues } from '../../lib/outreach-quality';
 
 interface OutreachSettings {
   approval_mode: boolean;
@@ -13,6 +17,7 @@ interface OutreachSettings {
   send_window_start: number;
   send_window_end: number;
   opt_out_footer: string;
+  sender_profile: OutreachSender;
 }
 
 interface PendingItem {
@@ -77,10 +82,16 @@ function StatTile({ label, value, tone }: { label: string; value: string; tone: 
 }
 
 export default function OutreachPage(): JSX.Element {
+  return <Suspense fallback={<p className="p-6 text-sm text-cui-muted">Loading outreach...</p>}><OutreachContent /></Suspense>;
+}
+
+function OutreachContent(): JSX.Element {
+  const attempt = useSearchParams().get('attempt');
   const [data, setData] = useState<OverviewPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [activityFilter, setActivityFilter] = useState('all');
 
   // Per-item edit drafts for pending approvals.
   const [edits, setEdits] = useState<Record<string, { subject: string; body: string }>>({});
@@ -91,27 +102,34 @@ export default function OutreachPage(): JSX.Element {
   const [settingsDraft, setSettingsDraft] = useState<OutreachSettings | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (clearError = true): Promise<void> => {
     try {
-      const res = await fetch('/api/outreach', { cache: 'no-store' });
+      const params = new URLSearchParams({ recent_status: activityFilter });
+      if (attempt) params.set('attempt', attempt);
+      const res = await fetch(`/api/outreach?${params}`, { cache: 'no-store' });
       if (!res.ok) {
+        setData(null);
         setError('Failed to load outreach data.');
         return;
       }
       const payload = (await res.json()) as OverviewPayload;
       setData(payload);
       setSettingsDraft(payload.settings);
-      setError(null);
+      if (clearError) setError(null);
     } catch {
+      setData(null);
       setError('Failed to load outreach data.');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [activityFilter, attempt]);
 
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    if (attempt && data) document.getElementById(`attempt-${attempt}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [attempt, data]);
 
   const editFor = (item: PendingItem): { subject: string; body: string } =>
     edits[item.id] ?? { subject: item.subject, body: item.body };
@@ -134,11 +152,34 @@ export default function OutreachPage(): JSX.Element {
         setError(payload.message ?? 'Action failed.');
         return;
       }
-      setNotice(action === 'approve_send' ? `Sent to ${item.lead_name}.` : 'Draft rejected.');
-      await load();
+      setNotice(action === 'approve_send' ? `Accepted by provider for ${item.lead_name}; delivery is not confirmed.` : 'Draft rejected.');
     } catch {
       setError('Action failed.');
     } finally {
+      // A failed HTTP response can follow provider acceptance. Never leave a stale
+      // approval button enabled without refreshing the persistent attempt state.
+      await load(false);
+      setBusyId(null);
+    }
+  };
+
+  const finishRecording = async (item: RecentItem): Promise<void> => {
+    if (item.status !== 'accepted_by_provider') return;
+    setBusyId(item.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/outreach/outbox/${encodeURIComponent(item.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'finish_recording' }),
+      });
+      const payload = await response.json().catch(() => ({})) as { message?: string };
+      if (!response.ok) throw new Error(payload.message ?? 'Could not finish recording provider acceptance.');
+      setNotice('Provider acceptance recorded. No email was resent; delivery is not confirmed.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Recording failed. No resend was requested.');
+    } finally {
+      await load(false);
       setBusyId(null);
     }
   };
@@ -176,7 +217,7 @@ export default function OutreachPage(): JSX.Element {
         return;
       }
       const result = (await res.json()) as { drafted: number; autoSent: number; skipped: number };
-      setNotice(`Engine run complete: ${result.drafted} drafted, ${result.autoSent} auto-sent, ${result.skipped} skipped.`);
+      setNotice(`Engine run complete: ${result.drafted} drafted, ${result.autoSent} accepted by provider, ${result.skipped} skipped. Delivery is not confirmed.`);
       await load();
     } catch {
       setError('Engine run failed.');
@@ -201,7 +242,8 @@ export default function OutreachPage(): JSX.Element {
         }),
       });
       if (!res.ok) {
-        setError('Failed to save settings.');
+        const payload = await res.json() as { message?: string };
+        setError(payload.message ?? 'Failed to save settings.');
         return;
       }
       setNotice('Settings saved.');
@@ -236,7 +278,7 @@ export default function OutreachPage(): JSX.Element {
             tone="border-cui-primary/40 bg-cui-primary/10 text-cui-primary"
           />
           <StatTile
-            label="Sent today"
+            label="Daily send slots used"
             value={data ? `${data.sent_today} / ${data.settings.daily_send_cap}` : '--'}
             tone="border-cui-success/40 bg-cui-success/10 text-green-700"
           />
@@ -285,7 +327,7 @@ export default function OutreachPage(): JSX.Element {
             {(data?.pending ?? []).map((item) => {
               const draft = editFor(item);
               return (
-                <div key={item.id} className="rounded border border-cui-border/60">
+                <div key={item.id} id={`attempt-${item.id}`} className={`rounded border ${item.id === attempt ? 'border-cui-primary ring-2 ring-cui-primary/30' : 'border-cui-border/60'}`}>
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cui-border/40 bg-cui-light px-3 py-2">
                     <div className="min-w-0 text-sm">
                       <Link
@@ -332,6 +374,7 @@ export default function OutreachPage(): JSX.Element {
                       rows={Math.min(12, Math.max(5, draft.body.split('\n').length + 1))}
                       className="w-full rounded border border-cui-border px-2.5 py-1.5 text-sm leading-relaxed focus:border-cui-primary focus:outline-none"
                     />
+                    <p className="text-xs font-semibold text-cui-muted">Why this message? Recorded facts cited by the draft (verify before sending):</p>
                     {item.cited_signals.length > 0 ? (
                       <div className="flex flex-wrap gap-1.5">
                         {item.cited_signals.map((signal, index) => (
@@ -341,6 +384,10 @@ export default function OutreachPage(): JSX.Element {
                         ))}
                       </div>
                     ) : null}
+                    <p className="text-xs text-cui-muted">Citations are not proof that every claim is accurate. Review the contact profile and confirm the next step. Edits are checked below; original citations do not change with your edits.</p>
+                    {outreachQualityIssues(draft).length ? <ul className="list-inside list-disc rounded border border-cui-warning/40 bg-cui-warning/10 p-2 text-xs text-amber-900">
+                      {outreachQualityIssues(draft).map((issue) => <li key={issue}>{issue}</li>)}
+                    </ul> : <p className="text-xs text-green-700">Basic length, subject and wording checks passed. Factual review is still required.</p>}
                   </div>
                 </div>
               );
@@ -381,7 +428,7 @@ export default function OutreachPage(): JSX.Element {
                         </Link>
                       </td>
                       <td className="px-4 py-2 text-cui-text">
-                        {enrollment.current_step} of {enrollment.total_steps} sent
+                        {enrollment.current_step} of {enrollment.total_steps} accepted
                       </td>
                       <td className="px-4 py-2 text-cui-muted">{prettyDateTime(enrollment.next_send_at)}</td>
                       <td className="px-4 py-2">
@@ -437,29 +484,34 @@ export default function OutreachPage(): JSX.Element {
 
         {/* Recent activity */}
         <Card>
-          <CardHeader>Recent sends</CardHeader>
+          <CardHeader>Outreach delivery activity</CardHeader>
+          <div className="space-y-2 border-b border-cui-border px-4 py-3">
+            <label className="text-sm font-semibold text-cui-text">
+              Activity status
+              <select value={activityFilter} onChange={(event) => setActivityFilter(event.target.value)}
+                className="ml-2 rounded border border-cui-border bg-white px-2 py-1">
+                {activityFilters.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <p className="text-xs text-cui-muted">Latest 25 matching attempts. Uncertain attempts cannot be resent here. Send slots include in-progress and uncertain attempts, not confirmed deliveries.</p>
+          </div>
           <CardBody className="p-0">
             {(data?.recent.length ?? 0) === 0 ? (
-              <p className="p-4 text-center text-sm text-cui-muted">No sequence emails have gone out yet.</p>
+              <p className="p-4 text-center text-sm text-cui-muted">No outreach attempts match this status.</p>
             ) : (
               <ul className="divide-y divide-cui-light">
                 {(data?.recent ?? []).map((item) => (
-                  <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm">
+                  <li key={item.id} id={`attempt-${item.id}`} className={`flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm ${item.id === attempt ? 'bg-cui-primary/10 ring-2 ring-inset ring-cui-primary/30' : ''}`}>
                     <div className="min-w-0">
                       <Link href={`/leads?lead=${item.lead_id}` as Route} className="font-semibold text-cui-primary hover:underline">
                         {item.lead_name}
                       </Link>
                       <span className="ml-2 text-cui-text">{item.subject}</span>
+                      <p className="break-all text-xs text-cui-muted">Attempt ID: {item.id}</p>
                       {item.error ? <span className="ml-2 text-xs text-cui-danger">{item.error}</span> : null}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-cui-muted">
-                      <span
-                        className={`rounded px-2 py-0.5 font-semibold ${
-                          item.status === 'sent' ? 'bg-cui-success/15 text-green-700' : 'bg-cui-danger/15 text-cui-danger'
-                        }`}
-                      >
-                        {item.status}
-                      </span>
+                      <DeliveryState status={item.status} busy={busyId === item.id} onFinish={() => void finishRecording(item)} />
                       <span>{prettyDateTime(item.sent_at ?? item.created_at)}</span>
                     </div>
                   </li>
@@ -489,6 +541,20 @@ export default function OutreachPage(): JSX.Element {
             </span>
           </CardHeader>
           <CardBody>
+            {settingsDraft ? <div className="mb-5 space-y-3 border-b border-cui-border pb-4">
+              <h3 className="text-sm font-bold text-cui-text">Agency sender profile</h3>
+              <p className="text-xs text-cui-muted">Shared by lead, account and sequence drafts. Changes affect future drafts only. This is writing context, not your email-provider identity. Save with the settings button above.</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {([
+                  ['name', 'Producer name'], ['role', 'Role'], ['agency', 'Agency'], ['service_area', 'Service area'],
+                  ['specialties', 'Specialties'], ['tone', 'Writing style'], ['signature', 'Signature'], ['approved_claims', 'Approved agency claims (no unverified promises)'],
+                ] as const).map(([key, label]) => <label key={key} className="text-xs font-semibold text-cui-muted">{label}
+                  <textarea rows={2} maxLength={1000} value={settingsDraft.sender_profile[key]}
+                    onChange={(event) => setSettingsDraft({ ...settingsDraft, sender_profile: { ...settingsDraft.sender_profile, [key]: event.target.value } })}
+                    className="mt-1 w-full rounded border border-cui-border px-2.5 py-1.5 text-sm text-cui-text" />
+                </label>)}
+              </div>
+            </div> : null}
             {settingsDraft ? (
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <label className="flex items-center gap-2 text-sm font-semibold text-cui-text">

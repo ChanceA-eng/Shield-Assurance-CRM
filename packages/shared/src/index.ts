@@ -1,4 +1,5 @@
 export * from './account-workspace';
+export * from './marketing';
 
 export type DealStage = 'LEAD' | 'QUOTING' | 'PRESENTED' | 'BOUND' | 'LOST';
 

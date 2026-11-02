@@ -128,7 +128,11 @@ export interface WorkspaceTask {
   description: string | null;
   due_date: string | null;
   status: string;
+  action_href?: string | null;
+  action_category?: string | null;
+  automation_key?: string | null;
   priority: string;
+  assignee?: string | null;
   kind: 'task' | 'reminder';
   related_type: string | null;
   related_id: string | null;

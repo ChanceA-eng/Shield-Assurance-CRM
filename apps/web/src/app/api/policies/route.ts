@@ -1,414 +1,119 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
+import { requireApiSession } from '../../../lib/api-auth';
+import { operationErrorStatus, policyIdentity, policyFields, type PolicyPayload } from '../../../lib/policy-identity';
+import { runRenewalRadar } from '../../../lib/renewal-automation';
 import { writeCommunicationLog, writeNotification } from '../../../lib/automation';
-import { schedulePolicyRenewalLifecycle } from '../../../lib/automation';
 import { sendEmail } from '../../../lib/messaging';
-import { ACTIVE_LEAD_STATUSES } from '../../../lib/lead-pipeline';
-
-interface NewPolicyPayload {
-  client_id?: string;
-  account_id?: string;
-  insured_name?: string;
-  phone?: string;
-  email?: string;
-  address?: string;
-  source?: 'manual' | 'downloaded' | string;
-  carrier?: string;
-  line_of_business?: string;
-  sub_type?: string;
-  premium?: number | string;
-  policy_number?: string;
-  policyNumber?: string;
-  effective_date?: string;
-  renewal_date?: string;
-  expiration_date?: string;
-  billing_type?: string;
-  prior_policy_id?: string | null;
-  email_consent?: boolean;
-  sms_consent?: boolean;
-  status?: string;
-}
-
-interface ClientRow {
-  id: string;
-}
-
-function daysFromNowISO(days: number): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function parsePremium(value: number | string | undefined): number {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
-
-function normalizeText(value: string | undefined): string {
-  return value?.trim() ?? '';
-}
-
-function readPolicyNumber(payload: NewPolicyPayload): string {
-  if (typeof payload.policy_number === 'string' && payload.policy_number.trim().length > 0) {
-    return payload.policy_number.trim();
-  }
-  if (typeof payload.policyNumber === 'string' && payload.policyNumber.trim().length > 0) {
-    return payload.policyNumber.trim();
-  }
-  return '';
-}
-
-async function closeMatchingLeadOnPolicyIssue(input: {
-  supabase: ReturnType<typeof getSupabaseServerClient>;
-  insuredName: string;
-  email: string;
-  phone: string;
-}): Promise<void> {
-  const { supabase, insuredName, email, phone } = input;
-  if (!supabase) return;
-
-  const statuses = [...ACTIVE_LEAD_STATUSES];
-
-  const tryCloseBy = async (column: 'email' | 'phone' | 'full_name', value: string): Promise<boolean> => {
-    if (!value) return false;
-
-    const lookup = await supabase
-      .from('leads')
-      .select('id')
-      .in('status', statuses)
-      .eq(column, value)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle<{ id: string }>();
-
-    if (lookup.error || !lookup.data?.id) {
-      return false;
-    }
-
-    const update = await supabase
-      .from('leads')
-      .update({ status: 'won', stage_changed_at: new Date().toISOString() })
-      .eq('id', lookup.data.id);
-    return !update.error;
-  };
-
-  const closedByEmail = await tryCloseBy('email', email);
-  if (closedByEmail) return;
-
-  const closedByPhone = await tryCloseBy('phone', phone);
-  if (closedByPhone) return;
-
-  await tryCloseBy('full_name', insuredName);
-}
-
-function buildPolicyUpdate(payload: NewPolicyPayload): Record<string, string | number | null> {
-  const updates: Record<string, string | number | null> = {};
-  if (typeof payload.client_id === 'string') updates.client_id = normalizeText(payload.client_id) || null;
-  if (typeof payload.account_id === 'string') updates.account_id = normalizeText(payload.account_id) || null;
-  if (typeof payload.insured_name === 'string') updates.insured_name = normalizeText(payload.insured_name);
-  if (typeof payload.phone === 'string') updates.phone = normalizeText(payload.phone) || null;
-  if (typeof payload.email === 'string') updates.email = normalizeText(payload.email).toLowerCase() || null;
-  if (typeof payload.address === 'string') updates.address = normalizeText(payload.address) || null;
-  if (typeof payload.carrier === 'string') updates.carrier = normalizeText(payload.carrier);
-  if (typeof payload.line_of_business === 'string') updates.line_of_business = normalizeText(payload.line_of_business);
-  if (typeof payload.sub_type === 'string') updates.sub_type = normalizeText(payload.sub_type) || null;
-  if (typeof payload.premium === 'string' || typeof payload.premium === 'number') updates.premium = parsePremium(payload.premium);
-  const normalizedPolicyNumber = readPolicyNumber(payload);
-  if (normalizedPolicyNumber) updates.policy_number = normalizedPolicyNumber;
-  if (typeof payload.effective_date === 'string') updates.effective_date = payload.effective_date;
-  if (typeof payload.renewal_date === 'string') updates.renewal_date = payload.renewal_date;
-  if (typeof payload.expiration_date === 'string') updates.expiration_date = payload.expiration_date;
-  if (typeof payload.billing_type === 'string') updates.billing_type = normalizeText(payload.billing_type) || null;
-  if (typeof payload.source === 'string') updates.source = normalizeText(payload.source) || 'manual';
-  if (typeof payload.prior_policy_id === 'string' || payload.prior_policy_id === null) updates.prior_policy_id = payload.prior_policy_id ? normalizeText(payload.prior_policy_id) : null;
-  if (typeof payload.status === 'string') updates.status = normalizeText(payload.status);
-  return updates;
-}
+import { isUuid } from '../../../lib/workspace-validation';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  const within = request.nextUrl.searchParams.get('renewal_within');
+  let query = supabase.from('policies').select('*');
+  if (within) {
+    const days = Number(within);
+    if (!Number.isFinite(days) || days < 0) return NextResponse.json({ message: 'Invalid renewal window.' }, { status: 400 });
+    const end = new Date();
+    end.setUTCDate(end.getUTCDate() + days);
+    query = query.in('status', ['active', 'issued']).lte('renewal_date', end.toISOString().slice(0, 10));
+    if (request.nextUrl.searchParams.get('include_overdue') !== 'true') query = query.gte('renewal_date', new Date().toISOString().slice(0, 10));
   }
-
-  const renewalWithinRaw = request.nextUrl.searchParams.get('renewal_within');
-
-  if (!renewalWithinRaw) {
-    const policyQuery = await supabase
-      .from('policies')
-      .select('id,client_id,account_id,insured_name,carrier,line_of_business,sub_type,premium,policy_number,effective_date,renewal_date,expiration_date,status,billing_type,source,prior_policy_id,created_at')
-      .order('created_at', { ascending: false })
-      .limit(100);
-
-    const { data, error } = policyQuery;
-    if (error) {
-      return NextResponse.json({ message: error.message }, { status: 500 });
-    }
-    return NextResponse.json(data ?? [], { status: 200 });
-  }
-
-  const renewalWithin = Number(renewalWithinRaw);
-  const includeOverdue = request.nextUrl.searchParams.get('include_overdue') === 'true';
-  const today = new Date().toISOString().slice(0, 10);
-
-  let query = supabase
-    .from('policies')
-    .select('id,client_id,account_id,insured_name,line_of_business,sub_type,renewal_date,expiration_date,premium,status,carrier,billing_type,source,prior_policy_id,clients(full_name)')
-    .in('status', ['active', 'issued'])
-    .lte('renewal_date', daysFromNowISO(renewalWithin));
-
-  if (!includeOverdue) {
-    query = query.gte('renewal_date', today);
-  }
-
-  const { data, error } = await query.order('renewal_date', { ascending: true }).limit(200);
-  if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
-  }
-  return NextResponse.json(data ?? [], { status: 200 });
+  const { data, error } = await query.order(within ? 'renewal_date' : 'created_at', { ascending: Boolean(within) }).limit(within ? 200 : 100);
+  return error ? NextResponse.json({ message: error.message }, { status: 500 }) : NextResponse.json(data ?? []);
 }
 
-export async function POST(request: NextRequest): Promise<NextResponse> {
+async function savePolicy(request: NextRequest, creating: boolean): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
   const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  }
-
-  const payload = (await request.json()) as NewPolicyPayload;
-  const policyNumber = readPolicyNumber(payload);
-  const expirationDate = payload.expiration_date ?? payload.renewal_date;
-
-  if (!payload.insured_name || payload.insured_name.trim().length === 0) {
-    return NextResponse.json({ message: 'insured_name is required.' }, { status: 400 });
-  }
-
-  // ✅ LOOSENED VALIDATION: Only require core transaction metrics to proceed
-  if (
-    !payload.carrier?.trim() ||
-    !payload.line_of_business?.trim() ||
-    !policyNumber ||
-    !payload.effective_date ||
-    !expirationDate
-  ) {
-    return NextResponse.json({ message: 'Missing required policy parameters (Carrier, Line of Business, Policy Number, Effective & Expiration dates).' }, { status: 400 });
-  }
-
-  const insuredName = normalizeText(payload.insured_name);
-  const email = normalizeText(payload.email).toLowerCase();
-  const phone = normalizeText(payload.phone);
-  const address = normalizeText(payload.address);
-  const emailConsent = payload.email_consent ?? true;
-  let clientId = normalizeText(payload.account_id) || normalizeText(payload.client_id);
-
-  if (!clientId) {
-    let matchedClient: ClientRow | null = null;
-
-    if (email) {
-      const existingByEmail = await supabase.from('clients').select('id').ilike('email', email).maybeSingle();
-      if (existingByEmail.error) {
-        return NextResponse.json({ message: existingByEmail.error.message }, { status: 500 });
+  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  let payload: PolicyPayload;
+  let fields: PolicyPayload;
+  let accountId: string | null = null;
+  let leadId: string | null = null;
+  let insuredAssetIds: string[] = [];
+  try {
+    payload = await request.json() as PolicyPayload;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('A policy object is required.');
+    fields = policyFields(payload);
+    if (creating) {
+      const selectedAssets = payload.insured_asset_ids ?? [];
+      if (!Array.isArray(selectedAssets) || selectedAssets.length > 100
+        || !selectedAssets.every((id): id is string => isUuid(id)) || new Set(selectedAssets).size !== selectedAssets.length) {
+        throw new Error('Choose up to 100 distinct valid insured assets.');
       }
-      matchedClient = existingByEmail.data;
+      insuredAssetIds = selectedAssets;
     }
-
-    if (!matchedClient && phone) {
-      const existingByPhone = await supabase.from('clients').select('id').eq('phone', phone).maybeSingle();
-      if (existingByPhone.error) {
-        return NextResponse.json({ message: existingByPhone.error.message }, { status: 500 });
+    if (creating || 'account_id' in payload || 'client_id' in payload) {
+      ({ accountId, leadId } = policyIdentity(payload));
+      fields.account_id = accountId;
+      fields.client_id = accountId;
+      if (creating && typeof fields.prior_policy_id === 'string') {
+        if (typeof payload.quote_id === 'string') throw new Error('Choose a quote placement or a renewal from a prior policy, not both.');
+        if (!isUuid(fields.prior_policy_id)) throw new Error('Select a valid previous policy term.');
+        const prior = await supabase.from('policies').select('id')
+          .eq('id', fields.prior_policy_id).eq('client_id', accountId).maybeSingle();
+        if (prior.error) return NextResponse.json({ message: prior.error.message }, { status: 500 });
+        if (!prior.data) return NextResponse.json({ message: 'Previous policy term was not found on this account.' }, { status: 409 });
       }
-      matchedClient = existingByPhone.data;
     }
-
-    if (!matchedClient) {
-      const existingByName = await supabase.from('clients').select('id').ilike('full_name', insuredName).maybeSingle();
-      if (existingByName.error) {
-        return NextResponse.json({ message: existingByName.error.message }, { status: 500 });
+    if (!creating && 'lead_id' in payload) throw new Error('Lead completion is only supported during issuance.');
+    if (!creating && ('quote_id' in payload || 'quote_version' in payload)) throw new Error('Quote linkage is only supported during issuance.');
+    if (creating) {
+      if (payload.carrier_confirmed !== true) throw new Error('Confirm that the carrier has bound or issued this coverage before recording a policy.');
+      if ('quote_id' in payload && payload.quote_id !== null
+        && (!isUuid(payload.quote_id) || typeof payload.quote_version !== 'string' || !Number.isFinite(Date.parse(payload.quote_version)))) {
+        throw new Error('Select a valid quote and its last-loaded version.');
       }
-      matchedClient = existingByName.data;
-    }
-
-    clientId = matchedClient?.id ?? '';
-
-    if (!clientId) {
-      const createdClient = await supabase
-        .from('clients')
-        .insert([
-          {
-            full_name: insuredName,
-            phone: phone || null,
-            email: email || null,
-            address: address || null,
-            source: 'Policy Issuance',
-          },
-        ])
-        .select('id')
-        .single();
-
-      if (createdClient.error) {
-        return NextResponse.json({ message: createdClient.error.message }, { status: 500 });
+      for (const key of ['insured_name', 'carrier', 'line_of_business', 'policy_number', 'effective_date', 'expiration_date']) {
+        if (!fields[key]) throw new Error(`${key} is required.`);
       }
-
-      clientId = createdClient.data.id;
-    }
+    } else if (!payload.id || !Object.keys(fields).length) throw new Error('Policy ID and update fields are required.');
+  } catch (error) {
+    return NextResponse.json({ message: error instanceof Error ? error.message : 'Invalid policy.' }, { status: 400 });
   }
-
-  // Sync core 4 fields + source attribution
-  const clientUpdatePayload = {
-    full_name: insuredName,
-    phone: phone || null,
-    email: email || null,
-    address: address || null,
-    source: 'Policy Issuance' 
-  };
-
-  const clientUpdate = await supabase.from('clients').update(clientUpdatePayload).eq('id', clientId);
-
-  if (clientUpdate.error) {
-    return NextResponse.json({ message: clientUpdate.error.message }, { status: 500 });
+  const fromQuote = creating && typeof payload.quote_id === 'string';
+  const { data, error } = await supabase.rpc(creating ? 'issue_policy_with_assets_atomic' : 'update_policy_atomic', creating ? {
+    p_request_id: payload.request_id ?? crypto.randomUUID(), p_account_id: accountId, p_lead_id: leadId, p_policy: fields,
+    p_asset_ids: insuredAssetIds,
+    ...(fromQuote ? { p_quote_id: payload.quote_id, p_quote_version: payload.quote_version } : {}),
+  } : { p_id: payload.id, p_updates: fields });
+  if (error) return NextResponse.json({ message: error.message }, { status: operationErrorStatus(error.code) });
+  const saved = data as { policy: Record<string, unknown>; created?: boolean } ;
+  const policy = saved.policy;
+  const warnings: string[] = [];
+  try {
+    await runRenewalRadar(supabase, new Date(), String(policy.id));
+  } catch (failure) {
+    warnings.push(`Policy saved; renewal radar failed and must be retried: ${failure instanceof Error ? failure.message : 'Unknown persistence error'}`);
   }
-
-  const insertResult = await supabase
-    .from('policies')
-    .insert([
-      {
-        client_id: clientId,
-        account_id: clientId,
-        insured_name: insuredName,
-        phone: phone || null,
-        email: email || null,
-        address: address || null,
-        carrier: payload.carrier.trim(),
-        line_of_business: payload.line_of_business.trim(),
-        sub_type: payload.sub_type?.trim() || payload.line_of_business.trim(),
-        premium: parsePremium(payload.premium),
-        policy_number: policyNumber,
-        effective_date: payload.effective_date,
-        renewal_date: expirationDate,
-        expiration_date: expirationDate,
-        status: payload.status?.trim() || 'active',
-        billing_type: payload.billing_type?.trim() || null,
-        source: payload.source?.trim() || 'manual',
-        prior_policy_id: payload.prior_policy_id?.trim() || null,
-      },
-    ])
-    .select('*')
-    .single();
-
-  if (insertResult.error) {
-    return NextResponse.json({ message: insertResult.error.message }, { status: 500 });
-  }
-
-  await writeNotification({
-    client_id: insertResult.data.client_id,
-    type: 'renewal',
-    message: `Policy issued for ${insertResult.data.insured_name}. Renewal automation will monitor ${insertResult.data.expiration_date ?? insertResult.data.renewal_date}.`,
-  });
-
-  await schedulePolicyRenewalLifecycle({
-    policyId: insertResult.data.id,
-    clientId,
-    insuredName: insertResult.data.insured_name,
-    carrier: insertResult.data.carrier,
-    lineOfBusiness: insertResult.data.line_of_business,
-    premium: Number(insertResult.data.premium ?? 0),
-    renewalDate: insertResult.data.expiration_date ?? insertResult.data.renewal_date,
-  });
-
-  await closeMatchingLeadOnPolicyIssue({
-    supabase,
-    insuredName,
-    email,
-    phone,
-  });
-
-  // ✅ EMAIL SAFEGUARD: Direct Vercel execution with valid address tracking checks
-  if (emailConsent && email && email.trim().length > 0) {
+  if (creating && saved.created && payload.email_consent === true && typeof policy.email === 'string' && policy.email) {
     try {
-      await sendEmail({
-        to: email,
-        subject: `Policy Issued: ${policyNumber}`,
-        body: `Hi ${insuredName}, your ${payload.line_of_business} policy with ${payload.carrier} has been issued. Policy number: ${policyNumber}. Effective ${payload.effective_date}, expiration ${expirationDate}.`,
-      });
-      await writeCommunicationLog({
-        client_id: clientId,
-        channel: 'email',
-        subject: `Policy Issued: ${policyNumber}`,
-        body: `Policy issuance confirmation sent for ${insuredName}.`,
-        automation_type: 'renewal',
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown email delivery error';
-      console.error('Policy email delivery failed', { clientId, email, policyNumber, error: message });
-      await writeNotification({
-        client_id: clientId,
-        type: 'renewal',
-        message: `Policy email failed: ${message}`,
-      });
+      await sendEmail({ to: policy.email, subject: `Policy Issued: ${policy.policy_number}`,
+        body: `Hi ${policy.insured_name}, your ${policy.line_of_business} policy with ${policy.carrier} has been issued. Policy number: ${policy.policy_number}. Effective ${policy.effective_date}, expiration ${policy.expiration_date}.` });
+      await writeCommunicationLog({ client_id: String(policy.client_id), channel: 'email', subject: `Policy Issued: ${policy.policy_number}`,
+        body: `Policy issuance confirmation sent for ${policy.insured_name}.`, automation_type: 'renewal' });
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : 'Unknown email delivery error';
+      warnings.push(`Policy saved; issuance email failed: ${message}`);
+      await writeNotification({ client_id: String(policy.client_id), type: 'renewal', message: `Policy email failed: ${message}` });
     }
   }
-
-  return NextResponse.json(insertResult.data, { status: 201 });
+  return NextResponse.json({ ...policy, warnings }, { status: creating ? 201 : 200 });
 }
 
-export async function PATCH(request: NextRequest): Promise<NextResponse> {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  }
-
-  const payload = (await request.json()) as NewPolicyPayload & { id?: string };
-  if (!payload.id) {
-    return NextResponse.json({ message: 'id is required.' }, { status: 400 });
-  }
-
-  const updates = buildPolicyUpdate(payload);
-  if (Object.keys(updates).length === 0) {
-    return NextResponse.json({ message: 'No update fields were provided.' }, { status: 400 });
-  }
-
-  const updateResult = await supabase.from('policies').update(updates).eq('id', payload.id).select('*').single();
-
-  if (updateResult.error) {
-    return NextResponse.json({ message: updateResult.error.message }, { status: 500 });
-  }
-
-  if (updateResult.data && updateResult.data.client_id) {
-    const syncPayload = {
-      full_name: updateResult.data.insured_name,
-      phone: updateResult.data.phone || null,
-      email: updateResult.data.email ? updateResult.data.email.toLowerCase() : null,
-      address: updateResult.data.address || null,
-      source: 'Policy Issuance'
-    };
-
-    const syncUpdate = await supabase.from('clients').update(syncPayload).eq('id', updateResult.data.client_id);
-    if (syncUpdate.error) {
-      return NextResponse.json({ message: syncUpdate.error.message }, { status: 500 });
-    }
-  }
-
-  return NextResponse.json(updateResult.data, { status: 200 });
-}
+export async function POST(request: NextRequest): Promise<NextResponse> { return savePolicy(request, true); }
+export async function PATCH(request: NextRequest): Promise<NextResponse> { return savePolicy(request, false); }
 
 export async function DELETE(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
   const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  }
-
-  const payload = (await request.json()) as { id?: string };
-  if (!payload.id) {
-    return NextResponse.json({ message: 'id is required.' }, { status: 400 });
-  }
-
+  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  const payload = await request.json().catch(() => ({})) as { id?: string };
+  if (!payload.id) return NextResponse.json({ message: 'id is required.' }, { status: 400 });
   const { error } = await supabase.from('policies').delete().eq('id', payload.id);
-  if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ ok: true }, { status: 200 });
+  return error ? NextResponse.json({ message: error.message }, { status: 500 }) : NextResponse.json({ ok: true });
 }

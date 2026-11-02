@@ -1,223 +1,65 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomUUID } from 'node:crypto';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
-import { writeNotification, writeCommunicationLog } from '../../../lib/automation';
-
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-interface NewEventPayload {
-  client_id?: string;
-  title?: string;
-  subject?: string;
-  description?: string;
-  event_date?: string;
-  event_time?: string;
-  all_day?: boolean;
-  status?: string;
-  related_type?: string;
-  related_id?: string;
-}
-
-interface UpdateEventPayload {
-  id?: string;
-  client_id?: string;
-  title?: string;
-  subject?: string;
-  description?: string;
-  event_date?: string;
-  event_time?: string;
-  all_day?: boolean;
-  status?: string;
-  related_type?: string;
-  related_id?: string;
-}
+import { apiActorName, getApiSession } from '../../../lib/api-auth';
+import { databaseError, workspaceApiError, workspaceBody } from '../../../lib/workspace-api';
+import { WorkspaceError } from '../../../lib/record-scope';
+import { isUuid } from '../../../lib/workspace-validation';
+import { validateCalendarChange } from '../../../lib/calendar-event';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  }
-
-  const order = request.nextUrl.searchParams.get('order') ?? 'asc';
-  const status = request.nextUrl.searchParams.get('status') ?? 'scheduled';
-  const rangeStart = request.nextUrl.searchParams.get('start');
-  const rangeEnd = request.nextUrl.searchParams.get('end');
-  const relatedId = request.nextUrl.searchParams.get('related_id');
-  const relatedType = request.nextUrl.searchParams.get('related_type');
-  const clientId = request.nextUrl.searchParams.get('client_id');
-
-  let query = supabase.from('events').select('*').order('event_date', { ascending: order !== 'desc' }).limit(250);
-
-  if (rangeStart) {
-    query = query.gte('event_date', rangeStart);
-  } else {
-    query = query.gte('event_date', todayISO());
-  }
-
-  if (rangeEnd) {
-    query = query.lte('event_date', rangeEnd);
-  }
-
-  if (relatedId) {
-    query = query.eq('related_id', relatedId);
-  }
-
-  if (relatedType) {
-    query = query.eq('related_type', relatedType);
-  }
-
-  if (clientId) {
-    query = query.eq('client_id', clientId);
-  }
-
-  const { data, error } = await query;
-
-  if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
-  }
-
-  const rows = (data ?? []) as Array<Record<string, unknown>>;
-  const filtered =
-    status === 'all'
-      ? rows
-      : rows.filter((row) => {
-          const rowStatus = typeof row.status === 'string' ? row.status : 'scheduled';
-          return rowStatus === status;
-        });
-
-  return NextResponse.json(filtered, { status: 200 });
-}
-
-export async function POST(request: NextRequest): Promise<NextResponse> {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  }
-
-  const payload = (await request.json()) as NewEventPayload;
-  const subject = payload.subject?.trim() || payload.title?.trim() || '';
-  if (!subject || !payload.event_date) {
-    return NextResponse.json({ message: 'subject and event_date are required.' }, { status: 400 });
-  }
-
-  const eventInsert = {
-    client_id: payload.client_id?.trim() || null,
-    subject,
-    title: subject,
-    description: payload.description?.trim() || null,
-    event_date: payload.event_date,
-    event_time: payload.all_day ? null : payload.event_time || null,
-    all_day: payload.all_day ?? !payload.event_time,
-    status: payload.status?.trim() || 'scheduled',
-    related_type: payload.related_type?.trim() || null,
-    related_id: payload.related_id?.trim() || null,
-  };
-
-  const insertedEvent = await supabase
-    .from('events')
-    .insert([eventInsert])
-    .select('*')
-    .single();
-
-  const event = insertedEvent.data;
-  const insertError = insertedEvent.error;
-
-  if (insertError || !event) {
-    return NextResponse.json({ message: insertError?.message ?? 'Failed to create event.' }, { status: 500 });
-  }
-
-  const taskInsert = await supabase
-    .from('tasks')
-    .insert([
-      {
-        subject,
-        description: payload.description?.trim() || null,
-        due_date: payload.event_date,
-        status: event.status === 'completed' ? 'completed' : 'open',
-        priority: 'medium',
-        related_type: 'event',
-        related_id: event.id,
-      },
-    ])
-    .select('*')
-    .single();
-
-  if (!taskInsert.error && taskInsert.data?.id) {
-    const taskLinkAttempt = await supabase.from('events').update({ task_id: taskInsert.data.id }).eq('id', event.id);
-    if (!taskLinkAttempt.error) {
-      event.task_id = taskInsert.data.id;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
+  const db = getSupabaseServerClient();
+  if (!db) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  try {
+    const params = request.nextUrl.searchParams;
+    const status = params.get('status') ?? 'all';
+    if (!['all', 'scheduled', 'completed'].includes(status)) throw new WorkspaceError('Invalid event status.', 400);
+    const offset = Number(params.get('offset') ?? '0');
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new WorkspaceError('Invalid event offset.', 400);
+    let query = db.from('events').select('*', { count: 'exact' }).order('event_date', { ascending: params.get('order') !== 'desc' }).order('id').range(offset, offset + 199);
+    if (status !== 'all') query = query.eq('status', status);
+    for (const field of ['related_id', 'client_id', 'id']) {
+      const value = params.get(field);
+      if (value) {
+        if (!isUuid(value)) throw new WorkspaceError('Choose a valid related record.', 400);
+        query = query.eq(field, value);
+      }
     }
-  }
-
-  await writeNotification({
-    client_id: null,
-    type: 'appointment',
-    message: `Appointment created: ${subject}`,
-  });
-
-  await writeCommunicationLog({
-    client_id: null,
-    channel: 'email',
-    subject: 'Appointment scheduled',
-    body: `Your appointment ${subject} has been scheduled for ${payload.event_date}.`,
-    automation_type: 'appointment',
-  });
-
-  return NextResponse.json(event, { status: 201 });
-}
-
-export async function PATCH(request: NextRequest): Promise<NextResponse> {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  }
-
-  const payload = (await request.json()) as UpdateEventPayload;
-  if (!payload.id) {
-    return NextResponse.json({ message: 'id is required.' }, { status: 400 });
-  }
-
-  const updates: Record<string, string | boolean | null> = {};
-  if (typeof payload.subject === 'string') {
-    updates.subject = payload.subject.trim();
-    updates.title = payload.subject.trim();
-  }
-  if (typeof payload.title === 'string' && !updates.subject) {
-    updates.subject = payload.title.trim();
-    updates.title = payload.title.trim();
-  }
-  if (typeof payload.description === 'string') updates.description = payload.description.trim();
-  if (typeof payload.event_date === 'string') updates.event_date = payload.event_date;
-  if (typeof payload.event_time === 'string') updates.event_time = payload.event_time;
-  if (typeof payload.all_day === 'boolean') updates.all_day = payload.all_day;
-  if (typeof payload.status === 'string') updates.status = payload.status.trim();
-  if (typeof payload.client_id === 'string') updates.client_id = payload.client_id.trim();
-  if (typeof payload.related_type === 'string') updates.related_type = payload.related_type.trim();
-  if (typeof payload.related_id === 'string') updates.related_id = payload.related_id.trim();
-
-  if (Object.keys(updates).length === 0) {
-    return NextResponse.json({ message: 'No update fields were provided.' }, { status: 400 });
-  }
-
-  const updateResult = await supabase.from('events').update(updates).eq('id', payload.id).select('*').single();
-
-  const { data, error } = updateResult;
-
-  if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
-  }
-
-  const statusChanged = typeof payload.status === 'string';
-  if (statusChanged) {
-    const linkedTaskId = typeof data?.task_id === 'string' ? data.task_id : '';
-    const taskStatus = payload.status === 'completed' ? 'completed' : 'open';
-    if (linkedTaskId) {
-      await supabase.from('tasks').update({ status: taskStatus }).eq('id', linkedTaskId);
-    } else {
-      await supabase.from('tasks').update({ status: taskStatus }).eq('related_type', 'event').eq('related_id', payload.id);
+    if (params.get('related_type')) query = query.eq('related_type', params.get('related_type'));
+    for (const [field, operator] of [['start', 'gte'], ['end', 'lt']] as const) {
+      const value = params.get(field);
+      if (!value) continue;
+      if (validateCalendarChange({ event_date: value })) throw new WorkspaceError('Choose a valid calendar range.', 400);
+      query = query[operator]('event_date', value);
     }
-  }
-
-  return NextResponse.json(data, { status: 200 });
+    const { data, count, error } = await query;
+    if (error) throw databaseError(error);
+    return NextResponse.json(data ?? [], { headers: { 'X-Total-Count': String(count ?? 0) } });
+  } catch (error) { return workspaceApiError(error, 'events/get'); }
 }
+
+async function save(request: NextRequest, create: boolean): Promise<NextResponse> {
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
+  const db = getSupabaseServerClient();
+  if (!db) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  try {
+    const body = await workspaceBody(request);
+    const error = validateCalendarChange(body);
+    if (error) throw new WorkspaceError(error, 400);
+    const id = create ? body.id ?? randomUUID() : body.id;
+    if (!isUuid(id)) throw new WorkspaceError('A valid event id is required.', 400);
+    for (const field of ['related_id', 'client_id']) if (body[field] && !isUuid(body[field])) throw new WorkspaceError('Choose a valid lead or account.', 400);
+    if (body.related_id === '') body.related_id = null;
+    if (body.client_id === '') body.client_id = null;
+    if (body.related_type === '') body.related_type = null;
+    const result = await db.rpc('save_calendar_event', { p_id: id, p_changes: body, p_create: create, p_actor: apiActorName(session.user) });
+    if (result.error) throw databaseError(result.error);
+    return NextResponse.json(result.data, { status: create ? 201 : 200 });
+  } catch (error) { return workspaceApiError(error, 'events/save'); }
+}
+
+export async function POST(request: NextRequest): Promise<NextResponse> { return save(request, true); }
+export async function PATCH(request: NextRequest): Promise<NextResponse> { return save(request, false); }

@@ -17,6 +17,8 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
 
   const { clientId } = await context.params;
   const requestUrl = new URL(request.url);
+  const coreOnly = requestUrl.searchParams.get('mode') === 'core';
+  const omitted = Promise.resolve({ data: [], error: null });
   const timelineLimitParam = Number(requestUrl.searchParams.get('timelineLimit') ?? '120');
   const activityLimitParam = Number(requestUrl.searchParams.get('activityLimit') ?? '80');
   const timelineLimit = Number.isFinite(timelineLimitParam)
@@ -58,14 +60,15 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     filesRes,
     tagsRes,
     activitiesRes,
+    linkedLeads,
   ] = await Promise.all([
     supabase
       .from('policies')
-      .select('id,client_id,account_id,insured_name,carrier,line_of_business,sub_type,premium,policy_number,effective_date,renewal_date,expiration_date,status,billing_type,source,prior_policy_id,created_at')
+      .select('id,client_id,account_id,insured_name,carrier,line_of_business,sub_type,premium,policy_number,effective_date,renewal_date,expiration_date,status,billing_type,source,prior_policy_id,created_at,quote_option_id,quote_snapshot')
       .eq('client_id', clientId)
       .order('created_at', { ascending: false })
       .limit(200),
-    supabase
+    coreOnly ? omitted : supabase
       .from('communication_log')
       .select('*')
       .eq('client_id', clientId)
@@ -83,7 +86,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       .eq('client_id', clientId)
       .order('created_at', { ascending: false })
       .limit(Math.max(50, Math.floor(timelineLimit / 2))),
-    supabase
+    coreOnly ? omitted : supabase
       .from('tasks')
       .select('*')
       .or(`account_id.eq.${clientId},and(related_type.eq.client,related_id.eq.${clientId})`)
@@ -122,7 +125,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       .order('created_at', { ascending: false })
       .limit(100),
     supabase.from('client_assets').select('id,client_id,lead_id,title,asset_type,value,metadata,archived_at,created_at,updated_at').eq('client_id', clientId).is('archived_at', null).order('updated_at', { ascending: false }).limit(200),
-    supabase.from('client_files').select('id,client_id,file_name,file_url,file_type,file_size,status,metadata,uploaded_at,created_at').eq('client_id', clientId).order('uploaded_at', { ascending: false }).limit(200),
+    coreOnly ? omitted : supabase.from('client_files').select('id,client_id,file_name,file_url,file_type,file_size,status,metadata,uploaded_at,created_at').eq('client_id', clientId).order('uploaded_at', { ascending: false }).limit(200),
     supabase.from('client_tags').select('id,client_id,tag,color,created_at').eq('client_id', clientId).order('created_at', { ascending: false }).limit(200),
     supabase
       .from('client_activities')
@@ -130,6 +133,9 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       .eq('client_id', clientId)
       .order('occurred_at', { ascending: false })
       .limit(activityLimit),
+    supabase.from('leads')
+      .select('id,full_name,phone,email,line_of_business,source,status,created_at,last_viewed_at,last_activity_at')
+      .eq('account_id', clientId).order('created_at', { ascending: false }).limit(200),
   ]);
 
   const namedResponses = {
@@ -148,6 +154,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     files: filesRes,
     tags: tagsRes,
     activities: activitiesRes,
+    leads: linkedLeads,
   };
 
   for (const [key, result] of Object.entries(namedResponses)) {
@@ -156,14 +163,10 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     }
   }
 
-  const linkedLeads = await supabase.from('leads')
-    .select('id,full_name,phone,email,line_of_business,source,status,created_at,last_viewed_at,last_activity_at')
-    .eq('account_id', clientId).order('created_at', { ascending: false }).limit(200);
-  if (linkedLeads.error) return NextResponse.json({ message: linkedLeads.error.message }, { status: 500 });
-
   return NextResponse.json(
     {
       client,
+      ...(coreOnly ? { omitted_sections: ['communications', 'timelineTasks', 'files'] } : {}),
       policies: policiesRes.data ?? [],
       leads: linkedLeads.data ?? [],
       communications: communicationsRes.data ?? [],
