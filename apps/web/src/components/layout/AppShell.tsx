@@ -1,10 +1,11 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import AppHeader from './AppHeader';
 import AppSidebar from './AppSidebar';
 import NewLeadBanner from './NewLeadBanner';
-import RashiWidget from '../rashi/rashi-widget';
+const RashiWidget = dynamic(() => import('../rashi/rashi-widget'), { ssr: false });
 
 export default function AppShell({ children }: { children: React.ReactNode }): JSX.Element {
   const pathname = usePathname();

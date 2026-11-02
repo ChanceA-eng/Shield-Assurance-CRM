@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { arizonaDateTimeInput, arizonaInputToIso, nextArizonaBusinessMorning } from './arizona-time';
-import { writeNotification } from './automation';
 
 /** Renewal work starts this many days before the renewal date. */
 export const RENEWAL_WINDOW_DAYS = 45;
@@ -86,21 +85,30 @@ export function renewalTaskDue(renewalDate: string, now: Date): string {
 export async function runRenewalRadar(
   supabase: SupabaseClient,
   now = new Date(),
+  policyId?: string,
 ): Promise<{ policies: number; tasksCreated: number; tasksEscalated: number; notifications: number }> {
   const today = arizonaToday(now);
   const result = { policies: 0, tasksCreated: 0, tasksEscalated: 0, notifications: 0 };
 
   const from = addDays(today, -RENEWAL_GRACE_DAYS);
   const to = addDays(today, RENEWAL_WINDOW_DAYS);
-  const { data, error } = await supabase
+  const reconciliation = await supabase.rpc('reconcile_legacy_renewal_tasks', { p_policy_id: policyId ?? null });
+  if (reconciliation.error) throw new Error(`Renewal reconciliation: ${reconciliation.error.message}`);
+  let query = supabase
     .from('policies')
     .select('id,client_id,account_id,insured_name,carrier,line_of_business,policy_number,premium,renewal_date,expiration_date,status')
     .or(`and(renewal_date.gte.${from},renewal_date.lte.${to}),and(renewal_date.is.null,expiration_date.gte.${from},expiration_date.lte.${to})`)
-    .in('status', ['active', 'issued', 'bound', 'in_force', 'inforce', 'Active', 'Issued', 'Bound'])
-    .limit(500);
-  if (error) throw new Error(error.message);
+    .in('status', ['active', 'issued', 'bound', 'in_force', 'inforce', 'Active', 'Issued', 'Bound']);
+  if (policyId) query = query.eq('id', policyId);
+  const policies: RenewalPolicy[] = [];
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await query.order('id').range(offset, offset + 499);
+    if (error) throw new Error(`Renewal policy lookup: ${error.message}`);
+    policies.push(...(data ?? []) as RenewalPolicy[]);
+    if (!data || data.length < 500) break;
+  }
 
-  for (const policy of (data ?? []) as RenewalPolicy[]) {
+  for (const policy of policies) {
     const accountId = policy.client_id ?? policy.account_id;
     const renewalDate = renewalDateOf(policy);
     if (!accountId || !renewalDate) continue;
@@ -113,19 +121,10 @@ export async function runRenewalRadar(
     const name = policy.insured_name?.trim() || 'Policy';
     const priority = renewalPriority(daysUntil);
 
-    const existing = await supabase
-      .from('tasks')
-      .select('id,status,priority')
-      .eq('related_type', 'client')
-      .eq('related_id', accountId)
-      .ilike('description', `%${marker}%`)
-      .limit(1);
-    const task = (existing.data ?? [])[0] as { id: string; status: string; priority: string } | undefined;
-
-    if (!task) {
-      const premium = policy.premium !== null && policy.premium !== '' ? `$${Number(policy.premium).toLocaleString('en-US')}` : null;
-      const { error: insertError } = await supabase.from('tasks').insert([
-        {
+    const premium = policy.premium !== null && policy.premium !== '' ? `$${Number(policy.premium).toLocaleString('en-US')}` : null;
+    const persisted = await supabase.rpc('persist_renewal_radar', {
+      p_policy_id: policy.id, p_renewal_date: renewalDate, p_milestone: milestone,
+      p_task: {
           subject: `Renewal review for ${name}${policy.carrier ? ` (${policy.carrier})` : ''} - ${renewalLabel(daysUntil)}`,
           description: [
             `${[policy.carrier, policy.line_of_business].filter(Boolean).join(' ') || 'Policy'}${policy.policy_number ? ` #${policy.policy_number}` : ''} renews ${renewalDate}.`,
@@ -139,26 +138,14 @@ export async function runRenewalRadar(
           kind: 'task',
           related_type: 'client',
           related_id: accountId,
-        },
-      ]);
-      if (!insertError) result.tasksCreated += 1;
-    } else if (task.status === 'open' && priority === 'high' && task.priority !== 'high') {
-      const { error: updateError } = await supabase.from('tasks').update({ priority: 'high' }).eq('id', task.id);
-      if (!updateError) result.tasksEscalated += 1;
-    }
-
-    const message = renewalMilestoneMessage(policy, renewalDate, milestone);
-    const href = `/clients/${accountId}?tab=policies`;
-    const already = await supabase
-      .from('notifications')
-      .select('id')
-      .eq('type', 'renewal')
-      .eq('message', message)
-      .limit(1);
-    if ((already.data ?? []).length === 0) {
-      await writeNotification({ client_id: accountId, type: 'renewal', message, href });
-      result.notifications += 1;
-    }
+      },
+      p_message: renewalMilestoneMessage(policy, renewalDate, milestone),
+    });
+    if (persisted.error) throw new Error(`Renewal ${policy.id}: ${persisted.error.message}`);
+    const counts = persisted.data as { tasksCreated: number; tasksEscalated: number; notifications: number };
+    result.tasksCreated += counts.tasksCreated;
+    result.tasksEscalated += counts.tasksEscalated;
+    result.notifications += counts.notifications;
   }
 
   return result;

@@ -25,7 +25,7 @@ export function workspaceApiError(error: unknown, label: string): NextResponse {
 
 export function databaseError(error: { message: string; code?: string }): WorkspaceError {
   const status = error.code === 'P0002' ? 404
-    : error.code === '23505' ? 409
+    : ['23505', '40001'].includes(error.code ?? '') ? 409
       : ['23514', '23503', '22023', '22007'].includes(error.code ?? '') ? 400 : 500;
   return new WorkspaceError(error.message, status);
 }

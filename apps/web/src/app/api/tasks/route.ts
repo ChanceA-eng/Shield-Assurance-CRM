@@ -7,6 +7,7 @@ import { endOfArizonaDay } from '../../../lib/arizona-time';
 import { absoluteDateTime, isUuid } from '../../../lib/workspace-validation';
 import { namedTaskSubject, resolveRecordScope, taskFilter, WorkspaceError } from '../../../lib/record-scope';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../lib/workspace-api';
+import { taskRecordHref } from '../../../lib/task-links';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -51,7 +52,35 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const rows = (data ?? []) as WorkspaceTask[];
     if (params.get('include') === 'related' && rows.length) {
       const leadIds = [...new Set(rows.filter((row) => row.related_type === 'lead' && row.related_id).map((row) => row.related_id!))];
-      const clientIds = [...new Set(rows.filter((row) => row.related_type === 'client' && row.related_id).map((row) => row.related_id!))];
+      const accountByTask = new Map<string, string>();
+      const eventNames = new Map<string, string>();
+      for (const [relatedType, table] of [
+        ['policy', 'policies'], ['renewal_pipeline', 'policies'], ['claim', 'claims'],
+        ['endorsement', 'endorsements'], ['certificate', 'certificates'],
+      ] as const) {
+        const ids = rows.filter((row) => row.related_type === relatedType && row.related_id).map((row) => row.related_id!);
+        if (!ids.length) continue;
+        const result = await supabase.from(table).select('id,client_id').in('id', ids);
+        if (result.error) throw databaseError(result.error);
+        for (const row of rows.filter((item) => item.related_type === relatedType)) {
+          const record = result.data?.find((item) => item.id === row.related_id);
+          if (record?.client_id) accountByTask.set(row.id, record.client_id);
+        }
+      }
+      const eventIds = rows.filter((row) => row.related_type === 'event' && row.related_id).map((row) => row.related_id!);
+      if (eventIds.length) {
+        const events = await supabase.from('events').select('id,title,subject,client_id').in('id', eventIds);
+        if (events.error) throw databaseError(events.error);
+        for (const event of events.data ?? []) {
+          eventNames.set(event.id, event.title || event.subject || 'Appointment');
+          const task = rows.find((row) => row.related_type === 'event' && row.related_id === event.id);
+          if (task && event.client_id) accountByTask.set(task.id, event.client_id);
+        }
+      }
+      const clientIds = [...new Set(rows.flatMap((row) => {
+        const id = row.related_type === 'client' ? row.related_id : accountByTask.get(row.id) ?? row.account_id;
+        return id ? [id] : [];
+      }))];
       const [leads, clients] = await Promise.all([
         leadIds.length ? supabase.from('leads').select('id,full_name,status').in('id', leadIds) : Promise.resolve({ data: [], error: null }),
         clientIds.length ? supabase.from('clients').select('id,full_name').in('id', clientIds) : Promise.resolve({ data: [], error: null }),
@@ -61,10 +90,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       const names = new Map<string, { name: string; status?: string }>();
       for (const lead of leads.data ?? []) names.set(`lead:${lead.id}`, { name: lead.full_name, status: lead.status });
       for (const client of clients.data ?? []) names.set(`client:${client.id}`, { name: client.full_name });
-      return NextResponse.json(rows.map((row) => ({
-        ...row, related_name: names.get(`${row.related_type}:${row.related_id}`)?.name ?? null,
-        related_status: names.get(`${row.related_type}:${row.related_id}`)?.status ?? null,
-      })), { headers: { 'X-Total-Count': String(count ?? 0) } });
+      return NextResponse.json(rows.map((row) => {
+        const accountId = accountByTask.get(row.id) ?? row.account_id;
+        const record = names.get(`${row.related_type}:${row.related_id}`) ?? names.get(`client:${accountId}`);
+        return {
+          ...row, account_id: accountId, related_name: record?.name ?? eventNames.get(row.related_id ?? '') ?? null,
+          related_status: record?.status ?? null, related_href: taskRecordHref({ ...row, account_id: accountId }),
+        };
+      }), { headers: { 'X-Total-Count': String(count ?? 0) } });
     }
     return NextResponse.json(rows, { headers: { 'X-Total-Count': String(count ?? 0) } });
   } catch (error) {
@@ -91,6 +124,12 @@ function dueOf(value: unknown): string | null {
   const due = absoluteDateTime(value);
   if (!due) throw new WorkspaceError('Choose a valid task date and time.', 400);
   return due;
+}
+
+function assigneeOf(value: unknown): string | null {
+  if (value === null || value === '') return null;
+  if (typeof value !== 'string' || value.trim().length > 120 || !value.trim()) throw new WorkspaceError('Enter an assignee name of at most 120 characters, or leave unassigned.', 400);
+  return value.trim();
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -121,6 +160,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       id, subject, description: typeof body.description === 'string' ? body.description.trim() || null : null,
       due_date: due, kind, status: statusOf(body.status ?? 'open'), priority: priorityOf(body.priority ?? 'medium'),
       related_type: relatedType, related_id: relatedId, account_id: accountId, created_by: apiActorName(session.user),
+      assignee: assigneeOf(body.assignee ?? null),
     };
     const { data, error } = await supabase.from('tasks').insert(input).select('*').single<WorkspaceTask>();
     if (error?.code === '23505') {
@@ -128,6 +168,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (existing.error) throw databaseError(existing.error);
       if (existing.data?.subject === subject && existing.data.related_type === relatedType && existing.data.related_id === relatedId
         && existing.data.kind === kind && existing.data.description === input.description && existing.data.priority === input.priority
+        && (existing.data.assignee ?? null) === input.assignee
         && (due === null ? existing.data.due_date === null : absoluteDateTime(existing.data.due_date) === due)) {
         return NextResponse.json(existing.data);
       }
@@ -155,6 +196,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     if (body.status !== undefined) updates.status = statusOf(body.status);
     if (body.priority !== undefined) updates.priority = priorityOf(body.priority);
     if (body.due_date !== undefined) updates.due_date = dueOf(body.due_date);
+    if (body.assignee !== undefined) updates.assignee = assigneeOf(body.assignee);
     if (body.subject !== undefined) {
       if (typeof body.subject !== 'string' || !body.subject.trim() || body.subject.length > 240) throw new WorkspaceError('Enter a valid task action.', 400);
       updates.subject = body.subject.trim();

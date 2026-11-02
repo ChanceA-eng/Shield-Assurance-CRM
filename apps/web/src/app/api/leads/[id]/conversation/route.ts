@@ -51,17 +51,17 @@ export async function GET(
   }
 
   const clientId = lead.account_id;
+  const offset = Number(request.nextUrl.searchParams.get('offset') ?? '0');
+  if (!Number.isSafeInteger(offset) || offset < 0) return NextResponse.json({ message: 'Choose a valid message page.' }, { status: 400 });
 
   // Messages from a lead with no account yet are tagged with metadata.lead_id by the inbound webhooks.
-  const query = supabase.from('communication_log').select('*');
-  const filtered = clientId
-    ? query.or(`client_id.eq.${clientId},metadata->>lead_id.eq.${lead.id}`)
-    : query.eq('metadata->>lead_id', lead.id);
-  const { data, error } = await filtered.order('sent_at', { ascending: false }).limit(100);
+  const { data, count, error } = await supabase.from('canonical_communications').select('*', { count: 'exact' })
+    .eq('conversation_key', clientId ? `client:${clientId}` : `lead:${lead.id}`)
+    .order('sent_at', { ascending: false }).order('id', { ascending: false }).range(offset, offset + 99);
 
   if (error) {
     return NextResponse.json({ message: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ clientId, items: data ?? [] }, { status: 200 });
+  return NextResponse.json({ clientId, items: data ?? [], total: count ?? 0, nextOffset: offset + (data?.length ?? 0) < (count ?? 0) ? offset + (data?.length ?? 0) : null }, { status: 200 });
 }

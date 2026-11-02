@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../lib/api-auth';
-import { isArizonaWeekend, nextArizonaBusinessMorning, startOfArizonaDay } from '../../../../lib/arizona-time';
 import { processDueEnrollments } from '../../../../lib/outreach-engine';
 import { runRenewalRadar } from '../../../../lib/renewal-automation';
 import { applyResubmission } from '../../../../lib/resubmission';
 import { scheduleIntakeTask } from '../../../../lib/intake-task';
 import { sourceSubmissionId } from '../../../../lib/website-intake';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { trackedAutomation, type AutomationRun } from '../../../../lib/automation-health';
 
 export const runtime = 'nodejs';
 
@@ -27,10 +28,7 @@ function isAuthorizedCron(request: NextRequest): boolean {
 
   if (cronSecret && bearer === cronSecret) return true;
 
-  const userAgent = (request.headers.get('user-agent') ?? '').toLowerCase();
-  if (userAgent.includes('vercel-cron')) return true;
-
-  return !cronSecret;
+  return false;
 }
 
 function asString(value: unknown): string | null {
@@ -119,103 +117,6 @@ function normalizeExternalLead(lead: Record<string, unknown>): SyncLeadRecord {
   };
 }
 
-interface RoutineLeadRow {
-  id: string;
-  full_name: string;
-  status: string | null;
-}
-
-/** Stage-aware wording so every task names the person and the actual next step. */
-function followUpTaskFor(lead: RoutineLeadRow): { subject: string; description: string } {
-  const name = lead.full_name?.trim() || 'this prospect';
-  const status = (lead.status ?? 'new').toLowerCase();
-  if (status === 'quoted') {
-    return {
-      subject: `Follow up on ${name}'s quote`,
-      description: `${name} has a quote in hand but hasn't moved. Ask where they stand and what it would take to close.`,
-    };
-  }
-  if (status === 'contacted') {
-    return {
-      subject: `Follow up with ${name}`,
-      description: `You've already reached out to ${name} — keep the conversation moving with a call or a short note.`,
-    };
-  }
-  return {
-    subject: `Make first contact with ${name}`,
-    description: `${name} is still untouched in your pipeline. Introduce yourself and qualify their interest.`,
-  };
-}
-
-async function enforceDefaultFollowUpRoutine(): Promise<{ created: number }> {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return { created: 0 };
-  }
-
-  const now = new Date();
-  if (isArizonaWeekend(now)) {
-    return { created: 0 };
-  }
-
-  const { data: leads, error: leadsError } = await supabase
-    .from('leads')
-    .select('id,full_name,status')
-    .in('status', ['new', 'contacted', 'quoted']);
-
-  if (leadsError || !leads || leads.length === 0) {
-    return { created: 0 };
-  }
-
-  // Skip leads that already have an open scheduled task.
-  const { data: existingRows, error: existingError } = await supabase
-    .from('tasks')
-    .select('related_id')
-    .eq('status', 'open')
-    .eq('related_type', 'lead')
-    .not('due_date', 'is', null)
-    .gte('due_date', startOfArizonaDay(now).toISOString());
-
-  if (existingError) {
-    return { created: 0 };
-  }
-
-  const existingLeadIds = new Set(
-    (existingRows ?? [])
-      .map((row) => asString((row as { related_id?: unknown }).related_id))
-      .filter((value): value is string => Boolean(value)),
-  );
-
-  const targetDate = nextArizonaBusinessMorning(now);
-
-  const inserts = (leads as RoutineLeadRow[])
-    .filter((lead) => !existingLeadIds.has(lead.id))
-    .map((lead) => {
-      const wording = followUpTaskFor(lead);
-      return {
-        subject: wording.subject,
-        description: wording.description,
-        due_date: targetDate.toISOString(),
-        status: 'open',
-        priority: 'medium',
-        related_type: 'lead',
-        related_id: lead.id,
-        created_at: now.toISOString(),
-      };
-    });
-
-  if (inserts.length === 0) {
-    return { created: 0 };
-  }
-
-  const { error: insertError } = await supabase.from('tasks').insert(inserts);
-  if (insertError) {
-    return { created: 0 };
-  }
-
-  return { created: inserts.length };
-}
-
 /**
  * The export returns ALL submissions every time, so each one is identified by
  * its website id (falling back to its submission timestamp). A submission is
@@ -225,38 +126,7 @@ function externalIdOf(payload: Record<string, unknown>): string | null {
   return sourceSubmissionId(payload);
 }
 
-export async function GET(request: NextRequest): Promise<NextResponse> {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  }
-
-  // Scheduled runs authorize via CRON_SECRET/vercel-cron; a logged-in producer
-  // can also trigger a pull on demand by visiting this route.
-  if (!isAuthorizedCron(request)) {
-    const sessionError = await requireApiSession(request);
-    if (sessionError) return sessionError;
-  }
-
-  const followUpRoutine = await enforceDefaultFollowUpRoutine();
-
-  // Piggyback the outreach engine on the daily cron so due sequence steps get
-  // drafted even if nobody presses "Run engine now" (best-effort).
-  try {
-    const outreach = await processDueEnrollments(supabase);
-    console.log('[cron/sync-leads] outreach engine', outreach);
-  } catch (error) {
-    console.error('[cron/sync-leads] outreach engine failed', error);
-  }
-
-  // Renewal radar: internal tasks + milestone notifications for policies renewing within 45 days.
-  try {
-    const renewals = await runRenewalRadar(supabase);
-    console.log('[cron/sync-leads] renewal radar', renewals);
-  } catch (error) {
-    console.error('[cron/sync-leads] renewal radar failed', error);
-  }
-
+async function syncWebsite(supabase: SupabaseClient): Promise<NextResponse> {
   const exportUrl = process.env.WEBSITE_LEADS_EXPORT_URL?.trim() || 'https://www.shield-assurance.com/api/export-submissions';
   const syncToken = process.env.WEBSITE_SYNC_TOKEN?.trim();
 
@@ -268,7 +138,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         inserted: 0,
         resubmissions: 0,
         skippedExisting: 0,
-        followUpsCreated: followUpRoutine.created,
         syncSkipped: 'WEBSITE_SYNC_TOKEN is not configured.',
       },
       { status: 200 },
@@ -296,7 +165,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   if (externalLeads.length === 0) {
     return NextResponse.json(
-      { ok: true, pulled: 0, inserted: 0, resubmissions: 0, skippedExisting: 0, followUpsCreated: followUpRoutine.created },
+      { ok: true, pulled: 0, inserted: 0, resubmissions: 0, skippedExisting: 0 },
       { status: 200 },
     );
   }
@@ -389,9 +258,47 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       inserted,
       resubmissions,
       skippedExisting,
-      followUpsCreated: followUpRoutine.created,
       ...(errors.length > 0 ? { errors: errors.slice(0, 5) } : {}),
     },
     { status: 200 },
   );
+}
+
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!isAuthorizedCron(request)) {
+    const error = await requireApiSession(request);
+    if (error) return error;
+  }
+  const runs: AutomationRun[] = [];
+  try {
+    runs.push(await trackedAutomation(supabase, 'follow-up-routine', async () => {
+      const result = await supabase.rpc('ensure_default_followups');
+      if (result.error) throw new Error(result.error.message);
+      return { status: 'succeeded', summary: { created: result.data } };
+    }));
+    runs.push(await trackedAutomation(supabase, 'outreach', async () => ({ status: 'succeeded', summary: await processDueEnrollments(supabase) })));
+    runs.push(await trackedAutomation(supabase, 'renewal-radar', async () => ({ status: 'succeeded', summary: await runRenewalRadar(supabase) })));
+    runs.push(await trackedAutomation(supabase, 'website-intake', async () => {
+      const response = await syncWebsite(supabase);
+      const result = await response.json() as Record<string, unknown>;
+      if (!response.ok) throw new Error(typeof result.message === 'string' ? result.message : 'Website pull failed.');
+      return {
+        status: result.syncSkipped ? 'skipped' : result.ok === false ? 'partial' : 'succeeded',
+        summary: result,
+        error: typeof result.syncSkipped === 'string' ? result.syncSkipped : Array.isArray(result.errors) ? result.errors.join('; ') : undefined,
+      };
+    }));
+    runs.push(await trackedAutomation(supabase, 'internal-actions', async () => {
+      const result = await supabase.rpc('reconcile_internal_actions');
+      if (result.error) throw new Error(result.error.message);
+      return { status: 'succeeded', summary: result.data };
+    }));
+    const failures = runs.filter((run) => ['failed', 'partial', 'skipped'].includes(run.status));
+    return NextResponse.json({ ok: failures.length === 0, runs, ...(failures.length ? { message: failures.map((run) => `${run.job}: ${run.error ?? run.status}`).join('; ') } : {}) }, { status: failures.length ? 207 : 200 });
+  } catch (error) {
+    console.error('[cron/sync-leads]', error);
+    return NextResponse.json({ message: error instanceof Error ? error.message : 'Automation could not persist its result.', runs }, { status: 500 });
+  }
 }

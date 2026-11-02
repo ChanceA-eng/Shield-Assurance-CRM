@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { requireApiSession } from '../../../lib/api-auth';
 import { getOutreachSettings, sentTodayCount } from '../../../lib/outreach-engine';
+import { isUuid } from '../../../lib/workspace-validation';
+import { parseOutreachSender } from '../../../lib/marketing-profile';
+import { workspaceApiError, workspaceBody } from '../../../lib/workspace-api';
 
 /** Outreach command center payload: settings, pending approvals, enrollments, counters. */
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -11,7 +14,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
 
-  const [settings, sentToday, pendingRes, enrollmentsRes, recentRes, optOutsRes] = await Promise.all([
+  const statuses = ['sent', 'failed', 'sending', 'acceptance_unknown', 'accepted_by_provider'];
+  const filter = request.nextUrl.searchParams.get('recent_status') ?? 'all';
+  const attempt = request.nextUrl.searchParams.get('attempt');
+  if (attempt !== null && !isUuid(attempt)) return NextResponse.json({ message: 'Choose a valid outreach attempt.' }, { status: 400 });
+  if (filter !== 'all' && !statuses.includes(filter)) {
+    return NextResponse.json({ message: 'Unknown outreach activity status.' }, { status: 400 });
+  }
+  try {
+  const [settings, sentToday, pendingRes, enrollmentsRes, recentRes, optOutsRes, selectedRes] = await Promise.all([
     getOutreachSettings(supabase),
     sentTodayCount(supabase),
     supabase
@@ -29,15 +40,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     supabase
       .from('outreach_outbox')
       .select('id,lead_id,step_number,subject,status,sent_at,error,created_at')
-      .in('status', ['sent', 'failed'])
+      .in('status', filter === 'all' ? statuses : [filter])
       .order('created_at', { ascending: false })
       .limit(25),
     supabase.from('outreach_opt_outs').select('email', { count: 'exact', head: true }),
+    attempt ? supabase.from('outreach_outbox').select('*').eq('id', attempt).maybeSingle() : Promise.resolve({ data: null, error: null }),
   ]);
+  for (const result of [pendingRes, enrollmentsRes, recentRes, optOutsRes, selectedRes]) {
+    if (result.error) throw new Error(result.error.message);
+  }
 
   const pending = pendingRes.data ?? [];
   const enrollments = enrollmentsRes.data ?? [];
   const recent = recentRes.data ?? [];
+  if (attempt && !selectedRes.data) return NextResponse.json({ message: 'This outreach attempt no longer exists.' }, { status: 404 });
+  if (selectedRes.data?.status === 'pending_approval' && !pending.some((row) => row.id === attempt)) pending.unshift(selectedRes.data);
+  if (selectedRes.data && selectedRes.data.status !== 'pending_approval' && !recent.some((row) => row.id === attempt)) recent.unshift(selectedRes.data);
 
   // Resolve lead names in one query.
   const leadIds = Array.from(
@@ -45,7 +63,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   );
   const names = new Map<string, { full_name: string; status: string | null }>();
   if (leadIds.length > 0) {
-    const { data: leads } = await supabase.from('leads').select('id,full_name,status').in('id', leadIds);
+    const { data: leads, error } = await supabase.from('leads').select('id,full_name,status').in('id', leadIds);
+    if (error) throw new Error(error.message);
     for (const lead of leads ?? []) names.set(lead.id as string, { full_name: lead.full_name, status: lead.status });
   }
   const withLead = <T extends { lead_id: string }>(rows: T[]): Array<T & { lead_name: string; lead_status: string | null }> =>
@@ -66,6 +85,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     },
     { status: 200 },
   );
+  } catch (error) {
+    return NextResponse.json({ message: error instanceof Error ? error.message : 'Outreach data could not be loaded.' }, { status: 500 });
+  }
 }
 
 /** Updates outreach settings. */
@@ -76,20 +98,30 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
 
-  const payload = (await request.json().catch(() => ({}))) as {
-    approval_mode?: boolean;
-    daily_send_cap?: number;
-    send_window_start?: number;
-    send_window_end?: number;
-  };
-
+  try {
+  const payload = await workspaceBody(request);
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (typeof payload.approval_mode === 'boolean') update.approval_mode = payload.approval_mode;
-  if (Number.isInteger(payload.daily_send_cap) && (payload.daily_send_cap as number) > 0) update.daily_send_cap = payload.daily_send_cap;
-  if (Number.isInteger(payload.send_window_start)) update.send_window_start = payload.send_window_start;
-  if (Number.isInteger(payload.send_window_end)) update.send_window_end = payload.send_window_end;
+  for (const [field, min, max] of [['daily_send_cap', 1, 200], ['send_window_start', 0, 23], ['send_window_end', 1, 24]] as const) {
+    if (payload[field] !== undefined) {
+      const value = payload[field];
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+        return NextResponse.json({ message: `${field} must be an integer between ${min} and ${max}.` }, { status: 400 });
+      }
+      update[field] = value;
+    }
+  }
+  const current = await getOutreachSettings(supabase);
+  if (Number(update.send_window_start ?? current.send_window_start) >= Number(update.send_window_end ?? current.send_window_end)) {
+    return NextResponse.json({ message: 'Send window end must be after its start.' }, { status: 400 });
+  }
+  if (payload.sender_profile !== undefined) update.sender_profile = parseOutreachSender(payload.sender_profile);
 
-  const { error } = await supabase.from('outreach_settings').update(update).eq('id', 1);
+  const { data, error } = await supabase.from('outreach_settings').update(update).eq('id', 1).select('id').single();
   if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+  if (!data) return NextResponse.json({ message: 'Outreach settings were not saved.' }, { status: 500 });
   return NextResponse.json({ ok: true }, { status: 200 });
+  } catch (error) {
+    return workspaceApiError(error, 'outreach/settings');
+  }
 }

@@ -1,6 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { createSupabaseBrowserAuthClient } from '../lib/supabase-auth-browser';
 import { workspaceFetch } from '../lib/workspace-fetch';
 
@@ -43,6 +44,9 @@ export const MESSAGES_READ_EVENT = 'crm:messages-read';
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
 export function NotificationProvider({ children }: { children: React.ReactNode }): JSX.Element {
+  const pathname = usePathname();
+  const refreshing = useRef<Promise<void> | null>(null);
+  const refreshPending = useRef(false);
   const [overdueCount, setOverdueCount] = useState(0);
   const [dueTodayCount, setDueTodayCount] = useState(0);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -60,24 +64,34 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, []);
 
   const refresh = async (): Promise<void> => {
-    void workspaceFetch<UnreadMessageCounts>('/api/communication-log/unread')
-      .then((counts) => setUnreadMessages(counts))
-      .catch(() => undefined);
-    try {
-      const [overdue, due, feed, unread] = await Promise.all([
-        workspaceFetch<{ count: number }>('/api/tasks?status=overdue&count=true'),
-        workspaceFetch<{ count: number }>('/api/tasks?status=open&due=today&count=true'),
-        workspaceFetch<NotificationItem[]>('/api/notifications'),
-        workspaceFetch<{ count: number }>('/api/notifications?count=true'),
-      ]);
-      setOverdueCount(overdue.count);
-      setDueTodayCount(due.count);
-      setNotifications(feed);
-      setUnreadCount(unread.count);
-      setRefreshError(null);
-    } catch (failure) {
-      setRefreshError(failure instanceof Error ? failure.message : 'Unable to refresh notifications.');
+    if (pathname === '/login') return;
+    if (refreshing.current) {
+      refreshPending.current = true;
+      return refreshing.current;
     }
+    refreshing.current = (async () => {
+      do {
+        refreshPending.current = false;
+        try {
+          const [overdue, due, feed, unread, messages] = await Promise.all([
+            workspaceFetch<{ count: number }>('/api/tasks?status=overdue&count=true'),
+            workspaceFetch<{ count: number }>('/api/tasks?status=open&due=today&count=true'),
+            workspaceFetch<NotificationItem[]>('/api/notifications'),
+            workspaceFetch<{ count: number }>('/api/notifications?count=true'),
+            workspaceFetch<UnreadMessageCounts>('/api/communication-log/unread'),
+          ]);
+          setOverdueCount(overdue.count);
+          setDueTodayCount(due.count);
+          setNotifications(feed);
+          setUnreadCount(unread.count);
+          setUnreadMessages(messages);
+          setRefreshError(null);
+        } catch (failure) {
+          setRefreshError(failure instanceof Error ? failure.message : 'Unable to refresh notifications.');
+        }
+      } while (refreshPending.current);
+    })();
+    try { await refreshing.current; } finally { refreshing.current = null; }
   };
 
   const markRead = async (id: string): Promise<void> => {
@@ -107,6 +121,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   };
 
   useEffect(() => {
+    if (pathname === '/login') return;
     void refresh();
 
     const intervalId = window.setInterval(() => {
@@ -137,7 +152,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         void supabase.removeChannel(channel);
       }
     };
-  }, [supabase]);
+  }, [supabase, pathname === '/login']);
 
   return (
     <NotificationContext.Provider value={{ overdueCount, dueTodayCount, notifications, unreadCount, unreadMessages, refreshError, refresh, markRead, markAllRead }}>

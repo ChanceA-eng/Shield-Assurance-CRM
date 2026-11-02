@@ -1,5 +1,6 @@
 import { getSupabaseServerClient } from './supabase-server';
-import { sendEmail } from './messaging';
+import { sendOutboundEmail } from './email-adapter';
+import { resolveOutboundEmailRecipient } from './message-delivery';
 import { appendAgencySignature } from './agency-signature';
 import { LEAD_STATUS_LABELS, type LeadStatus } from './lead-pipeline';
 
@@ -34,30 +35,20 @@ function daysBeforeISO(isoDate: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-function isMissingColumnError(message: string | undefined): boolean {
-  if (!message) return false;
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes('column') ||
-    normalized.includes('schema cache') ||
-    normalized.includes('does not exist') ||
-    normalized.includes('relation')
-  );
-}
-
 async function safeInsert(table: string, rows: Record<string, unknown>[]): Promise<void> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return;
+  if (!supabase) throw new Error('Supabase is not configured for automation.');
 
   const result = await supabase.from(table).insert(rows);
-  if (result.error && !isMissingColumnError(result.error.message)) {
-    throw result.error;
+  if (result.error) {
+    console.error(`[automation/${table}]`, result.error.message);
+    throw new Error(`Automation could not persist ${table}: ${result.error.message}`);
   }
 }
 
 export async function getClientPreferences(clientId: string): Promise<ClientPreferences | null> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return null;
+  if (!supabase) throw new Error('Supabase is not configured for account automation.');
 
   const { data, error } = await supabase
     .from('clients')
@@ -65,7 +56,7 @@ export async function getClientPreferences(clientId: string): Promise<ClientPref
     .eq('id', clientId)
     .maybeSingle();
 
-  if (error) return null;
+  if (error) throw new Error(`Account automation preferences could not load: ${error.message}`);
   return data ?? null;
 }
 
@@ -75,7 +66,6 @@ export async function writeNotification(input: {
   message: string;
   href?: string | null;
 }): Promise<void> {
-  try {
     await safeInsert('notifications', [
       {
         client_id: input.client_id ?? null,
@@ -85,26 +75,21 @@ export async function writeNotification(input: {
         read: false,
       },
     ]);
-  } catch {
-    // Intentionally swallow: notifications are best-effort until schema is finalized.
-  }
 }
 
 export async function writeCommunicationLog(input: AutomationLogInput): Promise<void> {
-  try {
     await safeInsert('communication_log', [
       {
         client_id: input.client_id ?? null,
         channel: input.channel,
+        direction: 'outbound',
+        metadata: input.channel === 'email' ? { delivery_status: 'accepted_by_provider' } : {},
         subject: input.subject,
         body: input.body,
         automation_type: input.automation_type,
         sent_at: new Date().toISOString(),
       },
     ]);
-  } catch {
-    // Best-effort audit trail.
-  }
 }
 
 export async function queueInternalAction(input: {
@@ -116,9 +101,14 @@ export async function queueInternalAction(input: {
   relatedId?: string | null;
 }): Promise<void> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return;
+  if (!supabase) throw new Error('Supabase is not configured for task automation.');
 
-  await supabase.from('tasks').insert([
+  if (input.relatedId && ['claim', 'endorsement', 'certificate'].includes(input.relatedType ?? '')) {
+    const result = await supabase.rpc('sync_service_action', { p_kind: input.relatedType, p_id: input.relatedId });
+    if (result.error) throw new Error(`Could not synchronize the service task: ${result.error.message}`);
+    return;
+  }
+  const result = await supabase.from('tasks').insert([
     {
       subject: input.title,
       due_date: input.dueDate ?? todayISO(),
@@ -126,8 +116,10 @@ export async function queueInternalAction(input: {
       status: 'open',
       related_type: input.relatedType ?? input.type,
       related_id: input.relatedId ?? input.clientId ?? null,
+      account_id: input.clientId ?? null,
     },
   ]);
+  if (result.error) throw new Error(`Could not create the automated task: ${result.error.message}`);
 }
 
 export async function queueEvent(input: {
@@ -214,7 +206,11 @@ async function sendEmailIfAllowed(client: ClientPreferences | null, subject: str
   const signedBody = appendAgencySignature(body, 'system');
 
   try {
-    await sendEmail({ to: client.email, subject, body: signedBody });
+    const db = getSupabaseServerClient();
+    if (!db) throw new Error('Supabase is not configured for consent checks.');
+    const target = await resolveOutboundEmailRecipient(db, { clientId: client.id });
+    if (!target.ok) throw new Error(target.message);
+    await sendOutboundEmail({ to: target.recipient.to, subject, body: signedBody });
     await writeCommunicationLog({
       client_id: client.id,
       channel: 'email',
@@ -234,12 +230,11 @@ async function sendEmailIfAllowed(client: ClientPreferences | null, subject: str
 
 async function sendSmsIfAllowed(client: ClientPreferences | null, body: string, automationType: AutomationType): Promise<void> {
   if (!client?.phone || !client.sms_consent) return;
-  await writeCommunicationLog({
+  await writeNotification({
     client_id: client.id,
-    channel: 'sms',
-    subject: 'SMS Notification',
-    body,
-    automation_type: automationType,
+    type: automationType,
+    href: `/clients/${client.id}?tab=communication`,
+    message: 'Automated text was not sent: outbound SMS is not connected. Contact this account by phone or email.',
   });
 }
 
@@ -262,7 +257,6 @@ export async function processClaimCreated(input: {
     relatedId: input.claimId,
   });
 
-  await writeNotification({ client_id: input.clientId, type: 'claim', message: body });
   await sendEmailIfAllowed(client, title, body, 'claim');
   await sendSmsIfAllowed(client, `Shield Assurance: ${body}`, 'claim');
 }
@@ -285,7 +279,6 @@ export async function processEndorsementCreated(input: {
     relatedId: input.endorsementId,
   });
 
-  await writeNotification({ client_id: input.clientId, type: 'endorsement', message: body });
   await sendEmailIfAllowed(client, 'Endorsement received', body, 'endorsement');
 }
 
@@ -301,12 +294,11 @@ export async function processCertificateCreated(input: {
   await writeNotification({ client_id: input.clientId, type: 'certificate', message: body });
   await sendEmailIfAllowed(client, 'Certificate issued', body, 'certificate');
   if (input.certificateHolder) {
-    await writeCommunicationLog({
+    await writeNotification({
       client_id: input.clientId,
-      channel: 'email',
-      subject: `Certificate sent to ${input.certificateHolder}`,
-      body: `Issued certificate for ${input.insuredName ?? 'policy'} sent to ${input.certificateHolder}.`,
-      automation_type: 'certificate',
+      type: 'certificate',
+      href: `/clients/${input.clientId}?tab=policies`,
+      message: `Certificate holder delivery is pending: ${input.certificateHolder}. No certificate was automatically sent to the holder.`,
     });
   }
 }

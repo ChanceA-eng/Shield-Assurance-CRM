@@ -5,6 +5,7 @@ import { recordOutreachContext } from '../../../../lib/lead-outreach-context';
 import { workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
 import { getApiSession, apiActorName } from '../../../../lib/api-auth';
 import { isUuid } from '../../../../lib/workspace-validation';
+import { isOutreachTemplate } from '@crm/shared';
 
 function normalize(value?: string | null): string {
   return (value ?? '').trim();
@@ -75,12 +76,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const channel = payload.channel ?? 'email';
   if (channel !== 'email' && channel !== 'sms') return NextResponse.json({ message: 'Choose email or SMS.' }, { status: 400 });
+  if (payload.template !== undefined && !isOutreachTemplate(payload.template)) return NextResponse.json({ message: 'Choose a valid email template.' }, { status: 400 });
 
   // Real AI drafting grounded on the client's policies and conversation history.
+  try {
   const aiDraft = await draftOutreach(
     {
       full_name: clientName,
       ...contextData,
+      channel,
       line_of_business: (policiesRes.data ?? []).find((row) => normalize(row.status).toLowerCase() === 'active')?.line_of_business ?? null,
       form_payload: {
         profile: {
@@ -95,6 +99,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       },
     },
     prompt,
+    isOutreachTemplate(payload.template) ? payload.template : undefined,
   );
 
   if (!aiDraft) return NextResponse.json({ message: 'AI drafting is unavailable. Check the AI configuration; no substitute draft has been generated.' }, { status: 503 });
@@ -113,5 +118,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   ]);
   if (activity.error) return NextResponse.json({ message: activity.error.message }, { status: 500 });
 
-  return NextResponse.json({ ok: true, subject, text }, { status: 200 });
+  return NextResponse.json({ ok: true, subject, text, cited_signals: aiDraft.cited_signals }, { status: 200 });
+  } catch (failure) {
+    return workspaceApiError(failure, 'account-draft/generation');
+  }
 }

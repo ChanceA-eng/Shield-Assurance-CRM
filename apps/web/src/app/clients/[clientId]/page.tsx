@@ -7,11 +7,16 @@ import SectionLayout from '../../../components/crm/SectionLayout';
 import { useNotifications } from '../../../context/NotificationContext';
 import RecordAssetsPanel from '../../../components/crm/RecordAssetsPanel';
 import RecordWorkPanel from '../../../components/crm/RecordWorkPanel';
+import QuoteOptionsPanel from '../../../components/crm/QuoteOptionsPanel';
+import PolicyQuoteProvenance from '../../../components/crm/PolicyQuoteProvenance';
 import { accountLifecycle } from '../../../lib/account-lifecycle';
 import { workspaceFetch, workspacePages } from '../../../lib/workspace-fetch';
 import type { WorkspaceNote, WorkspaceTask } from '@crm/shared';
 import { Card, CardHeader, CardBody } from '../../../components/ui/Card';
 import { formatArizonaDateTime } from '../../../lib/arizona-time';
+import { uploadAccountDocument, downloadAccountDocument } from '../../../lib/account-document-client';
+import { markMessagesRead } from '../../../lib/message-read';
+import AccountContextRecord from '../../../components/crm/AccountContextRecord';
 
 interface Client {
   id: string;
@@ -32,6 +37,7 @@ interface Client {
 }
 
 interface PolicyItem {
+  quote_snapshot?: unknown;
   id: string;
   client_id?: string | null;
   insured_name?: string | null;
@@ -42,6 +48,10 @@ interface PolicyItem {
   effective_date?: string | null;
   renewal_date?: string | null;
   expiration_date?: string | null;
+  prior_policy_id?: string | null;
+  billing_type?: string | null;
+  source?: string | null;
+  sub_type?: string | null;
   status?: string | null;
   created_at?: string | null;
 }
@@ -60,6 +70,7 @@ interface LeadItem {
 }
 
 interface CommunicationItem {
+  read_at?: string | null;
   id: string;
   client_id?: string | null;
   channel: 'email' | 'sms' | 'in_app';
@@ -148,6 +159,8 @@ interface ClientFile {
   file_size?: number | null;
   status?: string | null;
   uploaded_at?: string | null;
+  source_kind?: 'stored' | 'link' | 'legacy_placeholder';
+  download_url?: string | null;
 }
 
 interface ClientTag {
@@ -199,7 +212,7 @@ interface ComposerAttachment {
 }
 
 type ChannelFilter = 'email' | 'sms';
-type ProfileTab = 'overview' | 'policies' | 'assets' | 'notes' | 'tasks' | 'files' | 'tags' | 'activity' | 'insights';
+type ProfileTab = 'overview' | 'policies' | 'assets' | 'notes' | 'tasks' | 'files' | 'tags' | 'activity' | 'insights' | 'quotes';
 type ConversationTab = 'thread' | 'delivery';
 
 type TimelineItem =
@@ -396,6 +409,8 @@ export default function ClientWorkspacePage(): JSX.Element {
   const [activityLimit, setActivityLimit] = useState(80);
 
   const [profileTab, setProfileTab] = useState<ProfileTab>('overview');
+  const [visitedTabs, setVisitedTabs] = useState<Set<ProfileTab>>(() => new Set(['overview']));
+  useEffect(() => { setVisitedTabs((previous) => previous.has(profileTab) ? previous : new Set([...previous, profileTab])); }, [profileTab]);
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>('email');
   const [isConversationOpen, setIsConversationOpen] = useState(false);
   const [conversationTab, setConversationTab] = useState<ConversationTab>('thread');
@@ -410,6 +425,10 @@ export default function ClientWorkspacePage(): JSX.Element {
   const [fileForm, setFileForm] = useState(emptyFileForm);
   const [selectedUploadName, setSelectedUploadName] = useState('');
   const [selectedUploadSize, setSelectedUploadSize] = useState<number | null>(null);
+  const [selectedUpload, setSelectedUpload] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [savingFile, setSavingFile] = useState(false);
+  const uploadInput = useRef<HTMLInputElement>(null);
   const [editingFileId, setEditingFileId] = useState<string | null>(null);
   const [fileEditForm, setFileEditForm] = useState(emptyFileEditForm);
   const [newTag, setNewTag] = useState('');
@@ -423,22 +442,39 @@ export default function ClientWorkspacePage(): JSX.Element {
   const [composerUploadFile, setComposerUploadFile] = useState<File | null>(null);
   const loadedClientId = useRef<string | null>(null);
   const loadVersion = useRef(0);
+  const [loadingSavedWork, setLoadingSavedWork] = useState(true);
+  const [loadingCommunications, setLoadingCommunications] = useState(false);
+  const [communicationLoadError, setCommunicationLoadError] = useState('');
+  const communicationVersion = useRef(0);
 
   const loadData = async (): Promise<void> => {
     const version = ++loadVersion.current;
     setError(null);
+    setLoadingSavedWork(true);
     try {
-      const [payload, savedNotes, savedTasks] = await Promise.all([
-        workspaceFetch<WorkspacePayload>(`/api/clients/${clientId}/workspace?timelineLimit=${timelineLimit}&activityLimit=${activityLimit}`),
+      const core = workspaceFetch<WorkspacePayload>(`/api/clients/${clientId}/workspace?mode=core&timelineLimit=${timelineLimit}&activityLimit=${activityLimit}`);
+      const visibleCore = core.then((payload) => {
+        if (version === loadVersion.current) {
+          loadedClientId.current = clientId;
+          setClient(payload.client);
+          setPolicies(payload.policies ?? []);
+          setClaims(payload.claims ?? []);
+          setAssets(payload.assets ?? []);
+          setLoading(false);
+        }
+        return payload;
+      });
+      const [payload, savedNotes, savedTasks, savedFiles] = await Promise.all([
+        visibleCore,
         workspacePages<WorkspaceNote>(`/api/interactions?record_type=client&record_id=${clientId}`, 100, 'page'),
         workspacePages<WorkspaceTask>(`/api/tasks?record_type=client&record_id=${clientId}&status=all&sort=due_asc&limit=200`, 200, 'offset'),
+        workspaceFetch<ClientFile[]>(`/api/clients/${clientId}/files`),
       ]);
       if (version !== loadVersion.current) return;
       loadedClientId.current = clientId;
       setClient(payload.client);
       setPolicies(payload.policies ?? []);
       setLeads(payload.leads ?? []);
-      setCommunications(payload.communications ?? []);
       setScheduledMessages(payload.scheduledMessages ?? []);
       setEvents(payload.events ?? []);
       setNotifications(payload.notifications ?? []);
@@ -448,30 +484,46 @@ export default function ClientWorkspacePage(): JSX.Element {
       setAssets(payload.assets ?? []);
       setClientTasks(savedTasks);
       setOpenWorkCount(savedTasks.filter((task) => task.status === 'open').length);
-      setFiles(payload.files ?? []);
+      setFiles(savedFiles);
       setTags(payload.tags ?? []);
       setActivities(payload.activities ?? []);
       setNotes(savedNotes);
-      if (payload.client?.email) {
-        const deliveryData = await workspaceFetch<DeliveryAuditItem[]>(
-          `/api/communication-log/delivery?to_email=${encodeURIComponent(payload.client.email)}&limit=25`,
-        );
-        if (version === loadVersion.current) setDeliveryAudit(deliveryData);
-      } else {
-        setDeliveryAudit([]);
-      }
     } catch (failure) {
       if (version === loadVersion.current) setError(failure instanceof Error ? failure.message : 'Failed to load client workspace.');
     } finally {
-      if (version === loadVersion.current) setLoading(false);
+      if (version === loadVersion.current) { setLoading(false); setLoadingSavedWork(false); }
     }
   };
+
+  useEffect(() => {
+    if ((!isConversationOpen && profileTab !== 'insights') || !client || loadedClientId.current !== clientId) return;
+    const version = ++communicationVersion.current;
+    setLoadingCommunications(true);
+    setCommunicationLoadError('');
+    void Promise.all([
+      workspacePages<CommunicationItem>(`/api/communication-log?client_id=${clientId}&limit=200`, 200, 'offset'),
+      client.email ? workspaceFetch<DeliveryAuditItem[]>(`/api/communication-log/delivery?to_email=${encodeURIComponent(client.email)}&limit=25`) : Promise.resolve([]),
+    ]).then(([messages, delivery]) => {
+      if (version !== communicationVersion.current) return;
+      setCommunications(messages); setDeliveryAudit(delivery);
+    }).catch((failure: unknown) => {
+      if (version === communicationVersion.current) setCommunicationLoadError(failure instanceof Error ? failure.message : 'Communication could not be loaded.');
+    }).finally(() => { if (version === communicationVersion.current) setLoadingCommunications(false); });
+    return () => { ++communicationVersion.current; };
+  }, [isConversationOpen, clientId, client, profileTab === 'insights']);
 
   useEffect(() => {
     if (clientId) {
       if (loadedClientId.current !== clientId) {
         setLoading(true);
         setClient(null);
+        setCommunications([]);
+        setDeliveryAudit([]);
+        setClientTasks([]);
+        setNotes([]);
+        setFiles([]);
+        setOpenWorkCount(0);
+        setVisitedTabs(new Set(['overview']));
       }
       void loadData();
     }
@@ -479,7 +531,7 @@ export default function ClientWorkspacePage(): JSX.Element {
 
   useEffect(() => {
     const requested = searchParams.get('tab');
-    if (requested === 'overview' || requested === 'policies' || requested === 'assets' || requested === 'notes' || requested === 'tasks'
+    if (requested === 'overview' || requested === 'policies' || requested === 'quotes' || requested === 'assets' || requested === 'notes' || requested === 'tasks'
       || requested === 'files' || requested === 'activity' || requested === 'tags' || requested === 'insights') setProfileTab(requested);
     if (requested === 'communication') setIsConversationOpen(true);
   }, [searchParams]);
@@ -487,19 +539,22 @@ export default function ClientWorkspacePage(): JSX.Element {
   const unreadFromAccount = unreadMessages.byClient[clientId] ?? 0;
   const markingReadRef = useRef(false);
   useEffect(() => {
-    if (!isConversationOpen || unreadFromAccount === 0 || !clientId || markingReadRef.current) return;
+    if (!isConversationOpen || conversationTab !== 'thread' || document.visibilityState !== 'visible' || loading || loadingCommunications || communicationLoadError || error || loadedClientId.current !== clientId || markingReadRef.current) return;
+    const ids = communications.filter((message) => message.direction === 'inbound' && !message.read_at && message.channel === channelFilter).map((message) => message.id);
+    if (!ids.length) return;
     markingReadRef.current = true;
-    void fetch('/api/communication-log/mark-read', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: clientId }),
-    })
-      .then(() => refreshNotificationCounts())
+    void markMessagesRead(ids)
+      .then(async (result) => {
+        if (!result.ok) { setError(result.message); return; }
+        setCommunications((rows) => rows.map((row) => ids.includes(row.id) ? { ...row, read_at: new Date().toISOString() } : row));
+        await refreshNotificationCounts();
+      })
       .finally(() => {
         markingReadRef.current = false;
       });
+    // The provider refresh function is recreated on badge updates, not a thread-view change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConversationOpen, unreadFromAccount, clientId]);
+  }, [isConversationOpen, conversationTab, channelFilter, loading, loadingCommunications, communicationLoadError, communications, clientId]);
 
   const lifecycleStage = useMemo(() => accountLifecycle(policies), [policies]);
 
@@ -699,28 +754,24 @@ export default function ClientWorkspacePage(): JSX.Element {
   };
 
   const createFileRecord = async (): Promise<void> => {
-    if (!fileForm.file_name.trim()) return;
-
-    const response = await fetch(`/api/clients/${clientId}/files`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...fileForm,
-        file_size: selectedUploadSize,
-        metadata: selectedUploadName ? { local_upload_name: selectedUploadName } : undefined,
-      }),
-    });
-
-    if (!response.ok) {
-      setError('Unable to create file record.');
-      return;
-    }
-
-    await logActivity('file_create', `Added file record: ${fileForm.file_name}`);
-    setFileForm(emptyFileForm);
-    setSelectedUploadName('');
-    setSelectedUploadSize(null);
-    await loadData();
+    if (savingFile) return;
+    if (!fileForm.file_name.trim()) { setError('Name the document or select a file.'); return; }
+    setSavingFile(true); setError(null);
+    try {
+      if (selectedUpload) {
+        const result = await uploadAccountDocument(clientId, selectedUpload, { onProgress: (fraction) => setUploadProgress(Math.round(fraction * 100)) });
+        if (!result.ok) throw new Error(result.message);
+      } else {
+        await workspaceFetch(`/api/clients/${clientId}/files`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...fileForm, kind: 'link' }),
+        });
+      }
+      setFileForm(emptyFileForm); setSelectedUpload(null); setSelectedUploadName(''); setSelectedUploadSize(null);
+      if (uploadInput.current) uploadInput.current.value = '';
+      await loadData();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Document could not be saved.'); }
+    finally { setSavingFile(false); setUploadProgress(null); }
   };
 
   const deleteFileRecord = async (id: string): Promise<void> => {
@@ -758,7 +809,7 @@ export default function ClientWorkspacePage(): JSX.Element {
       body: JSON.stringify({
         id: editingFileId,
         file_name: fileEditForm.file_name,
-        file_url: fileEditForm.file_url,
+        ...(files.find((file) => file.id === editingFileId)?.source_kind === 'link' ? { file_url: fileEditForm.file_url } : {}),
         file_type: fileEditForm.file_type,
         status: fileEditForm.status,
       }),
@@ -897,6 +948,8 @@ export default function ClientWorkspacePage(): JSX.Element {
 
   return (
     <SectionLayout title="Account">
+      {!loading && loadingSavedWork ? <p role="status" className="mb-2 text-xs text-cui-muted">Loading saved notes, tasks and documents...</p> : null}
+      {searchParams.get('context_type') && searchParams.get('context_id') ? <AccountContextRecord clientId={clientId} type={searchParams.get('context_type')!} id={searchParams.get('context_id')!} /> : null}
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link href="/clients" className="text-sm font-semibold text-[#20a8d8] hover:underline">
@@ -909,6 +962,8 @@ export default function ClientWorkspacePage(): JSX.Element {
         </div>
         <div className="flex flex-wrap gap-2 text-xs text-[#5c6873]">
           <span className="rounded-full bg-[#edf4ff] px-3 py-1 font-semibold text-[#2f5c9f]">Lifecycle: {lifecycleStage}</span>
+          <button type="button" disabled={loading || !client} onClick={() => window.location.assign(`/policies?account_id=${clientId}`)}
+            className="rounded border border-cui-primary bg-white px-3 py-1 font-semibold text-cui-primary">Record policy</button>
           <button type="button" disabled={loading || !client} onClick={() => { setProfileTab('notes'); setCompose((value) => ({ kind: 'note', token: (value?.token ?? 0) + 1 })); }}
             className="rounded border border-cui-primary bg-white px-3 py-1 font-semibold text-cui-primary">Add note</button>
           <button type="button" disabled={loading || !client} onClick={() => { setProfileTab('tasks'); setCompose((value) => ({ kind: 'reminder', token: (value?.token ?? 0) + 1 })); }}
@@ -965,6 +1020,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                 {([
                   ['overview', 'Overview'],
                   ['policies', 'Policies'],
+                  ['quotes', 'Quotes'],
                   ['assets', 'Assets & People'],
                   ['notes', 'Notes'],
                   ['tasks', 'Tasks'],
@@ -1109,33 +1165,44 @@ export default function ClientWorkspacePage(): JSX.Element {
                         Premium {formatCurrency(policy.premium)} · Status {policy.status || '--'} · Policy # {policy.policy_number || '--'}
                       </p>
                       <p className="mt-1 text-xs text-[#425468]">Effective {safeDateOnly(policy.effective_date)} · Renewal {safeDateOnly(policy.renewal_date)}</p>
+                      <p className="text-xs text-[#425468]">Expires {safeDateOnly(policy.expiration_date)} · Billing {policy.billing_type || 'Not recorded'}</p>
+                      <Link className="mt-2 inline-block text-xs font-semibold text-cui-primary underline"
+                        href={`/clients/${clientId}?context_type=policy&context_id=${encodeURIComponent(policy.id)}`}>View policy term details</Link>
+                      <PolicyQuoteProvenance snapshot={policy.quote_snapshot} />
                     </article>
                   ))}
                 </div>
               ) : null}
 
+              <div hidden={profileTab !== 'quotes'}>
+                {visitedTabs.has('quotes') ? <QuoteOptionsPanel key={clientId} target={{ type: 'client', id: clientId }} /> : null}
+              </div>
               <div hidden={profileTab !== 'assets'}>
-                <RecordAssetsPanel key={clientId} target={{ type: 'client', id: clientId }} composeToken={assetComposeToken} onChanged={() => void loadData()} />
+                {visitedTabs.has('assets') ? <RecordAssetsPanel key={clientId} target={{ type: 'client', id: clientId }} composeToken={assetComposeToken} onChanged={() => void loadData()} /> : null}
               </div>
               <div hidden={profileTab !== 'notes' && profileTab !== 'tasks'}>
-                <RecordWorkPanel key={clientId} target={{ type: 'client', id: clientId }} name={client?.full_name ?? 'Account'} section={profileTab === 'notes' ? 'notes' : 'tasks'}
-                  compose={compose} onChanged={() => void loadData()} onTaskCount={setOpenWorkCount} />
+                {visitedTabs.has('notes') || visitedTabs.has('tasks') ? <RecordWorkPanel key={clientId} target={{ type: 'client', id: clientId }} name={client?.full_name ?? 'Account'} section={profileTab === 'notes' ? 'notes' : 'tasks'}
+                  compose={compose} onChanged={() => void loadData()} onTaskCount={setOpenWorkCount} /> : null}
               </div>
 
               {profileTab === 'files' ? (
                 <div className="space-y-4">
                   <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
-                    <h4 className="text-sm font-semibold text-[#14324f]">Add File Record</h4>
+                    <h4 className="text-sm font-semibold text-[#14324f]">Documents & References</h4>
+                    <p className="mt-1 text-xs text-cui-muted">Upload a private file (up to 25 MB), or save a separate web reference. Selecting a file does not upload it until you save.</p>
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
                       <input
                         className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
                         placeholder="File name"
+                        aria-label="Document name"
                         value={fileForm.file_name}
                         onChange={(e) => setFileForm((prev) => ({ ...prev, file_name: e.target.value }))}
                       />
                       <input
                         className="rounded border border-[#d8e3f0] px-3 py-2 text-sm"
                         placeholder="File URL"
+                        aria-label="External reference URL"
+                        disabled={Boolean(selectedUpload) || savingFile}
                         value={fileForm.file_url}
                         onChange={(e) => setFileForm((prev) => ({ ...prev, file_url: e.target.value }))}
                       />
@@ -1151,10 +1218,14 @@ export default function ClientWorkspacePage(): JSX.Element {
                       </select>
                       <input
                         type="file"
-                        accept="application/pdf,image/*"
+                        ref={uploadInput}
+                        aria-label="Choose document file"
+                        disabled={savingFile}
+                        accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.tif,.tiff,.doc,.docx,.xls,.xlsx,.csv,.txt"
                         className="cursor-pointer rounded border border-dashed border-[#bfd2e8] bg-[#f8f9fa] px-3 py-2 text-sm md:col-span-3"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
+                          setSelectedUpload(file ?? null);
                           if (!file) {
                             setSelectedUploadName('');
                             setSelectedUploadSize(null);
@@ -1176,7 +1247,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                             ...prev,
                             file_name: file.name,
                             file_type: inferredType,
-                            file_url: prev.file_url || `local-upload://${file.name}`,
+                            file_url: '',
                           }));
                         }}
                       />
@@ -1190,9 +1261,10 @@ export default function ClientWorkspacePage(): JSX.Element {
                     <button
                       type="button"
                       onClick={() => void createFileRecord()}
+                      disabled={savingFile}
                       className="mt-2 rounded bg-[#20a8d8] px-3 py-2 text-xs font-semibold text-white"
                     >
-                      Save File
+                      {savingFile ? `Uploading${uploadProgress === null ? '...' : ` ${uploadProgress}%`}` : selectedUpload ? 'Upload document' : 'Save reference'}
                     </button>
                   </section>
 
@@ -1209,6 +1281,8 @@ export default function ClientWorkspacePage(): JSX.Element {
                           <input
                             className="w-full rounded border border-[#d8e3f0] px-3 py-2 text-sm"
                             value={fileEditForm.file_url}
+                            aria-label="Edit reference URL"
+                            disabled={item.source_kind !== 'link'}
                             onChange={(e) => setFileEditForm((prev) => ({ ...prev, file_url: e.target.value }))}
                           />
                           <div className="grid grid-cols-2 gap-2">
@@ -1244,11 +1318,15 @@ export default function ClientWorkspacePage(): JSX.Element {
                         <>
                           <p className="text-sm font-semibold text-[#14324f]">{item.file_name}</p>
                           <p className="text-xs text-[#73818f]">{item.file_type || '--'} · {item.status || 'uploaded'} · {safeDate(item.uploaded_at)}</p>
-                          {item.file_url ? (
+                          {item.source_kind === 'stored' && item.download_url ? (
+                            <button type="button" className="mt-1 text-xs font-semibold text-cui-primary hover:underline" onClick={() => {
+                              void downloadAccountDocument({ file_name: item.file_name, download_url: item.download_url ?? null }).then((result) => { if (!result.ok) setError(result.message); });
+                            }}>Download private file</button>
+                          ) : item.source_kind === 'link' && item.file_url ? (
                             <a href={item.file_url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs font-semibold text-[#20a8d8] hover:underline">
-                              Open file
+                              Open external reference
                             </a>
-                          ) : null}
+                          ) : <p className="mt-1 text-xs text-amber-800">Legacy record only: no stored file. Upload the original document.</p>}
                           <div className="mt-2 flex gap-2">
                             <button
                               type="button"
@@ -1336,11 +1414,19 @@ export default function ClientWorkspacePage(): JSX.Element {
 
               {profileTab === 'insights' ? (
                 <div className="space-y-4">
+                  {loadingCommunications ? <p role="status" className="text-sm text-[#73818f]">Loading conversation for risk insights...</p> : null}
+                  {communicationLoadError ? (
+                    <div role="alert" className="text-sm text-red-700">
+                      <p>{communicationLoadError}</p>
+                      <button type="button" className="mt-1 font-semibold underline" onClick={() => void loadData()}>Retry conversation</button>
+                    </div>
+                  ) : null}
                   <section className="rounded-lg border border-[#f0f3f5] bg-[#ffffff] p-3">
                     <h4 className="text-sm font-semibold text-[#14324f]">Underwriting Risk Flags</h4>
                     <button
                       type="button"
-                      className="mt-2 rounded bg-[#fff3de] px-3 py-2 text-xs font-semibold text-[#8a4d00]"
+                      className="mt-2 rounded bg-[#fff3de] px-3 py-2 text-xs font-semibold text-[#8a4d00] disabled:opacity-60"
+                      disabled={loadingCommunications || Boolean(communicationLoadError) || runningAiAction === 'flags'}
                       onClick={() => void runRiskExtraction()}
                     >
                       Extract risk profile
@@ -1381,6 +1467,9 @@ export default function ClientWorkspacePage(): JSX.Element {
                     Close
                   </button>
                 </div>
+                {loadingCommunications ? <p role="status" className="mt-2 text-xs text-cui-muted">Loading complete conversation...</p> : null}
+                {communicationLoadError ? <p role="alert" className="mt-2 text-sm text-cui-danger">{communicationLoadError}
+                  <button type="button" className="ml-2 underline" onClick={() => void loadData()}>Retry</button></p> : null}
 
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <button
@@ -1429,7 +1518,7 @@ export default function ClientWorkspacePage(): JSX.Element {
                       <button
                         type="button"
                         className="rounded bg-[#167495] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0a4f8f] disabled:opacity-60"
-                        disabled={runningAiAction === 'summary'}
+                        disabled={runningAiAction === 'summary' || loadingCommunications || Boolean(communicationLoadError)}
                         onClick={(e) => {
                           e.preventDefault();
                           void runConversationSummary();
@@ -1508,13 +1597,13 @@ export default function ClientWorkspacePage(): JSX.Element {
                         );
                       })}
 
-                    {timeline.length >= timelineLimit ? (
+                    {scheduledMessages.length >= Math.max(50, Math.floor(timelineLimit / 2)) && timelineLimit < 400 ? (
                       <button
                         type="button"
                         className="rounded bg-[#e7f2ff] px-3 py-1.5 text-xs font-semibold text-[#0a4f8f]"
                         onClick={() => setTimelineLimit((prev) => prev + 80)}
                       >
-                        Load more history
+                        Load more scheduled history
                       </button>
                     ) : null}
 

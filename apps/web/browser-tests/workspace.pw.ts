@@ -6,7 +6,7 @@ test('banners retain every unworked arrival in newest-first order and acknowledg
   const queue = page.getByRole('region', { name: 'Unreviewed website requests' });
   await expect(queue.getByRole('link', { name: 'Open profile', exact: true })).toHaveCount(26);
   await expect(queue.locator('p a')).toHaveText(data.arrivals.map((arrival) => arrival.full_name));
-  await expect(page.getByRole('link', { name: '12 due today', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('link', { name: '12 due today', exact: true })).toHaveCount(0);
   await queue.getByRole('button', { name: 'Dismiss request from Leo Example', exact: true }).click();
   await expect(queue.getByRole('link', { name: 'Open profile', exact: true })).toHaveCount(25);
   await page.reload();
@@ -98,6 +98,7 @@ test('explicit account linking preserves saved-work IDs and client refreshes do 
   await page.getByRole('button', { name: 'Link / create account', exact: true }).click();
   await page.getByRole('button', { name: 'Create separate prospect account', exact: true }).click();
   await page.getByRole('link', { name: 'Open account: Leo Example', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/clients/${data.account.id}`), { timeout: 15000 });
   await expect(page.getByText('Lifecycle: Prospect', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Add note', exact: true }).first().click();
   await expect(page.getByText('Call notes to carry forward to the account.', { exact: true })).toBeVisible();
@@ -190,4 +191,29 @@ test('unread client messages raise a red badge and tasks snooze to a picked Ariz
   expect(data.tasks.find((task) => task.id === seeded.id)?.due_date).toBe(`${year}-12-01T21:15:00.000Z`);
   await page.getByRole('combobox', { name: `Snooze ${seeded.subject}`, exact: true }).selectOption('nextweek');
   await expect.poll(() => new Date(data.tasks.find((task) => task.id === seeded.id)?.due_date ?? 0).getUTCHours()).toBe(16);
+});
+
+test('policy profile shows confirmed term dates and links only to its same-account prior term', async ({ page, data }) => {
+  const currentId = '168413e9-a6a4-4dff-a8bf-8f8df83dace6';
+  const priorId = 'c3db2f75-a682-4d14-8c76-693b4f123456';
+  const prior = { id: priorId, policy_number: 'POLICY-OLD', effective_date: '2024-01-01', expiration_date: '2025-01-01', status: 'expired' };
+  const current = { id: currentId, client_id: data.account.id, insured_name: data.account.full_name, carrier: 'Verified Carrier',
+    line_of_business: 'Commercial', sub_type: 'Auto', premium: 2450.75, policy_number: 'POLICY-CURRENT',
+    effective_date: '2025-01-01', renewal_date: '2026-01-01', expiration_date: '2026-01-01',
+    status: 'expired', billing_type: 'direct', source: 'confirmed issuance', prior_policy_id: priorId,
+    quote_snapshot: { carrier: 'Quoted Carrier', premium: 2300, line_of_business: 'Commercial Auto', notes: 'Historical quote only' },
+    related_prior_term: prior };
+  data.policies.push(current);
+  await page.route('**/api/clients/*/context?*', async (route) => {
+    const url = new URL(route.request().url());
+    await route.fulfill({ json: { type: 'policy', record: url.searchParams.get('id') === priorId ? prior : current } });
+  });
+  await page.goto(`/clients/${data.account.id}?context_type=policy&context_id=${currentId}`);
+  const term = page.getByRole('region', { name: 'Policy term details' });
+  await expect(term.getByText('POLICY-CURRENT')).toBeVisible();
+  await expect(term.getByText('$2,450.75')).toBeVisible();
+  await expect(term.getByText('2025-01-01', { exact: true })).toBeVisible();
+  await expect(term.getByText('2026-01-01', { exact: true })).toHaveCount(2);
+  await term.getByRole('link', { name: /POLICY-OLD/ }).click();
+  await expect(page.getByRole('region', { name: 'Policy term details' }).getByText('POLICY-OLD')).toBeVisible();
 });

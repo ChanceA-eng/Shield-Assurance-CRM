@@ -1,16 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Landmark, Mail, Phone, Send, Sparkles, X } from 'lucide-react';
 import type { FmcsaCandidate, FmcsaRecord, OshaRecord } from '../../lib/enrichment';
 import { LEAD_STATUS_LABELS, type LeadStatus } from '../../lib/lead-pipeline';
 import RecordAssetsPanel from '../../components/crm/RecordAssetsPanel';
+import QuoteOptionsPanel from '../../components/crm/QuoteOptionsPanel';
 import RecordWorkPanel from '../../components/crm/RecordWorkPanel';
 import LeadAccountLink from '../../components/crm/LeadAccountLink';
 import { INTAKE_QUEUE_CHANGED } from '../../components/layout/NewLeadBanner';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 import { MESSAGES_READ_EVENT } from '../../context/NotificationContext';
+import { unreadInboundIds } from '../../lib/conversations';
+import { markMessagesRead, messageStatusLabel, readErrorMessage } from '../../lib/message-read';
 import { readIntakeSections } from '../../lib/agent-lead-intake';
+import { OUTREACH_TEMPLATES, isOutreachTemplate } from '@crm/shared';
 
 export interface WorkspaceLead {
   id: string;
@@ -43,6 +47,7 @@ interface ConversationItem {
   sent_at?: string | null;
   automation_type?: string | null;
   read_at?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface ProfileRenewal {
@@ -456,7 +461,7 @@ function StructuredProfile({ profile }: { profile: Record<string, unknown> }): J
   );
 }
 
-type DrawerTab = 'overview' | 'assets' | 'notes' | 'conversation' | 'tasks';
+type DrawerTab = 'overview' | 'assets' | 'notes' | 'conversation' | 'tasks' | 'quotes';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -820,6 +825,8 @@ function statusBadgeTone(status: string): string {
 export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }: LeadWorkspaceProps): JSX.Element {
   const [lead, setLead] = useState(initialLead);
   const [tab, setTab] = useState<DrawerTab>('overview');
+  const [visitedTabs, setVisitedTabs] = useState<Set<DrawerTab>>(() => new Set(['overview']));
+  useEffect(() => { setVisitedTabs((previous) => previous.has(tab) ? previous : new Set([...previous, tab])); }, [tab]);
   const [error, setError] = useState<string | null>(null);
 
   // Quick edit: premium + contact info
@@ -843,12 +850,16 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
   const [conversation, setConversation] = useState<ConversationItem[]>([]);
   const [clientId, setClientId] = useState<string | null>(lead.account_id ?? null);
   const [isLoadingConversation, setIsLoadingConversation] = useState(false);
-  const [channel, setChannel] = useState<'email' | 'sms'>('email');
+  const [hasLoadedConversation, setHasLoadedConversation] = useState(false);
+  const [conversationNext, setConversationNext] = useState<number | null>(null);
+  const [conversationError, setConversationError] = useState<string | null>(null);
+  const [conversationNotice, setConversationNotice] = useState<string | null>(null);
   const [subjectDraft, setSubjectDraft] = useState('');
   const [bodyDraft, setBodyDraft] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isDrafting, setIsDrafting] = useState(false);
   const [citedSignals, setCitedSignals] = useState<string[]>([]);
+  const [draftTemplate, setDraftTemplate] = useState('');
 
   // Pre-call talking points (Overview tab)
   const [talkingPoints, setTalkingPoints] = useState<string[] | null>(null);
@@ -950,42 +961,56 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
     }
   };
 
-  const loadConversation = useCallback(async (): Promise<void> => {
+  useEffect(() => {
+    // Deep links such as /leads?lead=<id>&tab=conversation open the thread directly.
+    const requested = new URLSearchParams(window.location.search).get('tab');
+    if (requested === 'conversation') setTab('conversation');
+  }, []);
+
+  const conversationRequest = useRef(0);
+  /** Loads the thread; inbound messages are marked read only after a successful load while the tab is shown. */
+  const loadConversation = useCallback(async (options: { markRead: boolean; offset?: number }): Promise<void> => {
+    const requestId = ++conversationRequest.current;
     setIsLoadingConversation(true);
     try {
-      const res = await fetch(`/api/leads/${encodeURIComponent(lead.id)}/conversation`, { cache: 'no-store' });
+      const res = await fetch(`/api/leads/${encodeURIComponent(lead.id)}/conversation?offset=${options.offset ?? 0}`, { cache: 'no-store' });
+      if (requestId !== conversationRequest.current) return;
       if (!res.ok) {
-        setConversation([]);
-        setClientId(null);
+        setConversationError(await readErrorMessage(res, 'The conversation could not be loaded'));
         return;
       }
-      const payload = (await res.json()) as { clientId: string | null; items: ConversationItem[] };
+      const payload = (await res.json()) as { clientId: string | null; items: ConversationItem[]; nextOffset?: number | null };
+      if (requestId !== conversationRequest.current) return;
       setClientId(payload.clientId);
-      setConversation(payload.items);
+      setConversation((current) => [...new Map([...(options.offset ? current : []), ...payload.items].map((item) => [item.id, item])).values()]);
+      setConversationNext(payload.nextOffset ?? null);
+      setHasLoadedConversation(true);
+      setConversationError(null);
 
-      // Viewing the conversation marks inbound messages as read.
-      if (payload.items.some((item) => (item.direction ?? '') === 'inbound' && !item.read_at)) {
-        void fetch('/api/communication-log/mark-read', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ client_id: payload.clientId ?? undefined, lead_id: lead.id }),
-        }).then(() => {
-          window.dispatchEvent(new Event(MESSAGES_READ_EVENT));
-          onChanged();
-        });
+      const unread = unreadInboundIds(payload.items.map((item) => ({ id: item.id, direction: item.direction ?? null, read_at: item.read_at ?? null })));
+      if (!options.markRead || unread.length === 0 || document.visibilityState !== 'visible') return;
+      const marked = await markMessagesRead(unread);
+      if (requestId !== conversationRequest.current) return;
+      if (!marked.ok) {
+        setConversationError(`${marked.message} These messages still show as unread.`);
+        return;
       }
+      const readAt = new Date().toISOString();
+      setConversation((items) => items.map((item) => (unread.includes(item.id) ? { ...item, read_at: readAt } : item)));
+      window.dispatchEvent(new Event(MESSAGES_READ_EVENT));
+      onChanged();
     } catch {
-      setConversation([]);
-      setClientId(null);
+      if (requestId === conversationRequest.current) setConversationError('The conversation could not be loaded. Check your connection.');
     } finally {
-      setIsLoadingConversation(false);
+      if (requestId === conversationRequest.current) setIsLoadingConversation(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead.id]);
 
   useEffect(() => {
-    void loadConversation();
-  }, [loadConversation, recordRefreshToken]);
+    if (tab !== 'conversation') return;
+    void loadConversation({ markRead: true });
+  }, [tab, loadConversation, recordRefreshToken]);
 
   const savePremium = async (): Promise<void> => {
     setIsSavingPremium(true);
@@ -1025,7 +1050,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
       const res = await fetch(`/api/leads/${encodeURIComponent(lead.id)}/draft-outreach`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'draft', instruction: bodyDraft.trim() || undefined }),
+        body: JSON.stringify({ mode: 'draft', instruction: bodyDraft.trim() || undefined, template: draftTemplate || undefined }),
       });
       const payload = (await res.json().catch(() => ({}))) as {
         subject?: string;
@@ -1040,7 +1065,6 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
       setSubjectDraft(payload.subject ?? '');
       setBodyDraft(payload.body);
       setCitedSignals(payload.cited_signals ?? []);
-      setChannel('email');
     } catch {
       setError('Drafting is unavailable right now.');
     } finally {
@@ -1073,55 +1097,43 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
   const sendMessage = async (): Promise<void> => {
     const body = bodyDraft.trim();
     if (!body) return;
-    if (channel === 'email' && !lead.email) {
-      setError('This lead has no email address on file.');
+    if (!lead.email) {
+      setConversationError('This lead has no email address on file.');
       return;
     }
 
     setIsSending(true);
-    setError(null);
+    setConversationError(null);
+    setConversationNotice(null);
     try {
-      // Ensure a client record exists so the conversation lands on the lifecycle record.
-      let targetClientId = clientId;
-      if (!targetClientId) {
-        const workspaceRes = await fetch(`/api/leads/${encodeURIComponent(lead.id)}/workspace`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ create: true }),
-        });
-        if (!workspaceRes.ok) {
-          setError('Could not link this lead to a client record.');
-          return;
-        }
-        const workspacePayload = (await workspaceRes.json()) as { clientId: string };
-        targetClientId = workspacePayload.clientId;
-        setClientId(targetClientId);
-      }
-
+      // Lead-only sends stay on the lead; an account is only used when one is explicitly linked.
       const res = await fetch('/api/communication-log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          client_id: targetClientId,
-          channel,
+          lead_id: lead.id,
+          client_id: clientId ?? undefined,
+          channel: 'email',
           direction: 'outbound',
-          subject: channel === 'email' ? subjectDraft.trim() || `Message from Shield Assurance` : undefined,
+          subject: subjectDraft.trim() || 'Message from Shield Assurance',
           body,
           automation_type: 'manual',
-          to: channel === 'email' ? lead.email : undefined,
+          to: lead.email,
         }),
       });
 
       if (!res.ok) {
-        const payload = (await res.json().catch(() => ({ message: 'Failed to send message.' }))) as { message?: string };
-        setError(payload.message ?? 'Failed to send message.');
+        setConversationError(await readErrorMessage(res, 'The email was not sent'));
         return;
       }
 
       setBodyDraft('');
       setSubjectDraft('');
-      await loadConversation();
+      setConversationNotice('Email accepted by the provider for delivery.');
+      await loadConversation({ markRead: false });
       onChanged();
     } catch {
-      setError('Failed to send message.');
+      setConversationError('The email could not be sent. Check your connection and try again.');
     } finally {
       setIsSending(false);
     }
@@ -1198,6 +1210,12 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
+              {clientId && ['new', 'contacted', 'quoted'].includes(lead.status) ? (
+                <button type="button" onClick={() => window.location.assign(`/policies?account_id=${clientId}&lead_id=${lead.id}`)}
+                  className="rounded border border-cui-primary px-2 py-1.5 text-xs font-semibold text-cui-primary">
+                  Record policy
+                </button>
+              ) : null}
               {lead.phone ? (
                 <a href={`tel:${lead.phone}`} className="rounded border border-cui-border/60 p-1.5 text-cui-muted hover:bg-cui-light hover:text-cui-primary" title={`Call ${lead.phone}`}>
                   <Phone className="h-4 w-4" />
@@ -1281,6 +1299,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
               [
                 ['overview', 'Overview'],
                 ['assets', 'Assets'],
+                ['quotes', 'Quotes'],
                 ['notes', 'Notes'],
                 ['conversation', 'Conversation'],
                 ['tasks', `Tasks (${openTaskCount})`],
@@ -1308,6 +1327,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
 
         {/* Body */}
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div hidden={tab !== 'quotes'}>{visitedTabs.has('quotes') ? <QuoteOptionsPanel key={lead.id} target={{ type: 'lead', id: lead.id }} refreshToken={clientId} /> : null}</div>
           {tab === 'overview' ? (
             <div className="space-y-4">
               <div className="grid gap-2 text-sm md:grid-cols-2">
@@ -1489,10 +1509,17 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
 
           {tab === 'conversation' ? (
             <div className="space-y-3">
-              {isLoadingConversation ? <p className="text-sm text-cui-muted">Loading conversation…</p> : null}
-              {!isLoadingConversation && conversation.length === 0 ? (
+              {conversationError ? (
+                <div role="alert" className="flex items-center gap-2 rounded border border-cui-danger/40 bg-cui-danger/10 px-3 py-1.5 text-sm text-cui-danger">
+                  <span className="flex-1">{conversationError}</span>
+                  <button type="button" className="text-xs font-semibold underline" onClick={() => void loadConversation({ markRead: true })}>Retry</button>
+                </div>
+              ) : null}
+              {isLoadingConversation && !hasLoadedConversation ? <p className="text-sm text-cui-muted">Loading conversation…</p> : null}
+              {conversationNext !== null ? <button disabled={isLoadingConversation} className="text-sm font-semibold text-cui-primary" onClick={() => void loadConversation({ markRead: true, offset: conversationNext })}>Load older messages</button> : null}
+              {hasLoadedConversation && conversation.length === 0 ? (
                 <p className="rounded border border-dashed border-cui-border/80 p-4 text-center text-sm text-cui-muted">
-                  No messages yet. Send the first one below — it will be logged on this lead’s client record.
+                  No messages yet. Emails you send here stay on this lead{clientId ? ' and its linked account' : ''}.
                 </p>
               ) : null}
               {conversation.map((item) => {
@@ -1500,7 +1527,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
                 return (
                   <div key={item.id} className={`max-w-[85%] rounded border p-2.5 text-sm ${outbound ? 'ml-auto border-cui-primary/30 bg-cui-primary/5' : 'border-cui-border/60 bg-cui-light/60'}`}>
                     <div className="mb-1 flex items-center justify-between gap-3 text-[11px] text-cui-muted">
-                      <span className="font-bold uppercase">{item.channel ?? 'email'} · {outbound ? 'Sent' : 'Received'}</span>
+                      <span className="font-bold uppercase">{item.channel ?? 'email'} · {messageStatusLabel({ id: item.id, channel: item.channel ?? null, direction: item.direction ?? null, automation_type: item.automation_type ?? null, metadata: item.metadata ?? null })}</span>
                       <span>{prettyDateTime(item.sent_at)}</span>
                     </div>
                     {item.subject ? <p className="font-semibold text-cui-text">{item.subject}</p> : null}
@@ -1512,7 +1539,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
           ) : null}
 
           <div hidden={tab !== 'assets'}>
-            <RecordAssetsPanel target={{ type: 'lead', id: lead.id }} composeToken={assetComposeToken} refreshToken={recordRefreshToken} onChanged={onChanged} />
+            {visitedTabs.has('assets') ? <RecordAssetsPanel target={{ type: 'lead', id: lead.id }} composeToken={assetComposeToken} refreshToken={recordRefreshToken} onChanged={onChanged} /> : null}
           </div>
           <div hidden={tab !== 'tasks' && tab !== 'notes'}>
             <RecordWorkPanel target={{ type: 'lead', id: lead.id }} name={lead.full_name} section={tab === 'notes' ? 'notes' : 'tasks'}
@@ -1523,25 +1550,27 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
         {/* Composer pinned to bottom on Conversation tab */}
         {tab === 'conversation' ? (
           <div className="shrink-0 border-t border-cui-border/60 p-3">
+            {conversationNotice ? (
+              <p role="status" className="mb-2 rounded border border-cui-success/40 bg-cui-success/10 px-2.5 py-1.5 text-xs text-[#2a7a48]">{conversationNotice}</p>
+            ) : null}
             <div className="mb-2 flex items-center gap-2">
-              <select
-                value={channel}
-                onChange={(event) => setChannel(event.target.value as 'email' | 'sms')}
-                className="rounded border border-cui-border px-2 py-1.5 text-sm"
-              >
-                <option value="email">Email</option>
-                <option value="sms">SMS (log only)</option>
-              </select>
-              {channel === 'email' ? (
-                <input
-                  type="text"
-                  value={subjectDraft}
-                  onChange={(event) => setSubjectDraft(event.target.value)}
-                  placeholder="Subject"
-                  className="min-w-0 flex-1 rounded border border-cui-border px-2 py-1.5 text-sm"
-                />
-              ) : null}
+              <span className="rounded bg-cui-light px-2 py-1.5 text-xs font-semibold text-cui-muted" title="Text messages cannot be sent from the CRM yet">Email</span>
+              <input
+                type="text"
+                value={subjectDraft}
+                onChange={(event) => setSubjectDraft(event.target.value)}
+                placeholder="Subject"
+                className="min-w-0 flex-1 rounded border border-cui-border px-2 py-1.5 text-sm"
+              />
             </div>
+            <label className="mb-2 block text-xs font-semibold text-cui-muted">Email purpose
+              <select value={draftTemplate} onChange={(event) => {
+                if (!event.target.value || isOutreachTemplate(event.target.value)) setDraftTemplate(event.target.value);
+              }} className="ml-2 max-w-full rounded border border-cui-border px-2 py-1.5 text-sm text-cui-text">
+                <option value="">Use saved marketing profile</option>
+                {Object.entries(OUTREACH_TEMPLATES).map(([key, template]) => <option key={key} value={key}>{template.label}</option>)}
+              </select>
+            </label>
             {citedSignals.length > 0 ? (
               <p className="mb-2 rounded border border-cui-primary/30 bg-cui-primary/5 px-2.5 py-1.5 text-[11px] text-cui-muted">
                 <span className="font-semibold text-cui-primary">Draft grounded on:</span> {citedSignals.join(' · ')}
@@ -1551,11 +1580,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
               <textarea
                 value={bodyDraft}
                 onChange={(event) => setBodyDraft(event.target.value)}
-                placeholder={
-                  channel === 'email'
-                    ? `Email ${lead.email ?? '(no email on file)'} — or type an instruction and use Draft`
-                    : 'Log an SMS exchange…'
-                }
+                placeholder={`Email ${lead.email ?? '(no email on file)'} — or type an instruction and use Draft`}
                 className="min-h-16 flex-1 rounded border border-cui-border px-3 py-2 text-sm"
               />
               <div className="flex flex-col gap-1.5">
@@ -1572,7 +1597,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
                 <button
                   type="button"
                   onClick={() => void sendMessage()}
-                  disabled={isSending || bodyDraft.trim().length === 0 || (channel === 'email' && !lead.email)}
+                  disabled={isSending || bodyDraft.trim().length === 0 || !lead.email}
                   className="flex items-center gap-1.5 rounded bg-cui-primary px-3 py-2 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-60"
                 >
                   <Send className="h-3.5 w-3.5" />
@@ -1580,6 +1605,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
                 </button>
               </div>
             </div>
+            <p className="mt-1.5 text-[11px] text-cui-muted">Texts cannot be sent from the CRM yet — call or text from your phone and add a note.</p>
           </div>
         ) : null}
       </aside>

@@ -6,15 +6,14 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { WorkspaceAsset, WorkspaceNote } from '@crm/shared';
+import { DEFAULT_OUTREACH_SENDER, type OutreachSender, type WorkspaceAsset, type WorkspaceNote } from '@crm/shared';
+import { parseOutreachSender } from './marketing-profile';
 import { leadOutreachContext } from './lead-outreach-context';
 import { draftSequenceStep } from './outreach-ai';
 import { sendOutboundEmail } from './email-adapter';
-import { writeNotification } from './automation';
 import { nextArizonaBusinessMorning, startOfArizonaDay } from './arizona-time';
+import { resolveOutboundEmailRecipient } from './message-delivery';
 
-const HOUR_MS = 3600 * 1000;
-const DAY_MS = 24 * HOUR_MS;
 const ARIZONA_UTC_OFFSET_HOURS = 7;
 
 export interface OutreachSettings {
@@ -23,6 +22,7 @@ export interface OutreachSettings {
   send_window_start: number;
   send_window_end: number;
   opt_out_footer: string;
+  sender_profile: OutreachSender;
 }
 
 export interface EnrollmentRow {
@@ -50,6 +50,7 @@ export interface OutboxRow {
   error: string | null;
   created_at: string;
   sent_at: string | null;
+  provider?: string | null;
 }
 
 interface LeadRow {
@@ -67,7 +68,8 @@ interface LeadRow {
 }
 
 export async function getOutreachSettings(supabase: SupabaseClient): Promise<OutreachSettings> {
-  const { data } = await supabase.from('outreach_settings').select('*').eq('id', 1).maybeSingle();
+  const { data, error } = await supabase.from('outreach_settings').select('*').eq('id', 1).maybeSingle();
+  if (error) throw new Error(`Unable to load outreach settings: ${error.message}`);
   return {
     approval_mode: data?.approval_mode ?? true,
     daily_send_cap: data?.daily_send_cap ?? 20,
@@ -76,23 +78,26 @@ export async function getOutreachSettings(supabase: SupabaseClient): Promise<Out
     opt_out_footer:
       data?.opt_out_footer ??
       'If you\u2019d prefer not to receive these emails, reply "unsubscribe" and we\u2019ll remove you right away. Shield Assurance, Tucson, AZ.',
+    sender_profile: data?.sender_profile ? parseOutreachSender(data.sender_profile) : DEFAULT_OUTREACH_SENDER,
   };
 }
 
 export async function isOptedOut(supabase: SupabaseClient, email: string): Promise<boolean> {
   const normalized = email.trim().toLowerCase();
   if (!normalized) return false;
-  const { data } = await supabase.from('outreach_opt_outs').select('email').eq('email', normalized).maybeSingle();
+  const { data, error } = await supabase.from('outreach_opt_outs').select('email').eq('email', normalized).maybeSingle();
+  if (error) throw new Error(`Unable to verify outreach opt-outs: ${error.message}`);
   return Boolean(data);
 }
 
 export async function sentTodayCount(supabase: SupabaseClient): Promise<number> {
   const dayStart = startOfArizonaDay(new Date()).toISOString();
-  const { count } = await supabase
+  const { count, error } = await supabase
     .from('outreach_outbox')
     .select('id', { count: 'exact', head: true })
-    .eq('status', 'sent')
+    .in('status', ['sent', 'accepted_by_provider', 'sending', 'acceptance_unknown'])
     .gte('sent_at', dayStart);
+  if (error) throw new Error(`Unable to check today's outreach count: ${error.message}`);
   return count ?? 0;
 }
 
@@ -134,6 +139,7 @@ export async function enrollLead(
     .eq('lead_id', leadId)
     .in('status', ['active', 'paused'])
     .maybeSingle();
+  if (existing.error) throw new Error(`Unable to check enrollment: ${existing.error.message}`);
   if (existing.data) {
     return { drafted: false, message: `Already enrolled (${existing.data.status}).` };
   }
@@ -143,7 +149,7 @@ export async function enrollLead(
     .insert([{ lead_id: leadId, status: 'active', next_send_at: new Date().toISOString() }])
     .select('*')
     .single<EnrollmentRow>();
-  if (error || !enrollment) return { drafted: false, message: error?.message ?? 'Failed to enroll.' };
+  if (error || !enrollment) throw new Error(error?.message ?? 'Failed to enroll.');
 
   const drafted = await generateStepDraft(supabase, enrollment, lead);
   return { enrollment, drafted };
@@ -161,8 +167,8 @@ async function generateStepDraft(
     .from('outreach_outbox')
     .select('id', { count: 'exact', head: true })
     .eq('enrollment_id', enrollment.id)
-    .eq('step_number', step)
-    .in('status', ['pending_approval', 'sent']);
+    .eq('step_number', step);
+  if (pending.error) throw new Error(`Unable to check existing drafts: ${pending.error.message}`);
   if ((pending.count ?? 0) > 0) return false;
 
   const prior = await supabase
@@ -171,23 +177,19 @@ async function generateStepDraft(
     .eq('enrollment_id', enrollment.id)
     .eq('status', 'sent')
     .order('sent_at', { ascending: true });
+  if (prior.error) throw new Error(`Unable to load prior outreach: ${prior.error.message}`);
 
   const draft = await draftSequenceStep(lead, step, enrollment.total_steps, prior.data ?? []);
-  if (!draft) return false;
+  if (!draft) throw new Error('AI drafting is unavailable. No outreach draft was saved.');
 
-  const { error } = await supabase.from('outreach_outbox').insert([
-    {
-      enrollment_id: enrollment.id,
-      lead_id: lead.id,
-      step_number: step,
-      to_email: (lead.email ?? '').trim().toLowerCase(),
-      subject: draft.subject,
-      body: draft.body,
-      cited_signals: draft.cited_signals,
-      status: 'pending_approval',
-    },
-  ]);
-  return !error;
+  const { data, error } = await supabase.rpc('create_outreach_draft', {
+    p_enrollment_id: enrollment.id, p_step: step,
+    p_to: (lead.email ?? '').trim().toLowerCase(), p_subject: draft.subject,
+    p_body: draft.body, p_signals: draft.cited_signals,
+  });
+  if (error) throw new Error(`Unable to save outreach draft: ${error.message}`);
+  if (typeof data !== 'boolean') throw new Error('Draft creation returned an invalid result.');
+  return data;
 }
 
 /**
@@ -201,12 +203,18 @@ export async function processDueEnrollments(
   const settings = await getOutreachSettings(supabase);
   const now = new Date();
 
-  const { data: due } = await supabase
+  const { data: accepted, error: recoveryError } = await supabase.from('outreach_outbox')
+    .select('id').eq('status', 'accepted_by_provider').limit(50);
+  if (recoveryError) throw new Error(`Unable to load accepted outreach for recovery: ${recoveryError.message}`);
+  for (const item of accepted ?? []) await finalizeAcceptedOutbox(supabase, item.id);
+
+  const { data: due, error: dueError } = await supabase
     .from('sequence_enrollments')
     .select('*')
     .eq('status', 'active')
     .lte('next_send_at', now.toISOString())
     .limit(50);
+  if (dueError) throw new Error(`Unable to load due enrollments: ${dueError.message}`);
 
   let drafted = 0;
   let autoSent = 0;
@@ -219,20 +227,22 @@ export async function processDueEnrollments(
       continue;
     }
     if (await isOptedOut(supabase, lead.email)) {
-      await supabase
+      const { error } = await supabase
         .from('sequence_enrollments')
         .update({ status: 'opted_out', ended_at: now.toISOString(), ended_reason: 'Address opted out.' })
-        .eq('id', enrollment.id);
+        .eq('id', enrollment.id).eq('status', 'active');
+      if (error) throw new Error(`Unable to stop opted-out enrollment: ${error.message}`);
       skipped += 1;
       continue;
     }
 
     // Stop sequences for leads that moved past prospecting.
     if (lead.status === 'won' || lead.status === 'lost') {
-      await supabase
+      const { error } = await supabase
         .from('sequence_enrollments')
         .update({ status: 'cancelled', ended_at: now.toISOString(), ended_reason: `Lead marked ${lead.status}.` })
-        .eq('id', enrollment.id);
+        .eq('id', enrollment.id).eq('status', 'active');
+      if (error) throw new Error(`Unable to cancel enrollment: ${error.message}`);
       skipped += 1;
       continue;
     }
@@ -243,13 +253,14 @@ export async function processDueEnrollments(
     if (!settings.approval_mode && inSendWindow(settings, now)) {
       const sentToday = await sentTodayCount(supabase);
       if (sentToday >= settings.daily_send_cap) continue;
-      const { data: item } = await supabase
+      const { data: item, error } = await supabase
         .from('outreach_outbox')
         .select('*')
         .eq('enrollment_id', enrollment.id)
         .eq('step_number', enrollment.current_step + 1)
         .eq('status', 'pending_approval')
         .maybeSingle<OutboxRow>();
+      if (error) throw new Error(`Unable to load outreach draft: ${error.message}`);
       if (item) {
         const result = await sendOutboxItem(supabase, item.id);
         if (result.sent) autoSent += 1;
@@ -260,119 +271,80 @@ export async function processDueEnrollments(
   return { drafted, autoSent, skipped };
 }
 
-/** Finds (or creates) the client record a lead's conversation is logged against. */
-async function ensureClientForLead(supabase: SupabaseClient, lead: LeadRow): Promise<string | null> {
-  const linked = await supabase.rpc('link_lead_account', { p_lead_id: lead.id, p_client_id: null, p_create: true });
-  if (linked.error) throw new Error(linked.error.message);
-  if (typeof linked.data !== 'string') throw new Error('Account linking returned an invalid record id.');
-  return linked.data;
-}
-
 /**
- * Sends an outbox item (optionally with producer edits), logs it on the lead's
- * conversation, and advances the enrollment. The final step schedules a call task.
+ * Claim before contacting the provider. A crashed/ambiguous attempt is never
+ * automatically resent. Known acceptance can retry transactional bookkeeping.
+ * Legacy "sent" means provider acceptance, not proof of recipient delivery.
  */
 export async function sendOutboxItem(
   supabase: SupabaseClient,
   outboxId: string,
   overrides?: { subject?: string; body?: string },
-): Promise<{ sent: boolean; message?: string }> {
-  const { data: item } = await supabase.from('outreach_outbox').select('*').eq('id', outboxId).maybeSingle<OutboxRow>();
+): Promise<{ sent: boolean; message?: string; deliveryStatus?: 'accepted_by_provider' }> {
+  const { data: item, error: loadError } = await supabase.from('outreach_outbox').select('*').eq('id', outboxId).maybeSingle<OutboxRow>();
+  if (loadError) throw new Error(`Unable to load outbox item: ${loadError.message}`);
   if (!item) return { sent: false, message: 'Outbox item not found.' };
-  if (item.status === 'sent') return { sent: false, message: 'Already sent.' };
-
-  const lead = await fetchLead(supabase, item.lead_id);
-  if (!lead) return { sent: false, message: 'Lead not found.' };
+  if (item.status === 'sent') return { sent: false, deliveryStatus: 'accepted_by_provider', message: 'Already accepted by the email provider; delivery is not confirmed.' };
+  if (item.status === 'accepted_by_provider') return finalizeAcceptedOutbox(supabase, item.id);
+  if (item.status !== 'pending_approval') {
+    return { sent: false, message: 'This item cannot be sent. A prior or uncertain attempt must be reconciled with the provider before any retry.' };
+  }
 
   const settings = await getOutreachSettings(supabase);
   const subject = overrides?.subject?.trim() || item.subject;
   const bodyCore = overrides?.body?.trim() || item.body;
   const body = `${bodyCore}\n\n--\n${settings.opt_out_footer}`;
-  const now = new Date();
-
-  if (await isOptedOut(supabase, item.to_email)) {
-    await supabase.from('outreach_outbox').update({ status: 'rejected', error: 'Recipient opted out.' }).eq('id', outboxId);
-    return { sent: false, message: 'Recipient has opted out.' };
+  const target = await resolveOutboundEmailRecipient(supabase, { leadId: item.lead_id, to: item.to_email });
+  if (!target.ok) {
+    if (target.status >= 500) throw new Error(target.message);
+    return { sent: false, message: target.message };
   }
-  const clientId = await ensureClientForLead(supabase, lead);
+  const { data: claimed, error: claimError } = await supabase.rpc('claim_outreach_send', {
+    p_outbox_id: outboxId, p_subject: subject, p_body: body,
+  });
+  if (claimError) throw new Error(`Unable to claim outreach send: ${claimError.message}`);
+  if (claimed !== true) return { sent: false, message: 'The draft is no longer sendable or another request claimed it.' };
 
+  const rechecked = await resolveOutboundEmailRecipient(supabase, { leadId: item.lead_id, to: item.to_email });
+  if (!rechecked.ok) {
+    const { error } = await supabase.from('outreach_outbox')
+      .update({ status: 'rejected', error: rechecked.message, sent_at: null }).eq('id', outboxId).eq('status', 'sending');
+    if (error) throw new Error(`Consent blocked the send, but that result could not be saved: ${error.message}`);
+    if (rechecked.status >= 500) throw new Error(rechecked.message);
+    return { sent: false, message: rechecked.message };
+  }
+
+  let provider: string;
   try {
-    await sendOutboundEmail({ to: item.to_email, subject, body });
+    provider = await sendOutboundEmail({ to: rechecked.recipient.to, subject, body });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Email delivery failed.';
-    await supabase.from('outreach_outbox').update({ status: 'failed', error: message }).eq('id', outboxId);
-    return { sent: false, message };
+    const message = error instanceof Error ? error.message : 'Email provider acceptance could not be established.';
+    const { error: saveError } = await supabase.from('outreach_outbox')
+      .update({ status: 'acceptance_unknown', error: message }).eq('id', outboxId).eq('status', 'sending');
+    if (saveError) throw new Error(`Provider acceptance is uncertain and could not be recorded; do not resend: ${saveError.message}`);
+    throw new Error(`Provider acceptance is uncertain; do not resend until reconciled: ${message}`);
   }
 
-  await supabase
+  const { data: accepted, error: acceptanceError } = await supabase
     .from('outreach_outbox')
-    .update({ status: 'sent', subject, body, sent_at: now.toISOString(), error: null })
-    .eq('id', outboxId);
-
-  // Log on the conversation so the thread shows the touch.
-  if (clientId) {
-    await supabase.from('communication_log').insert([
-      {
-        client_id: clientId,
-        channel: 'email',
-        direction: 'outbound',
-        subject,
-        body,
-        automation_type: 'outreach_sequence',
-        sent_at: now.toISOString(),
-      },
-    ]);
+    .update({ status: 'accepted_by_provider', provider, sent_at: new Date().toISOString(), error: null })
+    .eq('id', outboxId).eq('status', 'sending').select('id').maybeSingle();
+  if (acceptanceError || !accepted) {
+    throw new Error(`Email accepted by provider, but acceptance could not be saved; do not resend: ${acceptanceError?.message ?? 'send state changed'}`);
   }
-
-  // Advance the enrollment.
-  if (item.enrollment_id) {
-    const { data: enrollment } = await supabase
-      .from('sequence_enrollments')
-      .select('*')
-      .eq('id', item.enrollment_id)
-      .maybeSingle<EnrollmentRow>();
-    if (enrollment) {
-      if (item.step_number >= enrollment.total_steps) {
-        await supabase
-          .from('sequence_enrollments')
-          .update({
-            current_step: item.step_number,
-            last_sent_at: now.toISOString(),
-            next_send_at: null,
-            status: 'completed',
-            ended_at: now.toISOString(),
-            ended_reason: 'All emails sent.',
-          })
-          .eq('id', enrollment.id);
-
-        // Sequence exhausted without a reply — time for a call.
-        await supabase.from('tasks').insert([
-          {
-            subject: `Call ${lead.full_name} — email sequence finished`,
-            description: `All ${enrollment.total_steps} sequence emails went out with no reply. A direct call is the next touch.`,
-            due_date: nextArizonaBusinessMorning(now).toISOString(),
-            status: 'open',
-            priority: 'high',
-            related_type: 'lead',
-            related_id: lead.id,
-          },
-        ]);
-      } else {
-        const nextSend = new Date(
-          startOfArizonaDay(new Date(now.getTime() + enrollment.step_gap_days * DAY_MS)).getTime() + 16 * HOUR_MS, // 9 AM AZ
-        );
-        await supabase
-          .from('sequence_enrollments')
-          .update({ current_step: item.step_number, last_sent_at: now.toISOString(), next_send_at: nextSend.toISOString() })
-          .eq('id', enrollment.id);
-      }
-    }
-  }
-
-  return { sent: true };
+  return finalizeAcceptedOutbox(supabase, outboxId);
 }
 
-const OPT_OUT_PATTERN = /\bunsubscribe\b|\bopt[\s-]?out\b|stop (sending|emailing)|remove me/i;
+export async function finalizeAcceptedOutbox(supabase: SupabaseClient, outboxId: string): Promise<{
+  sent: boolean; deliveryStatus: 'accepted_by_provider'; message: string;
+}> {
+  const { data, error } = await supabase.rpc('finalize_outreach_send', {
+    p_outbox_id: outboxId, p_followup_at: nextArizonaBusinessMorning(new Date()).toISOString(),
+  });
+  if (error) throw new Error(`Email accepted by provider, but bookkeeping failed; retry only to finish saving, not to resend: ${error.message}`);
+  if (data !== true) throw new Error('Outreach finalization returned an invalid result; do not resend.');
+  return { sent: true, deliveryStatus: 'accepted_by_provider', message: 'Accepted by email provider; recipient delivery is not confirmed.' };
+}
 
 /**
  * Reply sensor: when an inbound message arrives, stop any active sequence for
@@ -381,77 +353,15 @@ const OPT_OUT_PATTERN = /\bunsubscribe\b|\bopt[\s-]?out\b|stop (sending|emailing
  */
 export async function handleInboundReply(
   supabase: SupabaseClient,
-  input: { clientId?: string | null; fromEmail?: string | null; body?: string | null },
+  input: { clientId?: string | null; fromEmail?: string | null; fromPhone?: string | null; body?: string | null; logId?: string | null },
 ): Promise<{ sequenceLeadIds: string[] }> {
-  const none = { sequenceLeadIds: [] as string[] };
-  try {
-    let email = (input.fromEmail ?? '').trim().toLowerCase();
-    if (!email && input.clientId) {
-      const { data: client } = await supabase.from('clients').select('email').eq('id', input.clientId).maybeSingle();
-      email = ((client?.email as string | undefined) ?? '').trim().toLowerCase();
-    }
-    if (!email) return none;
-
-    const optedOut = OPT_OUT_PATTERN.test(input.body ?? '');
-    if (optedOut) {
-      await supabase.from('outreach_opt_outs').upsert([{ email, reason: 'Requested in reply.' }], { onConflict: 'email' });
-    }
-
-    const { data: leads } = await supabase.from('leads').select('id,full_name').ilike('email', email).limit(10);
-    if (!leads || leads.length === 0) return none;
-
-    const leadIds = leads.map((lead) => lead.id as string);
-    const { data: enrollments } = await supabase
-      .from('sequence_enrollments')
-      .select('id,lead_id')
-      .in('lead_id', leadIds)
-      .in('status', ['active', 'paused']);
-    if (!enrollments || enrollments.length === 0) return none;
-
-    const now = new Date();
-    const enrollmentIds = enrollments.map((enrollment) => enrollment.id as string);
-
-    await supabase
-      .from('sequence_enrollments')
-      .update({
-        status: optedOut ? 'opted_out' : 'replied',
-        ended_at: now.toISOString(),
-        ended_reason: optedOut ? 'Recipient asked to stop.' : 'Prospect replied.',
-        next_send_at: null,
-      })
-      .in('id', enrollmentIds);
-
-    await supabase
-      .from('outreach_outbox')
-      .update({ status: 'rejected', error: optedOut ? 'Recipient opted out.' : 'Prospect replied — sequence stopped.' })
-      .in('enrollment_id', enrollmentIds)
-      .eq('status', 'pending_approval');
-
-    for (const enrollment of enrollments) {
-      const lead = leads.find((candidate) => candidate.id === enrollment.lead_id);
-      const name = (lead?.full_name as string | undefined) ?? 'Prospect';
-      if (!optedOut) {
-        await supabase.from('tasks').insert([
-          {
-            subject: `Reply from ${name} — call while it's warm`,
-            description: 'They replied to a sequence email. The sequence is stopped; follow up personally today.',
-            due_date: new Date(now.getTime() + 2 * HOUR_MS).toISOString(),
-            status: 'open',
-            priority: 'high',
-            related_type: 'lead',
-            related_id: enrollment.lead_id as string,
-          },
-        ]);
-      }
-      await writeNotification({
-        type: 'outreach',
-        message: optedOut ? `${name} asked to stop emails — opted out and sequence ended.` : `${name} replied — sequence stopped, call task created.`,
-        href: `/leads?lead=${enrollment.lead_id}`,
-      });
-    }
-    return { sequenceLeadIds: optedOut ? [] : enrollments.map((enrollment) => enrollment.lead_id as string) };
-  } catch {
-    // Reply handling is best-effort; logging the message must never fail because of it.
-    return none;
+  const { data, error } = await supabase.rpc('process_outreach_reply', {
+    p_client_id: input.clientId ?? null, p_email: input.fromEmail?.trim().toLowerCase() || null,
+    p_phone: input.fromPhone ?? null, p_body: input.body ?? '', p_log_id: input.logId ?? null,
+  });
+  if (error) throw new Error(`Inbound reply processing failed: ${error.message}`);
+  if (!data || !Array.isArray(data.sequenceLeadIds) || !data.sequenceLeadIds.every((id: unknown) => typeof id === 'string')) {
+    throw new Error('Inbound reply processing returned an invalid result.');
   }
+  return { sequenceLeadIds: data.sequenceLeadIds as string[] };
 }

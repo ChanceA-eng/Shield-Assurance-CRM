@@ -1,21 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { ACTIVE_LEAD_STATUSES } from '../../../../lib/lead-pipeline';
-
-function thirtyDaysFromNowISO(): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + 30);
-  return d.toISOString().slice(0, 10);
-}
-
-function toNumber(value: unknown): number {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
+import { loadHomePremiumMetrics } from '../../../../lib/home-metrics';
+import { databaseError } from '../../../../lib/workspace-api';
 
 export async function GET(): Promise<NextResponse> {
   try {
@@ -32,33 +19,31 @@ export async function GET(): Promise<NextResponse> {
       renewalsCount,
       openClaimsCount,
     ] = await Promise.all([
-      supabase.from('policies').select('premium'),
+      loadHomePremiumMetrics(supabase),
       supabase.from('leads').select('id', { count: 'exact', head: true }).in('status', [...ACTIVE_LEAD_STATUSES]),
       supabase.from('leads').select('id', { count: 'exact', head: true }),
       supabase.from('leads').select('id', { count: 'exact', head: true }).eq('status', 'won'),
       supabase
-        .from('policies')
+        .from('renewals')
         .select('id', { count: 'exact', head: true })
-        .lte('renewal_date', thirtyDaysFromNowISO())
-        .eq('status', 'active'),
+        .eq('renewal_bucket', '0-30'),
       supabase.from('claims').select('id', { count: 'exact', head: true }).eq('status', 'open'),
     ]);
 
-    if (policyPremiums.error) throw policyPremiums.error;
-    if (activeLeadsCount.error) throw activeLeadsCount.error;
-    if (totalLeadsCount.error) throw totalLeadsCount.error;
-    if (convertedLeadsCount.error) throw convertedLeadsCount.error;
-    if (renewalsCount.error) throw renewalsCount.error;
-    if (openClaimsCount.error) throw openClaimsCount.error;
+    if (activeLeadsCount.error) throw databaseError(activeLeadsCount.error);
+    if (totalLeadsCount.error) throw databaseError(totalLeadsCount.error);
+    if (convertedLeadsCount.error) throw databaseError(convertedLeadsCount.error);
+    if (renewalsCount.error) throw databaseError(renewalsCount.error);
+    if (openClaimsCount.error) throw databaseError(openClaimsCount.error);
 
-    const totalPremium = (policyPremiums.data ?? []).reduce((sum, row) => sum + toNumber(row.premium), 0);
+    const totalPremium = policyPremiums.total_written_premium;
     const totalLeads = totalLeadsCount.count ?? 0;
     const convertedLeads = convertedLeadsCount.count ?? 0;
 
     return NextResponse.json({
-      total_written_premium: Math.round(totalPremium),
-      totalPremium: Math.round(totalPremium),
-      premium: Math.round(totalPremium),
+      ...policyPremiums,
+      totalPremium,
+      premium: totalPremium,
       active_leads: activeLeadsCount.count ?? 0,
       lead_conversion_rate: totalLeads > 0 ? convertedLeads / totalLeads : 0,
       renewals_30_days: renewalsCount.count ?? 0,

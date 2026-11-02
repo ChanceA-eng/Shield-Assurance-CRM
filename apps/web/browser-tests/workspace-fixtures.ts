@@ -7,6 +7,7 @@ import type { WorkspaceAsset, WorkspaceNote, WorkspaceTask } from '@crm/shared';
 import { isRecord, isUuid } from '../src/lib/workspace-validation';
 import { namedTaskSubject } from '../src/lib/record-scope';
 import { directoryRows, type DirectoryFilter } from '../src/lib/client-directory';
+import { DEFAULT_OUTREACH_SENDER, EMPTY_MARKETING_PROFILE } from '@crm/shared';
 
 const root = path.resolve(__dirname, '..', '..', '..');
 const dotenv: { config: (options: { path: string }) => void } = require(require.resolve('dotenv', { paths: [path.join(root, 'apps', 'api')] }));
@@ -32,6 +33,11 @@ export class WorkspaceData {
   noteSaveIds: unknown[] = [];
   unexpected: string[] = [];
   requests: string[] = [];
+  marketingProfiles = new Map<string, unknown>();
+  outreachSettings = { approval_mode: true, daily_send_cap: 20, send_window_start: 8, send_window_end: 17, opt_out_footer: 'Test footer', sender_profile: { ...DEFAULT_OUTREACH_SENDER } };
+  events: Array<{ id: string; subject: string; title: string; event_date: string; event_time: string | null; all_day: boolean; status: string; related_type: string | null; related_id: string | null; updated_at: string }> = [];
+  failTaskSave = false;
+  failEventSave = false;
   intakeBodies: Array<Record<string, unknown>> = [];
   unreadMessages: { total: number; byClient: Record<string, number>; byLead: Record<string, number> } = { total: 0, byClient: {}, byLead: {} };
   private counter = 0;
@@ -78,6 +84,37 @@ export class WorkspaceData {
   handle(url: URL, method: string, body: Record<string, unknown>): { status?: number; json: unknown } {
     const key = `${method} ${url.pathname}`;
     this.requests.push(key);
+    if (url.pathname === '/api/outreach/profile') {
+      const profileKey = `${url.searchParams.get('record_type')}:${url.searchParams.get('record_id')}`;
+      if (method === 'PUT') this.marketingProfiles.set(profileKey, body.profile);
+      return { json: { profile: this.marketingProfiles.get(profileKey) ?? EMPTY_MARKETING_PROFILE } };
+    }
+    if (url.pathname === '/api/outreach') {
+      if (method === 'PATCH') {
+        this.outreachSettings = { ...this.outreachSettings, ...body };
+        return { json: { ok: true } };
+      }
+      return { json: { settings: this.outreachSettings, sent_today: 0, pending: [], enrollments: [], recent: [], opt_outs: 0 } };
+    }
+    if (url.pathname === '/api/automation/health') return { json: { jobs: [
+      { job: 'website-intake', latest: null, last_success_at: null },
+      { job: 'renewal-radar', latest: null, last_success_at: null },
+    ] } };
+    if (url.pathname === '/api/communication-log' && method === 'GET') return { json: [] };
+    if (url.pathname === '/api/workday' && url.searchParams.get('sources') === 'true') return { json: {
+      items: [], total: 0, actionable: 0, page: 0, page_size: 25, generated_at: this.stamp(),
+    } };
+    if (url.pathname === '/api/workday') return { json: {
+      items: this.tasks.filter((task) => task.status === 'open').slice(0, 25).map((task) => ({
+        id: `task:${task.id}`, task_id: task.id, source_id: task.id, kind: 'task', subject: task.subject,
+        name: task.related_name || 'General work', reason: task.description || 'Open follow-up', due_at: task.due_date,
+        created_at: task.created_at, assignee: task.assignee || null, priority: task.priority, updated_at: task.updated_at,
+        href: task.related_type === 'lead' ? `/leads?lead=${task.related_id}` : '/tasks', timing: 'today', urgency: 3,
+      })),
+      total: this.tasks.filter((task) => task.status === 'open').length, actionable: this.tasks.filter((task) => task.status === 'open').length,
+      page: 0, page_size: 25, generated_at: this.stamp(),
+    } };
+    if (url.pathname === `/api/clients/${this.account.id}/files`) return { json: [] };
     if (url.pathname === '/api/leads/attention') {
       if (method === 'GET') return { json: { leads: this.arrivals, total: this.arrivals.length } };
       const ids = Array.isArray(body.ids) ? body.ids : [body.id];
@@ -97,18 +134,37 @@ export class WorkspaceData {
         return { json: url.searchParams.get('count') === 'true' ? { count: rows.length } : rows.slice(offset, offset + Number(url.searchParams.get('limit') ?? '20')) };
       }
       if (method === 'PATCH') {
+        if (this.failTaskSave) { this.failTaskSave = false; return { status: 409, json: { message: 'This task changed. Refresh before retrying.' } }; }
         const task = this.tasks.find((item) => item.id === body.id);
         if (!task) return { status: 404, json: { message: 'Task not found.' } };
         if (body.expected_updated_at && body.expected_updated_at !== task.updated_at) return { status: 409, json: { message: 'This task changed.' } };
         if (typeof body.status === 'string') { task.status = body.status; task.completed_at = body.status === 'completed' ? this.stamp() : null; }
         if (typeof body.due_date === 'string') task.due_date = body.due_date;
         if (typeof body.subject === 'string') task.subject = namedTaskSubject(this.lead.full_name, body.subject);
+        if (body.assignee === null || typeof body.assignee === 'string') task.assignee = body.assignee;
         task.updated_at = this.stamp();
         return { json: task };
       }
       const task = this.createTask(body);
       this.tasks.push(task);
       return { status: 201, json: task };
+    }
+    if (url.pathname === '/api/events') {
+      if (method === 'GET') return { json: this.events.slice(Number(url.searchParams.get('offset') ?? '0'), Number(url.searchParams.get('offset') ?? '0') + 200) };
+      if (this.failEventSave) { this.failEventSave = false; return { status: 409, json: { message: 'This event changed. Refresh before retrying.' } }; }
+      const existing = this.events.find((event) => event.id === body.id);
+      if (existing) {
+        Object.assign(existing, body, { updated_at: this.stamp() });
+        return { json: existing };
+      }
+      const event = {
+        id: String(body.id), subject: String(body.subject), title: String(body.title),
+        event_date: String(body.event_date), event_time: typeof body.event_time === 'string' ? body.event_time : null,
+        all_day: Boolean(body.all_day), status: 'scheduled', related_type: typeof body.related_type === 'string' ? body.related_type : null,
+        related_id: typeof body.related_id === 'string' ? body.related_id : null, updated_at: this.stamp(),
+      };
+      this.events.push(event);
+      return { status: 201, json: event };
     }
     if (url.pathname === '/api/interactions') {
       if (method === 'GET') return { json: this.notes.filter((note) => this.scoped(note, url)).slice(Number(url.searchParams.get('page') ?? '0') * 100, (Number(url.searchParams.get('page') ?? '0') + 1) * 100) };
@@ -161,6 +217,7 @@ export class WorkspaceData {
       return { status: 201, json: asset };
     }
     if (url.pathname === '/api/record-activity') return { json: [] };
+    if (url.pathname === '/api/quote-options' && method === 'GET') return { json: [] };
     if (url.pathname === '/api/clients') return { json: [this.account] };
     if (url.pathname === '/api/clients/directory') {
       const accounts = Array.from({ length: 30 }, (_, index) => ({ ...this.account, id: index === 0 ? this.account.id : `account-${index}`,
@@ -205,7 +262,7 @@ export class WorkspaceData {
     if (url.pathname === '/api/communication-log/unread-by-lead') return { json: {} };
     if (url.pathname === '/api/communication-log/delivery' || url.pathname === '/api/policies' || url.pathname === '/api/recent') return { json: [] };
     if (url.pathname === '/api/renewals') return { json: { items: [], counts: { '30': 0, '60': 0, '90': 0, overdue: 0 } } };
-    if (url.pathname === '/api/metrics/home') return { json: { total_written_premium: 0, active_leads: 1, lead_conversion_rate: 0, renewals_30_days: 0, open_claims: 0 } };
+    if (url.pathname === '/api/metrics/home') return { json: { total_written_premium: 0, written_premium_series: [], active_leads: 1, lead_conversion_rate: 0, renewals_30_days: 0, open_claims: 0 } };
     if (url.pathname === '/api/briefing') return { json: { overdue_tasks: 0, today_tasks: [], today_tasks_count: 12, unread_messages: 0, pending_approvals: 0, new_leads_24h: 1, recent_replies: [], stalled_leads: 0, active_sequences: 0, summary: 'Review the current website request.' } };
     this.unexpected.push(key);
     return { status: 501, json: { message: `Unexpected browser fixture request: ${key}` } };
@@ -219,6 +276,7 @@ export class WorkspaceData {
       related_type: typeof body.related_type === 'string' ? body.related_type : null, related_id: typeof body.related_id === 'string' ? body.related_id : null,
       related_name: body.related_id ? this.lead.full_name : null, account_id: this.linked || body.related_type === 'client' ? this.account.id : null,
       note_id: null, completed_at: null, created_at: this.stamp(), updated_at: this.stamp(),
+      assignee: typeof body.assignee === 'string' ? body.assignee : null,
     };
   }
 }
@@ -246,7 +304,7 @@ export const test = base.extend<{ data: WorkspaceData }, { authCookies: Array<{ 
       await use(cookies);
     } finally {
       const removed = await admin.auth.admin.deleteUser(created.data.user.id);
-      if (removed.error) throw new Error('Unable to remove the newly created browser-verification auth user.');
+      if (removed.error) throw new Error(`Unable to remove browser-verification auth user ${created.data.user.id}: ${removed.error.message}`);
     }
   }, { scope: 'worker' }],
   context: async ({ browser, authCookies, baseURL }, use) => {
@@ -287,7 +345,7 @@ export const test = base.extend<{ data: WorkspaceData }, { authCookies: Array<{ 
       await use(context);
     } finally { await context.close(); }
   },
-  data: async ({ context }, use) => {
+  data: [async ({ context }, use) => {
     const data = new WorkspaceData();
     await context.route('**/api/**', async (route) => {
       const raw: unknown = route.request().method() === 'GET' ? {} : route.request().postDataJSON();
@@ -296,6 +354,6 @@ export const test = base.extend<{ data: WorkspaceData }, { authCookies: Array<{ 
     });
     await use(data);
     expect(data.unexpected, 'Every browser API request must have an explicit fixture, including accidental AI requests').toEqual([]);
-  },
+  }, { auto: true }],
 });
 export { expect };

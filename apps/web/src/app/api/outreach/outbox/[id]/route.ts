@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../../lib/api-auth';
-import { sendOutboxItem } from '../../../../../lib/outreach-engine';
+import { finalizeAcceptedOutbox, sendOutboxItem } from '../../../../../lib/outreach-engine';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -20,7 +20,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   if (!outboxId) return NextResponse.json({ message: 'Outbox id is required.' }, { status: 400 });
 
   const payload = (await request.json().catch(() => ({}))) as {
-    action?: 'approve_send' | 'reject';
+    action?: 'approve_send' | 'reject' | 'finish_recording';
     subject?: string;
     body?: string;
   };
@@ -35,11 +35,18 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
-  if (payload.action === 'approve_send') {
-    const result = await sendOutboxItem(supabase, outboxId, { subject: payload.subject, body: payload.body });
-    if (!result.sent) return NextResponse.json({ message: result.message ?? 'Send failed.' }, { status: 502 });
-    return NextResponse.json({ ok: true }, { status: 200 });
+  if (payload.action === 'approve_send' || payload.action === 'finish_recording') {
+    try {
+      // Recording-only recovery cannot invoke a provider, even for an invalid/uncertain item.
+      const result = payload.action === 'finish_recording'
+        ? await finalizeAcceptedOutbox(supabase, outboxId)
+        : await sendOutboxItem(supabase, outboxId, { subject: payload.subject, body: payload.body });
+      if (!result.sent) return NextResponse.json({ message: result.message ?? 'Send failed.' }, { status: 502 });
+      return NextResponse.json({ ok: true, delivery_status: result.deliveryStatus, message: result.message }, { status: 200 });
+    } catch (error) {
+      return NextResponse.json({ message: error instanceof Error ? error.message : 'Outreach action failed. Refresh before retrying; do not resend uncertain attempts.' }, { status: 500 });
+    }
   }
 
-  return NextResponse.json({ message: 'action must be approve_send or reject.' }, { status: 400 });
+  return NextResponse.json({ message: 'action must be approve_send, reject, or finish_recording.' }, { status: 400 });
 }

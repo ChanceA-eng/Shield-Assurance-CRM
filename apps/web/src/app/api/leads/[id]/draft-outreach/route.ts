@@ -4,6 +4,7 @@ import { requireApiSession } from '../../../../../lib/api-auth';
 import { draftOutreach, generateTalkingPoints } from '../../../../../lib/outreach-ai';
 import { leadOutreachContext } from '../../../../../lib/lead-outreach-context';
 import { workspaceApiError } from '../../../../../lib/workspace-api';
+import { isOutreachTemplate } from '@crm/shared';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -28,7 +29,10 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     return NextResponse.json({ message: 'Lead id is required.' }, { status: 400 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as { mode?: string; instruction?: string };
+  const body = (await request.json().catch(() => ({}))) as { mode?: string; instruction?: string; template?: unknown };
+  if (body.template !== undefined && !isOutreachTemplate(body.template)) {
+    return NextResponse.json({ message: 'Choose a valid email template.' }, { status: 400 });
+  }
   const mode = body.mode === 'talking_points' ? 'talking_points' : 'draft';
 
   const { data: lead, error } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
@@ -52,8 +56,10 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     return NextResponse.json(points, { status: 200 });
   }
 
+  try {
   const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : undefined;
-  const draft = await draftOutreach({ ...lead, ...contextData }, instruction || undefined);
+  const draft = await draftOutreach({ ...lead, ...contextData }, instruction || undefined,
+    isOutreachTemplate(body.template) ? body.template : undefined);
   if (!draft) {
     return NextResponse.json(
       { message: 'AI drafting is unavailable. Check that OPENAI_API_KEY is configured.' },
@@ -62,4 +68,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   }
 
   return NextResponse.json(draft, { status: 200 });
+  } catch (failure) {
+    return workspaceApiError(failure, 'lead-outreach/draft');
+  }
 }

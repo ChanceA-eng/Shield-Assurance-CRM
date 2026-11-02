@@ -1,9 +1,4 @@
-import SectionLayout from '../../components/crm/SectionLayout';
-
+import UnavailableFeature from '../../components/crm/UnavailableFeature';
 export default function BillingPage(): JSX.Element {
-  return (
-    <SectionLayout title="Billing Issues">
-      <p className="text-sm text-[#5c6873]">Billing issues module route is active.</p>
-    </SectionLayout>
-  );
+  return <UnavailableFeature title="Billing" description="Invoicing and payment tracking are not available yet. No invoices or payments are managed from this page." href="/clients" action="Open Accounts" />;
 }
