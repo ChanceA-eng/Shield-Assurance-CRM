@@ -253,7 +253,7 @@ export const contractorMasterCourseBlueprint: CourseBlueprint = {
               type: 'EXERCISE',
               title: 'Urgent-Care Resolution Protocol',
               content: {
-                body: 'Build same-day intake and payment workflow that preserves facts without admissions while using Coverage C efficiently.',
+                body: 'Build a same-day claim reporting and payment workflow that preserves facts without admissions while using Coverage C efficiently.',
               },
             },
           ],

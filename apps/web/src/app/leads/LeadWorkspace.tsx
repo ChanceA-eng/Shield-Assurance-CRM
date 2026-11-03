@@ -84,7 +84,7 @@ function AgentIntakeSummary({ intake }: { intake: NonNullable<ReturnType<typeof 
   return (
     <div className="space-y-3">
       <p className="text-xs text-cui-muted">
-        {intake.kind === 'commercial' ? 'Commercial' : 'Personal'} lines intake captured by an agent
+        {intake.kind === 'commercial' ? 'Commercial' : 'Personal'} lines details captured by an agent
         {intake.capturedBy ? <> · <span className="font-semibold">{intake.capturedBy}</span></> : null}
         {captured ? <> · {captured} (Arizona)</> : null}
       </p>
@@ -536,6 +536,17 @@ const WEBSITE_RENDERED_PATHS = new Set([
   'line',
   'insurance_line',
   'intake_route',
+  'zip',
+  'state',
+  'address',
+  'business',
+  'industry',
+  'primaryCoverage',
+  'vehicleDetails',
+  'bundles',
+  'preferredContactMethod',
+  'pipeline_push',
+  'metadata.pipeline',
   'ai_status',
   'producer_id',
   'submission_id',
@@ -897,7 +908,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
     }).then(() => {
       window.dispatchEvent(new Event(INTAKE_QUEUE_CHANGED));
     }).catch((failure: unknown) => {
-      setError(failure instanceof Error ? failure.message : 'The profile opened, but the intake queue could not be acknowledged.');
+      setError(failure instanceof Error ? failure.message : 'The profile opened, but the new-request alert could not be cleared.');
     });
   }, [intakeIds]);
 

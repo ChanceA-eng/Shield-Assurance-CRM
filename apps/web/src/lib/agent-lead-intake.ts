@@ -585,7 +585,7 @@ function validateCommercial(record: Record<string, unknown>, source: string): Co
 
 export function validateAgentIntake(value: unknown): AgentIntake | string {
   try {
-    if (!isRecord(value)) throw new IntakeError('Intake details are required.');
+    if (!isRecord(value)) throw new IntakeError('Lead details are required.');
     const source = str(value, 'source', 'Lead source', { required: true, max: 60 });
     oneOf(source, LEAD_SOURCES.map((option) => option.value), 'Lead source');
     if (value.kind === 'personal') return validatePersonal(value, source);

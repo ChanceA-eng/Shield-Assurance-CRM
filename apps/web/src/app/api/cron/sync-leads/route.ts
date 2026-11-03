@@ -67,7 +67,7 @@ function extractLeadArray(payload: unknown): Record<string, unknown>[] {
 }
 
 function buildDetails(lead: Record<string, unknown>): string | null {
-  const excluded = new Set(['full_name', 'name', 'email', 'phone', 'status']);
+  const excluded = new Set(['full_name', 'name', 'email', 'phone', 'status', 'intake_route']);
   const lines = Object.entries(lead)
     .filter(([key]) => !excluded.has(key.toLowerCase()))
     .map(([key, value]) => {
@@ -112,7 +112,7 @@ function normalizeExternalLead(lead: Record<string, unknown>): SyncLeadRecord {
     full_name: identity.fullName,
     email: identity.email,
     phone: identity.phone,
-    details: buildDetails(lead),
+    details: asString(lead.risk_details) ?? buildDetails(lead),
     source: 'website-pull',
     status: normalizeStatus(lead.status),
     form_payload: lead,

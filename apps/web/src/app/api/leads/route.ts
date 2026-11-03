@@ -7,6 +7,7 @@ import { scheduleIntakeTask, isWarmSource } from '../../../lib/intake-task';
 import { applyResubmission } from '../../../lib/resubmission';
 import { sourceSubmissionId } from '../../../lib/website-intake';
 import { workspaceBody, workspaceApiError } from '../../../lib/workspace-api';
+import { FILLABLE_COLUMNS, isAuthorizedWebsitePush, missingFieldUpdates } from '../../../lib/website-push';
 
 interface NewLeadPayload {
   id?: string;
@@ -177,6 +178,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     zip: normalizeText(payload.zip),
     state: normalizeText(payload.state),
     business: normalizeText(payload.business),
+    industry: normalizeText(payload.industry),
+    address: normalizeText(payload.address),
     primary_coverage: normalizeText(payload.primaryCoverage),
     vehicle_details: normalizeText(payload.vehicleDetails),
     details,
@@ -191,7 +194,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (submissionId) {
     const recorded = await supabase.from('lead_intake_events').select('lead_id').eq('submission_key', `website:${submissionId}`).maybeSingle();
     if (recorded.error) return jsonWithCors(request, { message: recorded.error.message }, { status: 500 });
-    if (recorded.data) return jsonWithCors(request, { id: recorded.data.lead_id, duplicate: true }, { status: 200 });
+    if (recorded.data) {
+      if (!isAuthorizedWebsitePush(payload, request.headers.get('authorization'))) {
+        return jsonWithCors(request, { id: recorded.data.lead_id, duplicate: true }, { status: 200 });
+      }
+      const card = await supabase.from('leads').select(FILLABLE_COLUMNS).eq('id', recorded.data.lead_id).maybeSingle();
+      if (card.error) return jsonWithCors(request, { message: card.error.message }, { status: 500 });
+      const updates = card.data ? missingFieldUpdates(card.data as Record<string, unknown>, payload) : {};
+      if (Object.keys(updates).length) {
+        const saved = await supabase.from('leads').update(updates).eq('id', recorded.data.lead_id);
+        if (saved.error) return jsonWithCors(request, { message: saved.error.message }, { status: 500 });
+      }
+      return jsonWithCors(request, { id: recorded.data.lead_id, duplicate: true, updatedFields: Object.keys(updates) }, { status: 200 });
+    }
   }
   // Resubmission check: a repeat inquiry is a hot signal, not a new lead.
   const email = normalizeText(payload.email)?.toLowerCase() ?? null;
