@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { arizonaDateTimeInput } from './arizona-time';
 import { databaseError } from './workspace-api';
+import { isRecord } from './workspace-validation';
 
 export interface PremiumMonth {
   month: string;
@@ -16,11 +17,6 @@ export interface HomeMetrics {
   open_claims: number;
 }
 
-interface PremiumPolicy {
-  premium: number | string | null;
-  effective_date: string | null;
-}
-
 export async function loadHomePremiumMetrics(supabase: SupabaseClient, now = new Date()): Promise<{
   total_written_premium: number;
   written_premium_series: PremiumMonth[];
@@ -34,25 +30,23 @@ export async function loadHomePremiumMetrics(supabase: SupabaseClient, now = new
       premium: 0,
     };
   });
-  let total = 0;
-  for (let offset = 0; ;) {
-    const { data, error } = await supabase.from('policies').select('premium,effective_date')
-      .order('id').range(offset, offset + 499).returns<PremiumPolicy[]>();
-    if (error) throw databaseError(error);
-    if (!data) throw new Error('Policy premium data was not returned.');
-    if (!data.length) break;
-    for (const policy of data) {
-      const premium = policy.premium === null ? 0 : Number(policy.premium);
-      if (!Number.isFinite(premium)) throw new Error('A policy has an invalid premium.');
-      total += premium;
-      const bucket = buckets.find((item) => item.key === policy.effective_date?.slice(0, 7));
-      if (bucket) bucket.premium += premium;
+  const result = await supabase.rpc('home_premium_summary', { p_first_month: `${buckets[0]!.key}-01` });
+  if (result.error) throw databaseError(result.error);
+  const data: unknown = result.data;
+  if (!isRecord(data) || !Array.isArray(data.months) || data.months.length !== 12
+    || (typeof data.total !== 'number' && typeof data.total !== 'string') || !Number.isFinite(Number(data.total))) {
+    throw new Error('Policy premium data returned an invalid summary.');
+  }
+  for (const [index, bucket] of buckets.entries()) {
+    const month: unknown = data.months[index];
+    if (!isRecord(month) || month.month !== bucket.key
+      || (typeof month.premium !== 'number' && typeof month.premium !== 'string') || !Number.isFinite(Number(month.premium))) {
+      throw new Error('Policy premium data returned an invalid month.');
     }
-    // Advance by actual rows returned, including when the server enforces a smaller page cap.
-    offset += data.length;
+    bucket.premium = Number(month.premium);
   }
   return {
-    total_written_premium: Math.round(total),
+    total_written_premium: Math.round(Number(data.total)),
     written_premium_series: buckets.map(({ month: label, premium }) => ({ month: label, premium: Math.round(premium) })),
   };
 }

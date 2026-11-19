@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { requireApiSession } from '../../../lib/api-auth';
 
+import { friendlyErrorMessage } from '../../../lib/workspace-api';
 interface RecentRecord {
   id: string;
   type: string;
@@ -14,16 +15,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const authError = await requireApiSession(request);
   if (authError) return authError;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   const [leads, messages, activity, clients, intake] = await Promise.all([
-    supabase.from('leads').select('id,full_name,created_at').order('created_at', { ascending: false }).limit(8),
+    supabase.from('leads').select('id,full_name,created_at').is('archived_at', null).order('created_at', { ascending: false }).limit(8),
     supabase.from('communication_log').select('id,client_id,direction,subject,sent_at').order('sent_at', { ascending: false }).limit(8),
     supabase.from('client_activities').select('id,client_id,lead_id,activity_type,title,occurred_at').order('occurred_at', { ascending: false }).limit(12),
     supabase.from('clients').select('id,full_name,created_at').order('created_at', { ascending: false }).limit(5),
     supabase.from('lead_intake_events').select('id,lead_id,received_at').order('received_at', { ascending: false }).limit(8),
   ]);
   for (const response of [leads, messages, activity, clients, intake]) {
-    if (response.error) return NextResponse.json({ message: response.error.message }, { status: 500 });
+    if (response.error) return NextResponse.json({ message: friendlyErrorMessage(response.error) }, { status: 500 });
   }
   const clientIds = [...new Set([
     ...(messages.data ?? []).flatMap((row) => row.client_id ? [row.client_id as string] : []),
@@ -38,7 +39,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     leadIds.length ? supabase.from('leads').select('id,full_name').in('id', leadIds) : Promise.resolve({ data: [], error: null }),
   ]);
   for (const result of [clientNamesRes, leadNamesRes]) {
-    if (result.error) return NextResponse.json({ message: result.error.message }, { status: 500 });
+    if (result.error) return NextResponse.json({ message: friendlyErrorMessage(result.error) }, { status: 500 });
   }
   const clientNames = new Map((clientNamesRes.data ?? []).map((row) => [row.id, row.full_name]));
   const leadNames = new Map((leadNamesRes.data ?? []).map((row) => [row.id, row.full_name]));

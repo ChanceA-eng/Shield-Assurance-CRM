@@ -1,11 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { arizonaDateTimeInput, arizonaInputToIso, nextArizonaBusinessMorning } from './arizona-time';
+import { agencyDateTimeInput, agencyInputToIso, nextAgencyBusinessMorning, DEFAULT_AGENCY_TIME_ZONE } from './agency-time';
+import { BUILT_IN_AUTOMATION_DEFAULTS, type BuiltInAutomationDefaults } from '@crm/shared';
+import { getAutomationSettings } from './automation-settings';
 
 /** Renewal work starts this many days before the renewal date. */
 export const RENEWAL_WINDOW_DAYS = 45;
 /** Lapsed renewals stay on the radar for this many days after the date passes. */
 export const RENEWAL_GRACE_DAYS = 7;
-const MILESTONES = [45, 30, 15, 7, 0] as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface RenewalPolicy {
@@ -22,8 +23,8 @@ export interface RenewalPolicy {
   status: string | null;
 }
 
-function arizonaToday(now: Date): string {
-  return arizonaDateTimeInput(now).slice(0, 10);
+function agencyToday(now: Date, timeZone: string): string {
+  return agencyDateTimeInput(now, timeZone).slice(0, 10);
 }
 
 function addDays(isoDate: string, days: number): string {
@@ -37,20 +38,20 @@ export function renewalDateOf(policy: Pick<RenewalPolicy, 'renewal_date' | 'expi
   return raw && /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : null;
 }
 
-/** Whole Arizona calendar days until the renewal (negative once it has passed). */
-export function daysUntilRenewal(renewalDate: string, now: Date): number {
-  return Math.round((Date.parse(`${renewalDate}T00:00:00Z`) - Date.parse(`${arizonaToday(now)}T00:00:00Z`)) / DAY_MS);
+/** Whole agency calendar days until the renewal (negative once it has passed). */
+export function daysUntilRenewal(renewalDate: string, now: Date, timeZone = 'America/Phoenix'): number {
+  return Math.round((Date.parse(`${renewalDate}T00:00:00Z`) - Date.parse(`${agencyToday(now, timeZone)}T00:00:00Z`)) / DAY_MS);
 }
 
 /** The tightest milestone reached, e.g. 12 days out -> 15. Null outside the window. */
-export function renewalMilestone(daysUntil: number): number | null {
-  if (daysUntil > RENEWAL_WINDOW_DAYS || daysUntil < -RENEWAL_GRACE_DAYS) return null;
+export function renewalMilestone(daysUntil: number, policy: BuiltInAutomationDefaults['renewal'] = BUILT_IN_AUTOMATION_DEFAULTS.renewal): number | null {
+  if (daysUntil > policy.window_days || daysUntil < -policy.grace_days) return null;
   if (daysUntil <= 0) return 0;
-  return [...MILESTONES].reverse().find((milestone) => daysUntil <= milestone) ?? null;
+  return [...policy.milestones].reverse().find((milestone) => daysUntil <= milestone) ?? null;
 }
 
-export function renewalPriority(daysUntil: number): 'high' | 'medium' {
-  return daysUntil <= 15 ? 'high' : 'medium';
+export function renewalPriority(daysUntil: number, urgentDays = 15): 'high' | 'medium' {
+  return daysUntil <= urgentDays ? 'high' : 'medium';
 }
 
 export function renewalMarker(policyId: string, renewalDate: string): string {
@@ -71,10 +72,10 @@ export function renewalMilestoneMessage(policy: RenewalPolicy, renewalDate: stri
 }
 
 /** First working morning on/after 30 days before renewal (or the next one if that has passed). */
-export function renewalTaskDue(renewalDate: string, now: Date): string {
-  const target = arizonaInputToIso(`${addDays(renewalDate, -30)}T09:00`);
+export function renewalTaskDue(renewalDate: string, now: Date, daysBefore = 30, timeZone = 'America/Phoenix'): string {
+  const target = agencyInputToIso(`${addDays(renewalDate, -daysBefore)}T09:00`, timeZone);
   if (target && Date.parse(target) > now.getTime()) return target;
-  return nextArizonaBusinessMorning(now).toISOString();
+  return nextAgencyBusinessMorning(now, timeZone).toISOString();
 }
 
 /**
@@ -86,12 +87,17 @@ export async function runRenewalRadar(
   supabase: SupabaseClient,
   now = new Date(),
   policyId?: string,
-): Promise<{ policies: number; tasksCreated: number; tasksEscalated: number; notifications: number }> {
-  const today = arizonaToday(now);
+  batch?: { limit: number; after: string | null },
+): Promise<{ policies: number; tasksCreated: number; tasksEscalated: number; notifications: number; next_cursor?: string | null }> {
+  const { configuration } = await getAutomationSettings(supabase);
+  const timeZone = configuration.outreach.timezone ?? DEFAULT_AGENCY_TIME_ZONE;
+  const today = agencyToday(now, timeZone);
   const result = { policies: 0, tasksCreated: 0, tasksEscalated: 0, notifications: 0 };
+  const settings = configuration.automation.renewal;
+  if (!settings.enabled) return result;
 
-  const from = addDays(today, -RENEWAL_GRACE_DAYS);
-  const to = addDays(today, RENEWAL_WINDOW_DAYS);
+  const from = addDays(today, -settings.grace_days);
+  const to = addDays(today, settings.window_days);
   const reconciliation = await supabase.rpc('reconcile_legacy_renewal_tasks', { p_policy_id: policyId ?? null });
   if (reconciliation.error) throw new Error(`Renewal reconciliation: ${reconciliation.error.message}`);
   let query = supabase
@@ -100,26 +106,27 @@ export async function runRenewalRadar(
     .or(`and(renewal_date.gte.${from},renewal_date.lte.${to}),and(renewal_date.is.null,expiration_date.gte.${from},expiration_date.lte.${to})`)
     .in('status', ['active', 'issued', 'bound', 'in_force', 'inforce', 'Active', 'Issued', 'Bound']);
   if (policyId) query = query.eq('id', policyId);
+  if (batch?.after) query = query.gt('id', batch.after);
   const policies: RenewalPolicy[] = [];
   for (let offset = 0; ; offset += 500) {
-    const { data, error } = await query.order('id').range(offset, offset + 499);
+    const { data, error } = await query.order('id').range(offset, offset + (batch?.limit ?? 500) - 1);
     if (error) throw new Error(`Renewal policy lookup: ${error.message}`);
     policies.push(...(data ?? []) as RenewalPolicy[]);
-    if (!data || data.length < 500) break;
+    if (batch || !data || data.length < 500) break;
   }
 
   for (const policy of policies) {
     const accountId = policy.client_id ?? policy.account_id;
     const renewalDate = renewalDateOf(policy);
     if (!accountId || !renewalDate) continue;
-    const daysUntil = daysUntilRenewal(renewalDate, now);
-    const milestone = renewalMilestone(daysUntil);
+    const daysUntil = daysUntilRenewal(renewalDate, now, timeZone);
+    const milestone = renewalMilestone(daysUntil, settings);
     if (milestone === null) continue;
     result.policies += 1;
 
     const marker = renewalMarker(policy.id, renewalDate);
     const name = policy.insured_name?.trim() || 'Policy';
-    const priority = renewalPriority(daysUntil);
+    const priority = renewalPriority(daysUntil, settings.urgent_days_before);
 
     const premium = policy.premium !== null && policy.premium !== '' ? `$${Number(policy.premium).toLocaleString('en-US')}` : null;
     const persisted = await supabase.rpc('persist_renewal_radar', {
@@ -132,7 +139,7 @@ export async function runRenewalRadar(
             'Review coverage, remarket if needed, and confirm renewal with the client.',
             marker,
           ].filter(Boolean).join('\n'),
-          due_date: renewalTaskDue(renewalDate, now),
+          due_date: renewalTaskDue(renewalDate, now, settings.task_days_before, timeZone),
           status: 'open',
           priority,
           kind: 'task',
@@ -148,5 +155,5 @@ export async function runRenewalRadar(
     result.notifications += counts.notifications;
   }
 
-  return result;
+  return { ...result, ...(batch ? { next_cursor: policies.length === batch.limit ? policies[policies.length - 1].id : null } : {}) };
 }

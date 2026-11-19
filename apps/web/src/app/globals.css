@@ -4,8 +4,47 @@
 
 body {
   @apply antialiased;
-  background: #e4e5e6;
-  color: #23282c;
+  @apply bg-cui-body text-cui-text;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   min-height: 100vh;
+}
+
+@layer components {
+  .crm-button {
+    @apply inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-cui-border bg-cui-panel px-3 py-2 text-sm font-semibold text-cui-text shadow-sm transition hover:border-cui-primary hover:bg-cui-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cui-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .crm-button-primary {
+    @apply crm-button border-cui-primary-strong bg-cui-primary-strong text-white hover:border-cui-primary-hover hover:bg-cui-primary-hover;
+  }
+
+  .crm-button-danger {
+    @apply crm-button border-cui-danger/30 bg-cui-danger/10 text-rose-800 hover:border-cui-danger hover:bg-cui-danger/20;
+  }
+
+  .crm-input {
+    @apply min-h-9 w-full min-w-0 rounded-lg border border-cui-border bg-cui-panel px-3 py-2 text-sm text-cui-text placeholder:text-cui-muted focus:border-cui-primary focus:outline-none focus:ring-2 focus:ring-cui-primary/20 disabled:cursor-not-allowed disabled:bg-cui-light disabled:opacity-60;
+  }
+
+  .crm-tabs {
+    @apply flex gap-1 overflow-x-auto rounded-xl border border-cui-border bg-cui-panel p-1 shadow-card;
+  }
+
+  .crm-tab {
+    @apply inline-flex min-h-9 shrink-0 items-center justify-center rounded-lg px-3 py-2 text-sm font-semibold text-cui-muted transition hover:bg-cui-light hover:text-cui-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cui-primary;
+  }
+
+  .crm-tab[aria-selected='true'],
+  .crm-tab[aria-pressed='true'],
+  .crm-tab[aria-current='page'] {
+    @apply bg-cui-primary-strong text-white shadow-sm;
+  }
+
+  .crm-shell :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']), select, textarea) {
+    @apply rounded-lg border-cui-border bg-cui-panel text-cui-text focus:border-cui-primary focus:outline-none focus:ring-2 focus:ring-cui-primary/20;
+  }
+
+  .crm-shell :where(button, a, summary):focus-visible {
+    @apply outline-none ring-2 ring-cui-primary ring-offset-2;
+  }
 }

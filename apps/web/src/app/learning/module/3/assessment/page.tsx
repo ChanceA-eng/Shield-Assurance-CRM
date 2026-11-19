@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import SectionLayout from '../../../../../components/crm/SectionLayout';
+import StaticAssessmentHistory from '../../../../../components/learning/StaticAssessmentHistory';
+import { useStaticAssessmentProgress } from '../../../../../lib/learning/static-assessment-progress';
 
 type Choice = 'A' | 'B' | 'C';
 
@@ -118,6 +120,7 @@ const questions: Question[] = [
 export default function ModuleThreeAssessmentPage(): JSX.Element {
   const [answers, setAnswers] = useState<Partial<Record<number, Choice>>>({});
   const [submitted, setSubmitted] = useState(false);
+  const assessment = useStaticAssessmentProgress(3);
 
   const score = useMemo(() => {
     return questions.reduce((sum, question) => {
@@ -138,6 +141,8 @@ export default function ModuleThreeAssessmentPage(): JSX.Element {
             Passing score: 80 percent (8 of 10 correct).
           </p>
         </header>
+
+        <StaticAssessmentHistory attempts={assessment.attempts} loading={assessment.loading} error={assessment.error} />
 
         <div className="space-y-8">
           {questions.map((question) => (
@@ -168,10 +173,14 @@ export default function ModuleThreeAssessmentPage(): JSX.Element {
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={() => setSubmitted(true)}
+              onClick={() => {
+                setSubmitted(true);
+                void assessment.saveAttempt(percent, questions.length);
+              }}
+              disabled={assessment.saving || (submitted && !assessment.error)}
               className="rounded-lg bg-slate-950 px-8 py-4 text-lg font-semibold text-white shadow-sm transition-all hover:bg-slate-800"
             >
-              Submit Assessment
+              {assessment.error && submitted ? 'Retry saving result' : 'Submit Assessment'}
             </button>
             <a href="/learning/module/3/lesson/4" className="rounded-lg border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Previous</a>
           </div>

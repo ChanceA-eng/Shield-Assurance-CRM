@@ -1,209 +1,108 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
-import { requireApiSession } from '../../../../../lib/api-auth';
-import { scheduleIntakeTask } from '../../../../../lib/intake-task';
-import { buildProspects, detectVendorProfile, type ImportRow, type VendorProfile } from '../../../../../lib/lead-import';
+import { getApiSession } from '../../../../../lib/api-auth';
+import { buildProspects, detectVendorProfile } from '../../../../../lib/lead-import';
+import { classifiedImportProfile, importRenewalTasks } from '../../../../../lib/import-intelligence';
+import { databaseError, friendlyErrorMessage, workspaceApiError, workspaceBody } from '../../../../../lib/workspace-api';
+import { isRecord, isUuid } from '../../../../../lib/workspace-validation';
+import { WorkspaceError } from '../../../../../lib/record-scope';
+import { discoveryAccess } from '../../../../../lib/discovery';
+import { getAutomationSettings } from '../../../../../lib/automation-settings';
 
-interface RouteContext {
-  params: Promise<{ batchId: string }>;
-}
-
-interface StagedRow {
-  id: string;
-  full_name: string;
-  email: string | null;
-  phone: string | null;
-  address: string | null;
-  line_of_business: string | null;
-  disposition: string;
-  payload: {
-    profile?: Record<string, unknown>;
-    raw?: Record<string, unknown>[];
-  } | null;
-}
-
-interface RenewalSignal {
-  type?: string;
-  date?: string;
-  carrier?: string | null;
-  broker?: string | null;
-}
-
-function text(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-/** Task due ~60 days before the renewal date; tomorrow if that window already passed. */
-function renewalTaskDue(renewalDate: string): string | null {
-  const renewal = new Date(`${renewalDate}T09:00:00`);
-  if (Number.isNaN(renewal.getTime()) || renewal.getTime() < Date.now()) return null;
-  const due = new Date(renewal.getTime() - 60 * 86400 * 1000);
-  if (due.getTime() < Date.now()) {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(9, 0, 0, 0);
-    return tomorrow.toISOString();
-  }
-  return due.toISOString();
-}
+interface RouteContext { params: Promise<{ batchId: string }> }
 
 export async function POST(request: NextRequest, context: RouteContext): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
-
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  }
-
-  const { batchId } = await context.params;
-  const body = (await request.json().catch(() => ({}))) as { include_ids?: string[] };
-  const includeIds = Array.isArray(body.include_ids) ? new Set(body.include_ids) : null;
-
-  const batchRes = await supabase.from('import_batches').select('*').eq('id', batchId).maybeSingle();
-  if (batchRes.error) return NextResponse.json({ message: batchRes.error.message }, { status: 500 });
-  if (!batchRes.data) return NextResponse.json({ message: 'Batch not found.' }, { status: 404 });
-
-  const stagedRes = await supabase
-    .from('import_prospects')
-    .select('id,full_name,email,phone,address,line_of_business,disposition,payload')
-    .eq('batch_id', batchId)
-    .limit(2000);
-
-  if (stagedRes.error) return NextResponse.json({ message: stagedRes.error.message }, { status: 500 });
-
-  const staged = (stagedRes.data ?? []) as StagedRow[];
-  const toCommit = staged.filter((row) => {
-    if (row.disposition === 'committed') return false;
-    if (includeIds) return includeIds.has(row.id);
-    return row.disposition === 'pending';
-  });
-
-  if (toCommit.length === 0) {
-    return NextResponse.json({ message: 'Nothing selected to commit.' }, { status: 400 });
-  }
-
-  // Contact gate: a lead you cannot reach is not a lead.
-  const blocked = toCommit.filter((row) => !row.email?.trim() && !row.phone?.trim());
-  const committable = toCommit.filter((row) => row.email?.trim() || row.phone?.trim());
-
-  let committed = 0;
-  let tasksCreated = 0;
-  const errors: string[] = [];
-
-  for (const row of committable) {
-    // Always re-extract from raw rows with the current parser at commit time —
-    // a batch staged under an older parser can never freeze stale extraction.
-    let profile = row.payload?.profile ?? {};
-    const rawRows = row.payload?.raw;
-    if (Array.isArray(rawRows) && rawRows.length > 0) {
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
+  const db = getSupabaseServerClient();
+  if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
+  try {
+    const { batchId } = await context.params;
+    const body = await workspaceBody(request);
+    if (!isUuid(batchId) || (body.include_ids !== undefined && (!Array.isArray(body.include_ids)
+      || !body.include_ids.length || !body.include_ids.every((id) => isUuid(id))))) {
+      throw new WorkspaceError('Choose a valid batch and selected prospects.', 400);
+    }
+    const includeIds = Array.isArray(body.include_ids) ? new Set(body.include_ids as string[]) : null;
+    const batch = await db.from('import_batches').select('*').eq('id', batchId).maybeSingle();
+    if (batch.error) throw databaseError(batch.error);
+    if (!batch.data) throw new WorkspaceError('Batch not found.', 404);
+    if (batch.data.discovery_source_id) await discoveryAccess(db, session.user.id);
+    const settings = await getAutomationSettings(db);
+    const rows: Array<Record<string, unknown>> = [];
+    for (let offset = 0; ; offset += 500) {
+      const result = await db.from('import_prospects').select('*').eq('batch_id', batchId).order('id').range(offset, offset + 499);
+      if (result.error) throw databaseError(result.error);
+      rows.push(...(result.data ?? []));
+      if ((result.data ?? []).length < 500) break;
+    }
+    if (includeIds && [...includeIds].some((id) => !rows.some((row) => row.id === id))) {
+      throw new WorkspaceError('A selected prospect no longer belongs to this batch. Refresh before importing.', 409);
+    }
+    const selected = rows.filter((row) => includeIds ? includeIds.has(String(row.id)) : row.disposition === 'pending');
+    if (!selected.length) throw new WorkspaceError('Nothing selected to commit.', 400);
+    let committed = 0, tasksCreated = 0, contactTasksCreated = 0, duplicates = 0, alreadyCommitted = 0, blocked = 0;
+    const errors: string[] = [];
+    const results: Array<Record<string, unknown>> = [];
+    for (const row of selected) {
       try {
-        const vendorProfile = (batchRes.data.vendor_profile || detectVendorProfile(rawRows as ImportRow[])) as VendorProfile;
-        const rebuilt = buildProspects(rawRows as ImportRow[], vendorProfile)[0];
-        if (rebuilt) profile = rebuilt.profile;
-      } catch {
-        // Fall back to the staged profile.
+        const payload = isRecord(row.payload) ? row.payload : {};
+        if (batch.data.discovery_source_id && row.disposition !== 'committed' && !isRecord(payload.profile)) {
+          throw new WorkspaceError('The acquired profile needs review before promotion.', 422);
+        }
+        let profile = isRecord(payload.profile) ? payload.profile : {};
+        if (!batch.data.discovery_source_id && row.disposition !== 'committed' && Array.isArray(payload.raw) && payload.raw.length) {
+          if (!payload.raw.every(isRecord)) throw new WorkspaceError('The source rows need review before import.', 422);
+          const vendor = batch.data.vendor_profile;
+          const rebuilt = buildProspects(payload.raw, vendor === 'commercial' || vendor === 'personal_auto' || vendor === 'generic' ? vendor : detectVendorProfile(payload.raw));
+          if (rebuilt.length !== 1) throw new WorkspaceError('Source rows resolve to multiple prospects. Reparse and review before importing.', 422);
+          profile = rebuilt[0].profile;
+        }
+        profile = classifiedImportProfile(profile);
+        const saved = await db.rpc('promote_import_prospect', {
+          p_prospect: row.id, p_batch: batchId, p_actor: session.user.id,
+          p_expected: { full_name: row.full_name, email: row.email, phone: row.phone, address: row.address,
+            line_of_business: row.line_of_business, payload: row.payload },
+          p_profile: profile, p_tasks: importRenewalTasks(String(row.full_name), profile, new Date(), {
+            enabled: settings.configuration.automation.import_renewal.tasks_enabled,
+            daysBefore: settings.configuration.automation.import_renewal.task_days_before,
+          }),
+        });
+        if (saved.error) throw databaseError(saved.error);
+        const data: unknown = saved.data;
+        if (!isRecord(data) || !['committed', 'already_committed', 'duplicate', 'blocked_no_contact'].includes(String(data.disposition))
+          || typeof data.tasks_created !== 'number' || !Number.isInteger(data.tasks_created) || data.tasks_created < 0
+          || typeof data.contact_tasks_created !== 'number' || !Number.isInteger(data.contact_tasks_created) || data.contact_tasks_created < 0
+          || (['committed', 'already_committed'].includes(String(data.disposition)) && !isUuid(data.lead_id))) {
+          throw new WorkspaceError('Import status could not be verified. Refresh before retrying.', 503);
+        }
+        if (data.disposition === 'committed') { committed++; tasksCreated += data.tasks_created; contactTasksCreated += data.contact_tasks_created; }
+        if (data.disposition === 'already_committed') alreadyCommitted++;
+        if (data.disposition === 'duplicate') duplicates++;
+        if (data.disposition === 'blocked_no_contact') blocked++;
+        results.push({ prospect_id: row.id, ...data });
+      } catch (failure) {
+        const message = failure instanceof WorkspaceError ? failure.message : friendlyErrorMessage(failure instanceof Error ? failure : { message: 'Import failed.' });
+        console.error('[import/commit]', row.id, failure instanceof Error ? failure.message : failure);
+        errors.push(`${row.full_name}: ${message}`);
+        results.push({ prospect_id: row.id, disposition: 'failed', message });
       }
     }
-    const kind = text(profile.kind) ?? 'generic';
-    const company = (profile.company ?? {}) as Record<string, unknown>;
-
-    const leadInsert = await supabase
-      .from('leads')
-      .insert([
-        {
-          full_name: row.full_name,
-          email: row.email,
-          phone: row.phone,
-          address: row.address,
-          line_of_business: row.line_of_business ?? 'General',
-          source: 'prospect_import',
-          status: 'new',
-          business: kind === 'commercial' ? row.full_name : null,
-          industry: text(company.industry),
-          website: text(company.website),
-          est_employees: text(company.employees),
-          est_revenue: text(company.sales_range),
-          details: `Imported from ${batchRes.data.file_name}`,
-          form_payload: {
-            profile,
-            import: { batch_id: batchId, file_name: batchRes.data.file_name },
-          },
-        },
-      ])
-      .select('id,full_name')
-      .single<{ id: string; full_name: string }>();
-
-    if (leadInsert.error || !leadInsert.data) {
-      errors.push(`${row.full_name}: ${leadInsert.error?.message ?? 'insert failed'}`);
-      continue;
+    const warnings: string[] = [];
+    if (committed && !batch.data.discovery_source_id) {
+      const notification = await db.from('notifications').insert({
+        type: 'new_lead', message: `${committed} imported leads added. ${contactTasksCreated} first-contact tasks and ${tasksCreated} renewal-verification tasks created. Sequences require separate enrollment and marketing permission.`,
+        href: '/tasks', read: false,
+      });
+      if (notification.error) {
+        console.error('[import/summary]', notification.error);
+        warnings.push('Leads and tasks were saved, but the import summary notification could not be saved.');
+      }
     }
-
-    committed += 1;
-
-    await supabase
-      .from('import_prospects')
-      .update({ disposition: 'committed', lead_id: leadInsert.data.id })
-      .eq('id', row.id);
-
-    // X-date tasks: the renewal calendar is the whole point of commercial data.
-    const renewals = Array.isArray(profile.renewals) ? (profile.renewals as RenewalSignal[]) : [];
-    const taskRows = renewals
-      .map((renewal) => {
-        if (!renewal.date || !renewal.type) return null;
-        const due = renewalTaskDue(renewal.date);
-        if (!due) return null;
-        const incumbent = renewal.carrier ? ` — currently with ${renewal.carrier}` : '';
-        return {
-          subject: `${row.full_name} — ${renewal.type} renewal approaching`,
-          description: `Their ${renewal.type} policy renews ${renewal.date}${incumbent}${renewal.broker ? ` (broker: ${renewal.broker})` : ''}. Reach out early enough to get on their quote list before the renewal window closes.`,
-          due_date: due,
-          status: 'open',
-          priority: 'medium',
-          related_type: 'lead',
-          related_id: leadInsert.data.id,
-        };
-      })
-      .filter((task): task is NonNullable<typeof task> => task !== null);
-
-    if (taskRows.length > 0) {
-      const taskInsert = await supabase.from('tasks').insert(taskRows);
-      if (!taskInsert.error) tasksCreated += taskRows.length;
-    }
-
-    // Every committed lead gets a contact task (next business day, 4 PM AZ).
-    await scheduleIntakeTask(supabase, { leadId: leadInsert.data.id, name: row.full_name, warm: false });
+    return NextResponse.json({ committed, tasks_created: tasksCreated, contact_tasks_created: contactTasksCreated,
+      duplicates, already_committed: alreadyCommitted, blocked_no_contact: blocked, failed: errors.length,
+      errors: errors.slice(0, 10), warnings, results }, { status: 200 });
+  } catch (failure) {
+    return workspaceApiError(failure, 'import/commit');
   }
-
-  // Unselected prospects stay pending — they remain available for a later commit.
-  const pendingLeft = await supabase
-    .from('import_prospects')
-    .select('id', { count: 'exact', head: true })
-    .eq('batch_id', batchId)
-    .eq('disposition', 'pending');
-
-  const committedTotal = await supabase
-    .from('import_prospects')
-    .select('id', { count: 'exact', head: true })
-    .eq('batch_id', batchId)
-    .eq('disposition', 'committed');
-
-  await supabase
-    .from('import_batches')
-    .update({
-      status: (pendingLeft.count ?? 0) > 0 ? 'review' : 'committed',
-      committed_count: committedTotal.count ?? committed,
-    })
-    .eq('id', batchId);
-
-  return NextResponse.json(
-    {
-      committed,
-      tasks_created: tasksCreated,
-      failed: errors.length,
-      blocked_no_contact: blocked.length,
-      errors: errors.slice(0, 10),
-    },
-    { status: 200 },
-  );
 }

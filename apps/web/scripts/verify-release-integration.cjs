@@ -9,7 +9,7 @@ if (process.env.CRM_RELEASE_QA_ALLOWED !== '1') throw new Error('Set CRM_RELEASE
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL, anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 const base = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000';
-const account = randomUUID(), requestId = randomUUID(), qaLead = randomUUID(), qaClaim = randomUUID(), qaOutbox = randomUUID(), qaQuote = randomUUID(), qaQuoteIssue = randomUUID(), qaInsuredAsset = randomUUID(), qaScheduledPolicyRequest = randomUUID();
+const account = randomUUID(), requestId = randomUUID(), qaLead = randomUUID(), qaClaim = randomUUID(), qaOutbox = randomUUID(), qaQuote = randomUUID(), qaQuoteIssue = randomUUID(), qaInsuredAsset = randomUUID(), qaScheduledPolicyRequest = randomUUID(), qaRewriteRequest = randomUUID();
 const email = `release-qa-${randomUUID()}@example.invalid`, password = `${randomUUID()}${randomUUID()}`;
 let userId, storagePath, fileId, policyId;
 
@@ -24,7 +24,7 @@ async function session() {
   return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
 }
 async function api(cookie, route, init) {
-  const response = await fetch(`${base}${route}`, { ...init, headers: { Cookie: cookie, 'Content-Type': 'application/json', ...init?.headers }, redirect: 'manual' });
+  const response = await fetch(`${base}${route}`, { signal: AbortSignal.timeout(60000), ...init, headers: { Cookie: cookie, 'Content-Type': 'application/json', ...init?.headers }, redirect: 'manual' });
   if (!response.ok) throw new Error(`QA API ${route.split('?')[0]} returned ${response.status}: ${(await response.text()).slice(0, 400)}`);
   return response;
 }
@@ -104,7 +104,8 @@ async function main() {
     await checked(await admin.from('client_assets').insert({ id: qaInsuredAsset, client_id: account,
       title: 'Disposable scheduled vehicle', asset_type: 'vehicle', metadata: { details: { vin: 'QA-SCHEDULE-ONLY' } } }), 'QA insured asset');
     const scheduledPolicy = { ...fields, account_id: account, client_id: account, policy_number: `QA-SCHEDULE-${qaInsuredAsset}`,
-      request_id: qaScheduledPolicyRequest, carrier_confirmed: true, email_consent: false, insured_asset_ids: [qaInsuredAsset] };
+      request_id: qaScheduledPolicyRequest, carrier_confirmed: true, email_consent: false, insured_asset_ids: [qaInsuredAsset],
+      confirmation: { confirmed_on: '2026-01-01', reference: 'QA reference for scheduled term', file_id: fileId, attested: true } };
     const scheduledFirst = await (await api(first, '/api/policies', { method: 'POST', body: JSON.stringify(scheduledPolicy) })).json();
     const scheduledRetry = await (await api(second, '/api/policies', { method: 'POST', body: JSON.stringify(scheduledPolicy) })).json();
     assert.equal(scheduledFirst.id, scheduledRetry.id);
@@ -137,7 +138,10 @@ async function main() {
     assert.ok(serviceTasks[0].action_href.includes(`context_id=${qaClaim}`));
     const updates = await Promise.all([0, 1].map(() => admin.rpc('sync_service_action', { p_kind: 'claim', p_id: qaClaim })));
     for (const result of updates) await checked(result, 'Overlapping service reconciliation');
-    assert.equal((await checked(await admin.from('notifications').select('id').eq('task_id', serviceTasks[0].id), 'Service notifications')).length, 1);
+    const serviceNotifications = await checked(await admin.from('notifications')
+      .select('id,automation_key,type,message,created_at').eq('task_id', serviceTasks[0].id), 'Service notifications');
+    assert.equal(serviceNotifications.length, 1,
+      `Expected one service notification for ${serviceTasks[0].id}; found ${JSON.stringify(serviceNotifications)}.`);
     const otherSessionTasks = await (await api(second, `/api/tasks?record_type=client&record_id=${account}&status=open&include=related&limit=200`)).json();
     assert.equal(otherSessionTasks.filter((task) => task.id === serviceTasks[0].id).length, 1);
     await checked(await admin.from('claims').update({ status: 'closed' }).eq('id', qaClaim), 'Resolve QA service');
@@ -156,7 +160,7 @@ async function main() {
       body: JSON.stringify({ ...fields, account_id: account, lead_id: qaLead, carrier_confirmed: false }), redirect: 'manual' });
     assert.equal(unconfirmed.status, 400);
     assert.equal((await checked(await admin.from('leads').select('status').eq('id', qaLead).single(), 'Unconfirmed QA lead unchanged')).status, 'new');
-    assert.equal((await checked(await admin.from('policies').select('id').eq('client_id', account), 'Unconfirmed QA policy count')).length, 1);
+    assert.equal((await checked(await admin.from('policies').select('id').eq('client_id', account), 'Unconfirmed QA policy count')).length, 2);
     console.log('PASS authenticated exact lead/account placement prefill and confirmation-required API rejection without policy or lead changes.');
     const quoteRoute = `/api/quote-options?record_type=lead&record_id=${qaLead}`;
     const quoteFields = { id: qaQuote, carrier: 'Manual QA carrier', line_of_business: 'Auto', premium: '1250.55',
@@ -190,25 +194,59 @@ async function main() {
     assert.equal(unauthenticatedHistory.status, 401);
     console.log('PASS account/lead quote history, preserved revisions, lossless cursor and authenticated selected-quote access.');
     assert.equal((await checked(await admin.from('leads').select('status').eq('id', qaLead).single(), 'Accepted quote lead unchanged')).status, 'new');
-    assert.equal((await checked(await admin.from('policies').select('id').eq('client_id', account), 'Accepted quote policy count')).length, 1);
+    assert.equal((await checked(await admin.from('policies').select('id').eq('client_id', account), 'Accepted quote policy count')).length, 2);
     console.log('PASS saved manual quote retry, cross-session account visibility, accepted outcome history and stale-version conflict; no coverage or lead completion.');
     const quotePrefill = await (await api(second, `/api/policies/prefill?account_id=${account}&lead_id=${qaLead}&quote_id=${qaQuote}`)).json();
     assert.equal(quotePrefill.carrier, 'Manual QA carrier');
     assert.equal(Number(quotePrefill.premium), 1250.55);
     const confirmedQuote = { ...fields, account_id: account, lead_id: qaLead, request_id: qaQuoteIssue,
       carrier: quotePrefill.carrier, premium: quotePrefill.premium, policy_number: `QA-QUOTE-${qaQuote}`,
-      quote_id: qaQuote, quote_version: quotePrefill.quote_version, carrier_confirmed: true, email_consent: false };
+      quote_id: qaQuote, quote_version: quotePrefill.quote_version, carrier_confirmed: true, email_consent: false,
+      confirmation: { confirmed_on: '2026-01-01', reference: 'QA carrier portal quote placement', file_id: null, attested: true } };
     const placements = await Promise.all([first, second].map(async (cookie) =>
       (await api(cookie, '/api/policies', { method: 'POST', body: JSON.stringify(confirmedQuote) })).json()));
     assert.equal(placements[0].id, placements[1].id);
     assert.equal(placements[0].quote_option_id, qaQuote);
     assert.equal(placements[0].quote_snapshot.carrier, 'Manual QA carrier');
+    assert.equal((await checked(await admin.from('policies').select('id').eq('client_id', account), 'Confirmed quote policy count')).length, 3);
     assert.equal((await checked(await admin.from('leads').select('status').eq('id', qaLead).single(), 'Confirmed quote lead')).status, 'won');
     await checked(await admin.from('quote_options').update({ carrier: 'Later QA quote revision', updated_at: new Date().toISOString() }).eq('id', qaQuote), 'Later quote edit');
     const placedRetry = await (await api(second, '/api/policies', { method: 'POST', body: JSON.stringify(confirmedQuote) })).json();
     assert.equal(placedRetry.id, placements[0].id);
     assert.equal(placedRetry.quote_snapshot.carrier, 'Manual QA carrier');
     console.log('PASS exact quote prefill and overlapping confirmed placement: one linked policy, preserved quote snapshot and retry after later quote edit; no provider send.');
+    const docsRoute = `/api/placement-documents?account_id=${account}&type=quote&id=${qaQuote}`;
+    const linked = await (await api(first, docsRoute, { method: 'POST', body: JSON.stringify({ file_id: fileId }) })).json();
+    const linkedAgain = await (await api(second, docsRoute, { method: 'POST', body: JSON.stringify({ file_id: fileId }) })).json();
+    assert.equal(linked.id, linkedAgain.id);
+    const protectedDelete = await fetch(`${base}/api/clients/${account}/files`, { method: 'DELETE', headers: { Cookie: first, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: fileId }), signal: AbortSignal.timeout(60000) });
+    assert.equal(protectedDelete.status, 409);
+    assert.deepEqual(Buffer.from(await (await api(second, saved.download_url)).arrayBuffer()), bytes);
+    const context = await (await api(second, `/api/clients/${account}/context?type=policy&id=${placements[0].id}`)).json();
+    assert.equal(context.record.confirmation_evidence.confirmation.reference, confirmedQuote.confirmation.reference);
+    await api(first, '/api/policies', { method: 'PATCH', body: JSON.stringify({ id: placements[0].id, premium: 1300 }) });
+    const revisions = await (await api(second, `/api/policies/history?account_id=${account}&id=${placements[0].id}`)).json();
+    assert.ok(revisions.length >= 2, 'Issuance and subsequent correction must both remain reviewable.');
+    assert.equal(typeof revisions[0].id, 'string');
+    assert.equal(Number(revisions[0].snapshot.premium), 1300);
+    assert.equal(revisions[0].recorded_by, 'Disposable release verification');
+    const rewritePrefill = await (await api(second, `/api/policies/prefill?account_id=${account}&rewrite_from_id=${placements[0].id}`)).json();
+    assert.equal(rewritePrefill.source, 'Rewrite');
+    assert.equal(rewritePrefill.prior_policy_id, placements[0].id);
+    const rewritten = await (await api(first, '/api/policies', { method: 'POST', body: JSON.stringify({
+      ...fields, account_id: account, lead_id: null, request_id: qaRewriteRequest, prior_policy_id: placements[0].id,
+      source: 'Rewrite', policy_number: `QA-REWRITE-${qaRewriteRequest}`, carrier_confirmed: true, email_consent: false,
+      confirmation: { confirmed_on: '2026-01-01', reference: 'QA replacement reference', attested: true },
+    }) })).json();
+    assert.equal(rewritten.prior_policy_id, placements[0].id);
+    const term = await (await api(second, `/api/clients/${account}/context?type=policy&id=${placements[0].id}`)).json();
+    assert.equal(term.record.status, 'issued');
+    assert.ok(term.record.related_next_terms.some((next) => next.id === rewritten.id));
+    const protectedPolicy = await fetch(`${base}/api/policies`, { method: 'DELETE', headers: { Cookie: first, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: placements[0].id }), signal: AbortSignal.timeout(60000) });
+    assert.equal(protectedPolicy.status, 409);
+    const protectedAccount = await fetch(`${base}/api/clients`, { method: 'DELETE', headers: { Cookie: first, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: account }), signal: AbortSignal.timeout(60000) });
+    assert.equal(protectedAccount.status, 409);
+    console.log('PASS cross-session evidence, exact-byte retained documents, quote attachment retry, lossless revision history and rewrite lineage; original term unchanged.');
     await checked(await admin.from('outreach_outbox').insert({ id: qaOutbox, lead_id: qaLead, to_email: email, subject: 'Disposable approval verification', body: 'Never sent.' }), 'QA draft source');
     const approval = await checked(await admin.from('tasks').select('id,status,action_href').eq('automation_key', `outreach:${qaOutbox}`).single(), 'Immediate approval task');
     assert.equal(approval.status, 'open');
@@ -224,22 +262,33 @@ async function main() {
     console.log('PASS authenticated live Workday, health, Inbox and canonical account thread contracts.');
   } finally {
     const cleanup = async (label, action) => { try { await checked(await action(), label); } catch { cleanupFailures.push(label); } };
-    if (storagePath) await cleanup('private QA bytes', () => admin.storage.from('account-documents').remove([storagePath]));
-    await cleanup('QA document records', () => admin.from('client_files').delete().eq('client_id', account));
     await cleanup('QA issue operation', () => admin.from('policy_issue_operations').delete().eq('request_id', requestId));
     await cleanup('QA quote issue operation', () => admin.from('policy_issue_operations').delete().eq('request_id', qaQuoteIssue));
+    await cleanup('QA scheduled issue operation', () => admin.from('policy_issue_operations').delete().eq('request_id', qaScheduledPolicyRequest));
+    await cleanup('QA rewrite issue operation', () => admin.from('policy_issue_operations').delete().eq('request_id', qaRewriteRequest));
     await cleanup('QA notifications', () => admin.from('notifications').delete().eq('client_id', account));
     await cleanup('QA outreach draft', () => admin.from('outreach_outbox').delete().eq('id', qaOutbox));
     await cleanup('QA messages', () => admin.from('communication_log').delete().eq('client_id', account));
     await cleanup('QA tasks', () => admin.from('tasks').delete().eq('account_id', account));
+    const qaPolicyIds = (await checked(await admin.from('policies').select('id').eq('client_id', account), 'Identify disposable policies')).map((policy) => policy.id);
+    if (qaPolicyIds.length) {
+      await cleanup('QA policy document links', () => admin.from('placement_documents').delete().in('policy_id', qaPolicyIds));
+      await cleanup('QA policy evidence', () => admin.from('policy_confirmation_evidence').delete().in('policy_id', qaPolicyIds));
+      await cleanup('QA policy history', () => admin.from('policy_term_history').delete().in('policy_id', qaPolicyIds));
+    }
     await cleanup('QA policies', () => admin.from('policies').delete().eq('client_id', account));
     await cleanup('QA scheduled asset', () => admin.from('client_assets').delete().eq('id', qaInsuredAsset));
     await cleanup('QA quote history', () => admin.from('quote_option_history').delete().eq('quote_id', qaQuote));
     await cleanup('QA quote option', () => admin.from('quote_options').delete().eq('id', qaQuote));
+    await cleanup('QA document records', () => admin.from('client_files').delete().eq('client_id', account));
+    if (storagePath) await cleanup('private QA bytes', () => admin.storage.from('account-documents').remove([storagePath]));
     await cleanup('QA automation lead', () => admin.from('leads').delete().eq('id', qaLead));
     await cleanup('QA account', () => admin.from('clients').delete().eq('id', account));
     if (userId) await cleanup('QA auth user', () => admin.auth.admin.deleteUser(userId));
     if (cleanupFailures.length) throw new Error(`QA cleanup failed: ${cleanupFailures.join(', ')}. Disposable account: ${account}; auth user: ${userId ?? 'not created'}. Inspect only these fixture identifiers.`);
+    assert.equal((await checked(await admin.from('clients').select('id').eq('id', account), 'Verify QA account absent')).length, 0);
+    assert.equal((await checked(await admin.from('leads').select('id').eq('id', qaLead), 'Verify QA lead absent')).length, 0);
+    assert.equal((await checked(await admin.from('policy_issue_operations').select('request_id').in('request_id', [requestId, qaQuoteIssue, qaScheduledPolicyRequest, qaRewriteRequest]), 'Verify QA issuance requests absent')).length, 0);
     console.log('Disposable release records, private bytes and auth user removed. No customer record was edited; no email or SMS was sent.');
   }
 }

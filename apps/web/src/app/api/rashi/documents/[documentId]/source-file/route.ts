@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '../../../../../../lib/prisma';
 import { uploadRashiSourceFile } from '../../../../../../lib/rashi-storage';
+import { assertRegularRashiSource } from '../../../../../../lib/rashi-server';
+import { workspaceApiError } from '../../../../../../lib/workspace-api';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -11,6 +13,7 @@ export async function PATCH(
 ): Promise<NextResponse> {
   try {
     const { documentId } = await context.params;
+    await assertRegularRashiSource(documentId);
     const formData = await request.formData();
     const file = formData.get('file');
 
@@ -34,9 +37,6 @@ export async function PATCH(
 
     return NextResponse.json(updated, { status: 200 });
   } catch (error) {
-    return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to attach source file.' },
-      { status: 500 },
-    );
+    return workspaceApiError(error, 'rashi/source-file');
   }
 }

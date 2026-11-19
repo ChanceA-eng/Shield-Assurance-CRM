@@ -26,9 +26,26 @@ export function accountLifecycle(policies: PolicyLifecycleRow[], now = new Date(
   return 'Former client';
 }
 
-export async function loadAccountLifecycles(supabase: SupabaseClient, ids: string[]): Promise<Map<string, AccountLifecycle>> {
+export function accountLifecyclesForAccounts(
+  ids: string[],
+  policies: PolicyLifecycleRow[],
+  now = new Date(),
+): Map<string, AccountLifecycle> {
+  const policiesByAccount = new Map<string, PolicyLifecycleRow[]>();
+  for (const policy of policies) {
+    if (!policy.client_id) continue;
+    const accountPolicies = policiesByAccount.get(policy.client_id) ?? [];
+    accountPolicies.push(policy);
+    policiesByAccount.set(policy.client_id, accountPolicies);
+  }
+
   const result = new Map<string, AccountLifecycle>();
-  if (!ids.length) return result;
+  for (const id of ids) result.set(id, accountLifecycle(policiesByAccount.get(id) ?? [], now));
+  return result;
+}
+
+export async function loadAccountLifecycles(supabase: SupabaseClient, ids: string[]): Promise<Map<string, AccountLifecycle>> {
+  if (!ids.length) return new Map();
   const rows: PolicyLifecycleRow[] = [];
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await supabase.from('policies')
@@ -38,6 +55,5 @@ export async function loadAccountLifecycles(supabase: SupabaseClient, ids: strin
     rows.push(...(data ?? []));
     if ((data ?? []).length < 1000) break;
   }
-  for (const id of ids) result.set(id, accountLifecycle(rows.filter((row) => row.client_id === id)));
-  return result;
+  return accountLifecyclesForAccounts(ids, rows);
 }

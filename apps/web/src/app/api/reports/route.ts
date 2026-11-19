@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getApiSession } from '../../../lib/api-auth';
+import { requireAgencyReportsAccess } from '../../../lib/agency-access';
+import { getAgencyTimeZone } from '../../../lib/automation-settings';
+import type { AgencyTimeZone } from '../../../lib/agency-time';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
+import { getReportDateRange, getReportPeriodStarts, isReportRangeKey } from '../../../lib/reporting-range';
 
-type RangeKey = 'mtd' | 'ytd' | 'qtd' | '12m';
+import { friendlyErrorMessage, workspaceApiError } from '../../../lib/workspace-api';
 
 type ClaimsStatusRow = {
   status: string;
@@ -15,54 +20,12 @@ type LeadPipelineRow = {
   color: string;
 };
 
-type PremiumTrendRow = {
-  month: string;
-  premium: number;
-};
-
-type CarrierMixRow = {
-  carrier: string;
-  count: number;
-  premium: number;
-};
-
 interface ReportCard {
   id: string;
   title: string;
   href: string;
   summary: string;
   accent: string;
-}
-
-function dateAtUTC(year: number, month: number, day: number): string {
-  return new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
-}
-
-function getRange(key: RangeKey): { start: string; end: string } {
-  const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
-
-  if (key === 'ytd') {
-    return { start: dateAtUTC(year, 0, 1), end: dateAtUTC(year, month, now.getUTCDate()) };
-  }
-
-  if (key === 'qtd') {
-    const quarterStartMonth = Math.floor(month / 3) * 3;
-    return { start: dateAtUTC(year, quarterStartMonth, 1), end: dateAtUTC(year, month, now.getUTCDate()) };
-  }
-
-  if (key === '12m') {
-    const start = new Date(Date.UTC(year, month - 11, 1));
-    return { start: start.toISOString().slice(0, 10), end: dateAtUTC(year, month, now.getUTCDate()) };
-  }
-
-  return { start: dateAtUTC(year, month, 1), end: dateAtUTC(year, month, now.getUTCDate()) };
-}
-
-function monthKey(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
 }
 
 function safeNumber(value: unknown): number {
@@ -80,141 +43,79 @@ function getColor(index: number): string {
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
+  }
+  try {
+    await requireAgencyReportsAccess(supabase, session.user.id);
+  } catch (error) {
+    return workspaceApiError(error, 'reports/access');
+  }
+  let timeZone: AgencyTimeZone;
+  try {
+    timeZone = await getAgencyTimeZone(supabase);
+  } catch (error) {
+    return workspaceApiError(error, 'reports/timezone');
   }
 
-  const range = (request.nextUrl.searchParams.get('range') ?? 'mtd') as RangeKey;
-  const carrier = request.nextUrl.searchParams.get('carrier') ?? 'all';
-  const { start, end } = getRange(range);
-  const thisYearStart = dateAtUTC(new Date().getUTCFullYear(), 0, 1);
-  const sixMonthsStart = dateAtUTC(new Date().getUTCFullYear(), Math.max(new Date().getUTCMonth() - 5, 0), 1);
+  const rangeValue = request.nextUrl.searchParams.get('range') ?? 'mtd';
+  if (!isReportRangeKey(rangeValue)) return NextResponse.json({ message: 'Choose a valid reporting period.' }, { status: 400 });
+  const range = rangeValue;
+  const carrier = (request.nextUrl.searchParams.get('carrier') ?? 'all').trim();
+  if (!carrier || carrier.length > 200) return NextResponse.json({ message: 'Choose a valid carrier filter.' }, { status: 400 });
+  const now = new Date();
+  const { start, end } = getReportDateRange(range, now, timeZone);
+  const { month, year } = getReportPeriodStarts(now, timeZone);
+  const result = await supabase.rpc('crm_reporting_summary', {
+    p_range_start: start,
+    p_range_end: end,
+    p_month_start: month,
+    p_year_start: year,
+    p_carrier: carrier,
+  });
+  if (result.error) return NextResponse.json({ message: friendlyErrorMessage(result.error) }, { status: 500 });
 
-  const policiesQuery = supabase
-    .from('policies')
-    .select('id,premium,effective_date,renewal_date,carrier,status,line_of_business,client_id,insured_name,created_at')
-    .gte('effective_date', range === 'mtd' ? start : thisYearStart)
-    .lte('effective_date', end)
-    .order('effective_date', { ascending: true });
-
-  const premiumTrendQuery = supabase
-    .from('policies')
-    .select('premium,effective_date')
-    .gte('effective_date', sixMonthsStart)
-    .lte('effective_date', end)
-    .order('effective_date', { ascending: true });
-
-  const carriersQuery = supabase
-    .from('policies')
-    .select('carrier,premium,status')
-    .gte('effective_date', thisYearStart)
-    .lte('effective_date', end);
-
-  const [
-    policiesMtd,
-    clientsCount,
-    policiesCount,
-    claimsCount,
-    endorsementsCount,
-    claimsStatusRes,
-    leadsStatusRes,
-    premiumTrendRes,
-    carrierMixRes,
-    recentPoliciesRes,
-    recentClaimsRes,
-    recentEndorsementsRes,
-    recentLeadsRes,
-  ] = await Promise.all([
-    policiesQuery,
-    supabase.from('clients').select('id', { count: 'exact', head: true }),
-    supabase.from('policies').select('id', { count: 'exact', head: true }).in('status', ['active', 'issued']),
-    supabase.from('claims').select('id', { count: 'exact', head: true }).eq('status', 'open'),
-    supabase.from('endorsements').select('id', { count: 'exact', head: true }).eq('status', 'open'),
-    supabase.from('claims').select('status'),
-    supabase.from('leads').select('status'),
-    premiumTrendQuery,
-    carriersQuery,
-    supabase
-      .from('policies')
-      .select('id,insured_name,carrier,premium,effective_date,renewal_date,status,created_at')
-      .order('created_at', { ascending: false })
-      .limit(8),
-    supabase.from('claims').select('id,type,status,date_of_loss,created_at,policies(insured_name,carrier)').order('created_at', { ascending: false }).limit(8),
-    supabase.from('endorsements').select('id,type,status,effective_date,created_at,policies(insured_name,carrier)').order('created_at', { ascending: false }).limit(8),
-    supabase.from('leads').select('id,full_name,status,line_of_business,source,created_at').order('created_at', { ascending: false }).limit(8),
-  ]);
-
-  if (policiesMtd.error) return NextResponse.json({ message: policiesMtd.error.message }, { status: 500 });
-  if (clientsCount.error) return NextResponse.json({ message: clientsCount.error.message }, { status: 500 });
-  if (policiesCount.error) return NextResponse.json({ message: policiesCount.error.message }, { status: 500 });
-  if (claimsCount.error) return NextResponse.json({ message: claimsCount.error.message }, { status: 500 });
-  if (endorsementsCount.error) return NextResponse.json({ message: endorsementsCount.error.message }, { status: 500 });
-  if (claimsStatusRes.error) return NextResponse.json({ message: claimsStatusRes.error.message }, { status: 500 });
-  if (leadsStatusRes.error) return NextResponse.json({ message: leadsStatusRes.error.message }, { status: 500 });
-  if (premiumTrendRes.error) return NextResponse.json({ message: premiumTrendRes.error.message }, { status: 500 });
-  if (carrierMixRes.error) return NextResponse.json({ message: carrierMixRes.error.message }, { status: 500 });
-  if (recentPoliciesRes.error) return NextResponse.json({ message: recentPoliciesRes.error.message }, { status: 500 });
-  if (recentClaimsRes.error) return NextResponse.json({ message: recentClaimsRes.error.message }, { status: 500 });
-  if (recentEndorsementsRes.error) return NextResponse.json({ message: recentEndorsementsRes.error.message }, { status: 500 });
-  if (recentLeadsRes.error) return NextResponse.json({ message: recentLeadsRes.error.message }, { status: 500 });
-
-  const mtdPremium = (policiesMtd.data ?? []).reduce((sum, row) => sum + safeNumber(row.premium), 0);
-
-  const premiumTrendMap = new Map<string, number>();
-  for (const row of premiumTrendRes.data ?? []) {
-    const key = monthKey(row.effective_date);
-    premiumTrendMap.set(key, (premiumTrendMap.get(key) ?? 0) + safeNumber(row.premium));
+  const summary = result.data as {
+    metrics: Record<string, unknown>;
+    premiumTrend: Array<{ month: string; premium: number | string }>;
+    carrierMix: Array<{ carrier: string; count: number; premium: number | string }>;
+    claimsStatus: Array<{ status: string; value: number }>;
+    leadPipeline: Array<{ stage: string; value: number }>;
+    carrierOptions: string[];
+    drilldowns: {
+      policies: Array<Record<string, unknown>>;
+      claims: Array<Record<string, unknown>>;
+      endorsements: Array<Record<string, unknown>>;
+      leads: Array<Record<string, unknown>>;
+    };
+  };
+  if (!summary || typeof summary !== 'object' || !summary.metrics || !summary.drilldowns) {
+    return NextResponse.json({ message: 'The reporting summary response was invalid. Contact your administrator.' }, { status: 500 });
   }
-
-  const premiumTrend: PremiumTrendRow[] = Array.from(premiumTrendMap.entries()).map(([month, premium]) => ({ month, premium }));
-
-  const carrierAggregate = new Map<string, { count: number; premium: number }>();
-  for (const row of carrierMixRes.data ?? []) {
-    const carrierName = row.carrier || 'Unknown';
-    const current = carrierAggregate.get(carrierName) ?? { count: 0, premium: 0 };
-    current.count += 1;
-    current.premium += safeNumber(row.premium);
-    carrierAggregate.set(carrierName, current);
-  }
-
-  const carrierMix: CarrierMixRow[] = Array.from(carrierAggregate.entries())
-    .map(([carrierName, aggregate]) => ({ carrier: carrierName, count: aggregate.count, premium: aggregate.premium }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 8);
-
-  const claimsStatusMap = new Map<string, number>();
-  for (const row of claimsStatusRes.data ?? []) {
-    const key = row.status || 'unknown';
-    claimsStatusMap.set(key, (claimsStatusMap.get(key) ?? 0) + 1);
-  }
-
-  const claimsStatus: ClaimsStatusRow[] = Array.from(claimsStatusMap.entries()).map(([statusName, value], index) => ({
-    status: statusName,
-    value,
+  const leadColors: Record<string, string> = {
+    new: '#38bdf8',
+    contacted: '#818cf8',
+    quoted: '#34d399',
+    won: '#4dbd74',
+    lost: '#f86c6b',
+    inactive: '#c8ced3',
+  };
+  const leadNames: Record<string, string> = {
+    new: 'New', contacted: 'Contacted', quoted: 'Quoted', won: 'Won', lost: 'Lost', inactive: 'Inactive',
+  };
+  const claimsStatus: ClaimsStatusRow[] = summary.claimsStatus.map((row, index) => ({
+    status: row.status || 'unknown',
+    value: safeNumber(row.value),
     color: getColor(index),
   }));
-
-  const leadStageMap = new Map<string, number>([
-    ['new', 0],
-    ['contacted', 0],
-    ['quoted', 0],
-    ['won', 0],
-    ['lost', 0],
-    ['inactive', 0],
-  ]);
-  for (const row of leadsStatusRes.data ?? []) {
-    const stage = (row.status || 'new').toLowerCase();
-    leadStageMap.set(stage, (leadStageMap.get(stage) ?? 0) + 1);
-  }
-  const leadPipeline: LeadPipelineRow[] = [
-    { stage: 'New', value: leadStageMap.get('new') ?? 0, color: '#38bdf8' },
-    { stage: 'Contacted', value: leadStageMap.get('contacted') ?? 0, color: '#818cf8' },
-    { stage: 'Quoted', value: leadStageMap.get('quoted') ?? 0, color: '#34d399' },
-    { stage: 'Won', value: leadStageMap.get('won') ?? 0, color: '#4dbd74' },
-    { stage: 'Lost', value: leadStageMap.get('lost') ?? 0, color: '#f86c6b' },
-    { stage: 'Inactive', value: leadStageMap.get('inactive') ?? 0, color: '#c8ced3' },
-  ];
+  const leadPipeline: LeadPipelineRow[] = summary.leadPipeline.map((row) => ({
+    stage: leadNames[row.stage] ?? row.stage,
+    value: safeNumber(row.value),
+    color: leadColors[row.stage] ?? '#c8ced3',
+  }));
 
   const reportCards: ReportCard[] = [
     { id: 'production', title: 'Production Report', href: '/reports/production', summary: 'Written premium and production by period.', accent: 'sky' },
@@ -228,26 +129,24 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   return NextResponse.json(
     {
       filters: { range, carrier, start, end },
-      metrics: {
-        mtd_written_premium: Math.round(mtdPremium),
-        ytd_written_premium: Math.round(
-          (premiumTrendRes.data ?? []).reduce((sum, row) => sum + safeNumber(row.premium), 0),
-        ),
-        active_clients: clientsCount.count ?? 0,
-        active_policies: policiesCount.count ?? 0,
-        open_claims: claimsCount.count ?? 0,
-        open_endorsements: endorsementsCount.count ?? 0,
-      },
-      premiumTrend,
-      carrierMix,
+      metrics: Object.fromEntries(Object.entries(summary.metrics).map(([key, value]) => [key, safeNumber(value)])),
+      premiumTrend: summary.premiumTrend.map((row) => ({ ...row, premium: safeNumber(row.premium) })),
+      carrierMix: summary.carrierMix.map((row) => ({ ...row, premium: safeNumber(row.premium) })),
+      carrierOptions: summary.carrierOptions,
       claimsStatus,
       leadPipeline,
       reportCards,
       drilldowns: {
-        policies: recentPoliciesRes.data ?? [],
-        claims: recentClaimsRes.data ?? [],
-        endorsements: recentEndorsementsRes.data ?? [],
-        leads: recentLeadsRes.data ?? [],
+        policies: summary.drilldowns.policies,
+        claims: summary.drilldowns.claims.map((claim) => ({
+          ...claim,
+          policies: { insured_name: claim.insured_name, carrier: claim.carrier },
+        })),
+        endorsements: summary.drilldowns.endorsements.map((endorsement) => ({
+          ...endorsement,
+          policies: { insured_name: endorsement.insured_name, carrier: endorsement.carrier },
+        })),
+        leads: summary.drilldowns.leads,
       },
     },
     { status: 200 },

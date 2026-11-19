@@ -1,14 +1,17 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { requireApiSession } from '../../../../lib/api-auth';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { ACTIVE_LEAD_STATUSES } from '../../../../lib/lead-pipeline';
 import { loadHomePremiumMetrics } from '../../../../lib/home-metrics';
 import { databaseError } from '../../../../lib/workspace-api';
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  const authError = await requireApiSession(request);
+  if (authError) return authError;
   try {
     const supabase = getSupabaseServerClient();
     if (!supabase) {
-      return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+      return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
     }
 
     const [
@@ -20,9 +23,9 @@ export async function GET(): Promise<NextResponse> {
       openClaimsCount,
     ] = await Promise.all([
       loadHomePremiumMetrics(supabase),
-      supabase.from('leads').select('id', { count: 'exact', head: true }).in('status', [...ACTIVE_LEAD_STATUSES]),
-      supabase.from('leads').select('id', { count: 'exact', head: true }),
-      supabase.from('leads').select('id', { count: 'exact', head: true }).eq('status', 'won'),
+      supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null).in('status', [...ACTIVE_LEAD_STATUSES]),
+      supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null),
+      supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'won'),
       supabase
         .from('renewals')
         .select('id', { count: 'exact', head: true })
@@ -52,7 +55,7 @@ export async function GET(): Promise<NextResponse> {
   } catch (error) {
     return NextResponse.json(
       {
-        message: 'Failed to load home metrics from Supabase.',
+        message: 'Dashboard numbers could not be loaded. Refresh the page to try again.',
         details: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 500 },

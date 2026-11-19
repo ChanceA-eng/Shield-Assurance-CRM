@@ -4,20 +4,14 @@ import Link from 'next/link';
 import type { Route } from 'next';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { Bell, BellRing, ChevronDown, ClipboardList, LogOut, Menu, MessageSquare, Settings, Shield, User, UserPlus } from 'lucide-react';
+import { ArrowLeft, Bell, BellRing, ChevronDown, ClipboardList, LogOut, Menu, MessageSquare, Shield, User, UserPlus } from 'lucide-react';
 import { useNav } from '../../context/NavContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { createSupabaseBrowserAuthClient } from '../../lib/supabase-auth-browser';
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function titleize(segment: string): string {
-  if (UUID_PATTERN.test(segment)) return 'Detail';
-  return segment
-    .split('-')
-    .map((word) => (word.length > 0 ? word[0].toUpperCase() + word.slice(1) : word))
-    .join(' ');
-}
+import { navigationBreadcrumbs, navigationFallback } from '../../lib/workspace-navigation';
+import { useWorkspaceNavigation } from '../../context/WorkspaceNavigationContext';
+import { useStaffRecords, useStaffWorkspace } from '../../context/StaffWorkspaceContext';
+import { staffRecords } from '../../lib/staff-records';
 
 function relativeTime(value: string): string {
   const date = new Date(value).getTime();
@@ -32,54 +26,68 @@ function relativeTime(value: string): string {
 
 function Breadcrumbs(): JSX.Element {
   const pathname = usePathname();
-  const segments = pathname.split('/').filter(Boolean);
+  const breadcrumbs = navigationBreadcrumbs(pathname);
 
   return (
-    <ol className="hidden items-center gap-1.5 text-sm text-cui-muted lg:flex">
-      <li>
-        <Link href="/" className="hover:text-cui-primary">
-          Home
-        </Link>
-      </li>
-      {segments.map((segment, index) => {
-        const href = `/${segments.slice(0, index + 1).join('/')}`;
-        const isLast = index === segments.length - 1;
+    <nav aria-label="Breadcrumb" className="hidden min-w-0 lg:block"><ol className="flex items-center gap-1.5 text-sm text-cui-muted">
+      {breadcrumbs.map(({ href, label }, index) => {
+        const isLast = index === breadcrumbs.length - 1;
         return (
           <li key={href} className="flex items-center gap-1.5">
-            <span className="text-cui-border">/</span>
+            {index ? <span className="text-cui-border">/</span> : null}
             {isLast ? (
-              <span className="font-medium text-cui-text">{titleize(segment)}</span>
+              <span aria-current="page" className="font-medium text-cui-text">{label}</span>
             ) : (
               <Link href={href as Route} className="hover:text-cui-primary">
-                {titleize(segment)}
+                {label}
               </Link>
             )}
           </li>
         );
       })}
-    </ol>
+    </ol></nav>
   );
 }
 
 export default function AppHeader(): JSX.Element {
   const { toggleNav } = useNav();
+  const pathname = usePathname();
+  const { back, previousHref, confirmLeave } = useWorkspaceNavigation();
+  const workspace = useStaffWorkspace();
+  const [firstRecord] = useStaffRecords();
+  const full = workspace === 'full';
+  const landing = firstRecord ? staffRecords[firstRecord].href : workspace === 'account' ? '/account' : '/communication/social';
   const { overdueCount, notifications, unreadCount, refreshError, refresh, markRead, markAllRead } = useNotifications();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [accountMenuReady, setAccountMenuReady] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
   const bellRef = useRef<HTMLDivElement>(null);
 
   const notificationCount = overdueCount + unreadCount;
 
   useEffect(() => {
+    setAccountMenuReady(true);
     try {
       const supabase = createSupabaseBrowserAuthClient();
-      void supabase.auth.getUser().then(({ data }) => {
-        setEmail(data.user?.email ?? null);
-      });
-    } catch {
-      setEmail(null);
+      let disposed = false;
+      const loadIdentity = (): void => {
+        void supabase.auth.getUser().then(({ data, error }) => {
+          if (disposed) return;
+          if (error) console.error('[header/account]', error.code);
+          setEmail(data.user?.email ?? null);
+          setDisplayName(typeof data.user?.user_metadata.full_name === 'string' ? data.user.user_metadata.full_name : '');
+        });
+      };
+      loadIdentity();
+      const { data: listener } = supabase.auth.onAuthStateChange(() => { window.setTimeout(loadIdentity, 0); });
+      window.addEventListener('crm:account-updated', loadIdentity);
+      return () => { disposed = true; listener.subscription.unsubscribe(); window.removeEventListener('crm:account-updated', loadIdentity); };
+    } catch (failure) {
+      console.error('[header/account] Identity could not load', failure);
+      setEmail(null); setDisplayName('');
     }
   }, []);
 
@@ -97,6 +105,7 @@ export default function AppHeader(): JSX.Element {
   }, []);
 
   const signOut = async (): Promise<void> => {
+    if (!confirmLeave()) return;
     try {
       const supabase = createSupabaseBrowserAuthClient();
       await supabase.auth.signOut();
@@ -107,8 +116,9 @@ export default function AppHeader(): JSX.Element {
   };
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-cui-border/60 bg-white px-4 shadow-card">
-      <Link href="/" className="flex items-center gap-2 pr-2">
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-cui-border bg-cui-panel px-3 shadow-card sm:gap-3 sm:px-4">
+      <a href="#crm-main" className="sr-only z-50 focus:not-sr-only focus:absolute focus:left-3 focus:top-2 focus:rounded-lg focus:bg-cui-panel focus:px-3 focus:py-2 focus:text-cui-text">Skip to content</a>
+      <Link href={full ? '/' : landing} prefetch={full ? undefined : false} className="flex items-center gap-2 pr-2">
         <Shield className="h-6 w-6 text-cui-primary" />
         <span className="hidden text-base font-bold tracking-tight text-cui-text sm:inline">
           Shield <span className="font-normal text-cui-muted">Assurance</span>
@@ -124,11 +134,16 @@ export default function AppHeader(): JSX.Element {
         <Menu className="h-5 w-5" />
       </button>
 
-      <Breadcrumbs />
+      {full && (pathname !== '/' || previousHref) ? <button type="button" onClick={back} aria-label="Back"
+        title={`Back to ${previousHref ?? navigationFallback(pathname)}`}
+        className="inline-flex shrink-0 items-center gap-1 rounded px-2 py-1.5 text-sm font-semibold text-cui-muted hover:bg-cui-light hover:text-cui-text">
+        <ArrowLeft className="h-4 w-4" aria-hidden="true" />Back
+      </button> : null}
+      {full ? <Breadcrumbs /> : null}
 
       <div className="flex-1" />
 
-      <div className="relative" ref={bellRef}>
+      {full ? <div className="relative" ref={bellRef}>
         <button
           type="button"
           onClick={() => setBellOpen((open) => !open)}
@@ -221,12 +236,15 @@ export default function AppHeader(): JSX.Element {
             </Link>
           </div>
         ) : null}
-      </div>
+      </div> : null}
 
       <div className="relative" ref={menuRef}>
         <button
           type="button"
           onClick={() => setMenuOpen((open) => !open)}
+          aria-label="Account menu"
+          aria-expanded={menuOpen}
+          disabled={!accountMenuReady}
           className="flex items-center gap-2 rounded p-1.5 transition hover:bg-cui-light"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-cui-primary text-white">
@@ -238,16 +256,19 @@ export default function AppHeader(): JSX.Element {
         {menuOpen ? (
           <div className="absolute right-0 top-full z-50 mt-1 w-56 rounded border border-cui-border/60 bg-white py-1 shadow-panel">
             <p className="border-b border-cui-border/40 bg-cui-light px-4 py-2 text-xs font-semibold text-cui-muted">
+              {displayName ? <span className="block text-cui-text">{displayName}</span> : null}
               {email ?? 'Signed in'}
             </p>
-            <Link
-              href="/settings"
+            {full ? <Link
+              href="/account"
               onClick={() => setMenuOpen(false)}
               className="flex items-center gap-2 px-4 py-2 text-sm text-cui-text hover:bg-cui-light"
             >
-              <Settings className="h-4 w-4 text-cui-muted" />
-              Settings
-            </Link>
+              <User className="h-4 w-4 text-cui-muted" />
+              My Account
+            </Link> : <a href="/account" className="flex items-center gap-2 px-4 py-2 text-sm text-cui-text hover:bg-cui-light">
+              <User className="h-4 w-4 text-cui-muted" />My Account
+            </a>}
             <button
               type="button"
               onClick={() => void signOut()}

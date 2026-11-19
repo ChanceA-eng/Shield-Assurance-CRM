@@ -4,20 +4,15 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { usePathname } from 'next/navigation';
 import { createSupabaseBrowserAuthClient } from '../lib/supabase-auth-browser';
 import { workspaceFetch } from '../lib/workspace-fetch';
+import type { NotificationItem, ShellSummary } from '../lib/shell-summary';
+import { CONVERSATION_CHANGED_EVENT } from '../lib/conversation-updates';
 
-export interface NotificationItem {
-  id: string;
-  type: string;
-  message: string;
-  href: string | null;
-  read: boolean;
-  created_at: string;
-}
+export type { NotificationItem } from '../lib/shell-summary';
 
 interface NotificationContextValue {
   /** Open tasks past their due date. */
   overdueCount: number;
-  /** Open tasks due today or earlier — the live Tasks badge. */
+  /** Open tasks due today or earlier â€” the live Tasks badge. */
   dueTodayCount: number;
   /** Latest unread notification feed for the bell dropdown. */
   notifications: NotificationItem[];
@@ -43,8 +38,20 @@ export const MESSAGES_READ_EVENT = 'crm:messages-read';
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
-export function NotificationProvider({ children }: { children: React.ReactNode }): JSX.Element {
+const noop = async (): Promise<void> => {};
+const DISABLED_NOTIFICATIONS: NotificationContextValue = {
+  overdueCount: 0, dueTodayCount: 0, notifications: [], unreadCount: 0, unreadMessages: EMPTY_UNREAD,
+  refreshError: null, refresh: noop, markRead: noop, markAllRead: noop,
+};
+
+export function NotificationProvider({ children, enabled = true }: { children: React.ReactNode; enabled?: boolean }): JSX.Element {
+  return enabled ? <ActiveNotificationProvider>{children}</ActiveNotificationProvider>
+    : <NotificationContext.Provider value={DISABLED_NOTIFICATIONS}>{children}</NotificationContext.Provider>;
+}
+
+function ActiveNotificationProvider({ children }: { children: React.ReactNode }): JSX.Element {
   const pathname = usePathname();
+  const publicPage = pathname === '/login' || pathname === '/auth/accept' || pathname.startsWith('/appointments/manage/') || pathname.startsWith('/intelligence/questionnaire/') || pathname.startsWith('/secure-intake/');
   const refreshing = useRef<Promise<void> | null>(null);
   const refreshPending = useRef(false);
   const [overdueCount, setOverdueCount] = useState(0);
@@ -64,7 +71,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, []);
 
   const refresh = async (): Promise<void> => {
-    if (pathname === '/login') return;
+    if (publicPage) return;
     if (refreshing.current) {
       refreshPending.current = true;
       return refreshing.current;
@@ -73,18 +80,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       do {
         refreshPending.current = false;
         try {
-          const [overdue, due, feed, unread, messages] = await Promise.all([
-            workspaceFetch<{ count: number }>('/api/tasks?status=overdue&count=true'),
-            workspaceFetch<{ count: number }>('/api/tasks?status=open&due=today&count=true'),
-            workspaceFetch<NotificationItem[]>('/api/notifications'),
-            workspaceFetch<{ count: number }>('/api/notifications?count=true'),
-            workspaceFetch<UnreadMessageCounts>('/api/communication-log/unread'),
-          ]);
-          setOverdueCount(overdue.count);
-          setDueTodayCount(due.count);
-          setNotifications(feed);
-          setUnreadCount(unread.count);
-          setUnreadMessages(messages);
+          const summary = await workspaceFetch<ShellSummary>('/api/shell');
+          setOverdueCount(summary.overdueCount);
+          setDueTodayCount(summary.dueTodayCount);
+          setNotifications(summary.notifications);
+          setUnreadCount(summary.unreadCount);
+          setUnreadMessages(summary.unreadMessages);
           setRefreshError(null);
         } catch (failure) {
           setRefreshError(failure instanceof Error ? failure.message : 'Unable to refresh notifications.');
@@ -121,38 +122,49 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   };
 
   useEffect(() => {
-    if (pathname === '/login') return;
+    if (publicPage) return;
     void refresh();
-
+    let debounce: number | undefined;
+    const scheduleRefresh = (): void => {
+      if (document.visibilityState === 'hidden') return;
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => { void refresh(); }, 250);
+    };
     const intervalId = window.setInterval(() => {
-      void refresh();
+      if (document.visibilityState !== 'hidden') void refresh();
     }, 30000);
     const onMessagesRead = (): void => {
       void refresh();
     };
     window.addEventListener(MESSAGES_READ_EVENT, onMessagesRead);
+    document.addEventListener('visibilitychange', scheduleRefresh);
 
     const channel = supabase
       ?.channel('global-crm-notifications')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
-        void refresh();
+        scheduleRefresh();
+        window.dispatchEvent(new Event(CONVERSATION_CHANGED_EVENT));
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
-        void refresh();
+        scheduleRefresh();
+        window.dispatchEvent(new Event(CONVERSATION_CHANGED_EVENT));
       })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'communication_log' }, () => {
-        void refresh();
-      })
-      .subscribe();
+      .subscribe((status, failure) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('[notifications] Realtime unavailable; automatic polling remains enabled.', failure ?? status);
+        }
+      });
 
     return () => {
       window.clearInterval(intervalId);
+      window.clearTimeout(debounce);
       window.removeEventListener(MESSAGES_READ_EVENT, onMessagesRead);
+      document.removeEventListener('visibilitychange', scheduleRefresh);
       if (channel && supabase) {
         void supabase.removeChannel(channel);
       }
     };
-  }, [supabase, pathname === '/login']);
+  }, [supabase, publicPage]);
 
   return (
     <NotificationContext.Provider value={{ overdueCount, dueTodayCount, notifications, unreadCount, unreadMessages, refreshError, refresh, markRead, markAllRead }}>

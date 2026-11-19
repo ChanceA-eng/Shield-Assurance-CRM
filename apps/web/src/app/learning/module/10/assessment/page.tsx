@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import SectionLayout from '../../../../../components/crm/SectionLayout';
+import StaticAssessmentHistory from '../../../../../components/learning/StaticAssessmentHistory';
+import { useStaticAssessmentProgress } from '../../../../../lib/learning/static-assessment-progress';
 
 type Choice = 'A' | 'B' | 'C' | 'D';
 
@@ -139,6 +141,7 @@ const questions: AssessmentQuestion[] = [
 export default function ModuleTenAssessmentPage(): JSX.Element {
   const [answers, setAnswers] = useState<Partial<Record<number, Choice>>>({});
   const [submitted, setSubmitted] = useState(false);
+  const assessment = useStaticAssessmentProgress(10);
 
   const score = useMemo(() => {
     return questions.reduce((total, question) => {
@@ -160,6 +163,8 @@ export default function ModuleTenAssessmentPage(): JSX.Element {
             Complete all 10 questions. A score of 8/10 or higher is the recommended benchmark.
           </p>
         </header>
+
+        <StaticAssessmentHistory attempts={assessment.attempts} loading={assessment.loading} error={assessment.error} />
 
         <section className="space-y-8">
           {questions.map((question) => {
@@ -223,11 +228,12 @@ export default function ModuleTenAssessmentPage(): JSX.Element {
                   return;
                 }
                 setSubmitted(true);
+                void assessment.saveAttempt(Math.round((score / questions.length) * 100), questions.length);
               }}
-              disabled={!allAnswered || submitted}
+              disabled={!allAnswered || assessment.saving || (submitted && !assessment.error)}
               className={`rounded-lg px-6 py-3 text-sm font-semibold text-white ${!allAnswered || submitted ? 'cursor-not-allowed bg-slate-400' : 'bg-slate-950 hover:bg-slate-800'}`}
             >
-              Submit
+              {assessment.error && submitted ? 'Retry saving result' : 'Submit'}
             </button>
             <a href="/learning/module/10/lesson/4" className="rounded-lg border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Back to Lesson 4</a>
           </div>

@@ -9,3 +9,10 @@ coverage
 .vercel
 .env*
 **/.next-qa
+**/.next-local
+**/.next-local-alt
+apps/web/public/intake-engine/
+**/.next-*
+**/test-results/
+**/playwright-report/
+**/*.tsbuildinfo

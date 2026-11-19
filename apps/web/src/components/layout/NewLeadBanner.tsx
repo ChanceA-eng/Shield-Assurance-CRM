@@ -24,34 +24,51 @@ export const INTAKE_QUEUE_CHANGED = 'crm:intake-queue-changed';
 export default function NewLeadBanner(): JSX.Element | null {
   const [leads, setLeads] = useState<AttentionLead[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const loadVersion = useRef(0);
+  const loading = useRef<Promise<void> | null>(null);
+  const refreshFailures = useRef(0);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (force = false): Promise<void> => {
+    if (loading.current && !force) return loading.current;
     const version = ++loadVersion.current;
-    try {
+    const pending = (async () => { try {
       const payload = await workspaceFetch<{ leads: AttentionLead[] }>('/api/leads/attention');
       if (version !== loadVersion.current) return;
       setLeads(payload.leads);
+      refreshFailures.current = 0;
       setError(null);
     } catch (failure) {
-      if (version === loadVersion.current) setError(failure instanceof Error ? failure.message : 'Unable to refresh website requests.');
-    }
+      if (version === loadVersion.current) {
+        console.error('[website-requests/refresh]', failure);
+        refreshFailures.current += 1;
+        if (refreshFailures.current >= 2) setError('New requests could not refresh.');
+      }
+    } })();
+    loading.current = pending;
+    try { await pending; } finally { if (loading.current === pending) loading.current = null; }
   }, []);
 
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(), 30000);
-    const refresh = (): void => { void load(); };
+    const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden') void load(); }, 30000);
+    const refresh = (): void => { void load(true); };
+    const onVisible = (): void => { if (document.visibilityState !== 'hidden') void load(); };
     window.addEventListener(INTAKE_QUEUE_CHANGED, refresh);
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener(INTAKE_QUEUE_CHANGED, refresh);
+      window.removeEventListener('online', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [load]);
 
   const dismiss = async (id: string): Promise<void> => {
     setBusyId(id);
+    setActionError(null);
     try {
       await workspaceFetch('/api/leads/attention', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -59,24 +76,25 @@ export default function NewLeadBanner(): JSX.Element | null {
       });
       ++loadVersion.current;
       setLeads((current) => current.filter((lead) => lead.intake_id !== id));
-      setError(null);
       void load();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Unable to dismiss this request.');
+      console.error('[website-requests/dismiss]', failure);
+      setActionError('This request could not be dismissed. Please try again.');
     } finally {
       setBusyId(null);
     }
   };
 
-  if (!leads.length && !error) return null;
+  if (!leads.length && !error && !actionError) return null;
   return (
     <section aria-label="Unreviewed website requests" className="max-h-[calc(100dvh-4rem)] shrink-0 overflow-y-auto border-b border-orange-300 bg-orange-100">
       {error ? (
         <div role="alert" className="flex items-center justify-between gap-2 px-4 py-2 text-sm text-orange-950">
-          <span>{error} The last loaded queue is retained.</span>
+          <span>{error}</span>
           <button type="button" onClick={() => void load()} className="font-semibold text-cui-primary hover:underline">Retry</button>
         </div>
       ) : null}
+      {actionError ? <p role="alert" className="px-4 py-2 text-sm text-orange-950">{actionError}</p> : null}
       {leads.length ? <p className="px-4 pt-1 text-[11px] font-semibold text-orange-900">{leads.length} unreviewed request{leads.length === 1 ? '' : 's'} - newest first</p> : null}
       {leads.map((lead) => (
         <div key={lead.intake_id} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-orange-300 px-4 py-1.5 text-sm last:border-b-0">

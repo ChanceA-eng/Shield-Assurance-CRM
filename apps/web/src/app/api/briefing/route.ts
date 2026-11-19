@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { requireApiSession } from '../../../lib/api-auth';
-import { startOfArizonaDay } from '../../../lib/arizona-time';
+import { startOfAgencyDay, endOfAgencyDay, type AgencyTimeZone } from '../../../lib/agency-time';
+import { getAgencyTimeZone } from '../../../lib/automation-settings';
 
+import { friendlyErrorMessage, workspaceApiError } from '../../../lib/workspace-api';
 interface BriefingTask {
   id: string;
   subject: string;
@@ -21,11 +23,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (authError) return authError;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const now = new Date();
-  const dayStart = startOfArizonaDay(now);
-  const dayEnd = new Date(dayStart.getTime() + 24 * 3600 * 1000);
+  let timezone: AgencyTimeZone;
+  try {
+    timezone = await getAgencyTimeZone(supabase);
+  } catch (error) {
+    return workspaceApiError(error, 'briefing/timezone');
+  }
+  const dayStart = startOfAgencyDay(now, timezone);
+  const dayEnd = endOfAgencyDay(now, timezone);
   const yesterday = new Date(now.getTime() - 24 * 3600 * 1000);
   const twoDaysAgo = new Date(now.getTime() - 48 * 3600 * 1000);
   const weekAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
@@ -61,7 +69,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       .eq('direction', 'inbound')
       .is('read_at', null),
     supabase.from('outreach_outbox').select('id', { count: 'exact', head: true }).eq('status', 'pending_approval'),
-    supabase.from('leads').select('id', { count: 'exact', head: true }).gte('created_at', yesterday.toISOString()),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null).gte('created_at', yesterday.toISOString()),
     supabase
       .from('sequence_enrollments')
       .select('lead_id')
@@ -71,13 +79,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     supabase
       .from('leads')
       .select('id', { count: 'exact', head: true })
+      .is('archived_at', null)
       .eq('status', 'contacted')
       .lt('stage_changed_at', weekAgo.toISOString()),
     supabase.from('sequence_enrollments').select('id', { count: 'exact', head: true }).eq('status', 'active'),
   ]);
 
   for (const result of [overdueRes, todayRes, unreadRes, pendingRes, newLeadsRes, repliesRes, stalledRes, activeSeqRes]) {
-    if (result.error) return NextResponse.json({ message: result.error.message }, { status: 500 });
+    if (result.error) return NextResponse.json({ message: friendlyErrorMessage(result.error) }, { status: 500 });
   }
 
   // Resolve reply lead names.
@@ -85,7 +94,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const replyLeadIds = (repliesRes.data ?? []).map((row) => row.lead_id as string);
   if (replyLeadIds.length > 0) {
     const { data: replyLeads, error } = await supabase.from('leads').select('full_name').in('id', replyLeadIds);
-    if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+    if (error) return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
     replyNames = (replyLeads ?? []).map((lead) => lead.full_name as string);
   }
 

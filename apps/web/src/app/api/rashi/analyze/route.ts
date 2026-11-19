@@ -148,7 +148,7 @@ function riskSignalsFromSnapshot(snapshot: Record<string, unknown>): string[] {
 async function loadLeadSnapshot(leadId: string): Promise<ProspectSnapshot> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    throw new Error('Supabase is not configured.');
+    throw new Error('The CRM database is not connected. Contact your administrator.');
   }
 
   const leadResult = await supabase
@@ -188,7 +188,7 @@ async function loadLeadSnapshot(leadId: string): Promise<ProspectSnapshot> {
 async function loadClientSnapshot(clientId: string): Promise<ProspectSnapshot> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    throw new Error('Supabase is not configured.');
+    throw new Error('The CRM database is not connected. Contact your administrator.');
   }
 
   const clientResult = await supabase

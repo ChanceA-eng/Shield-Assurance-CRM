@@ -12,8 +12,8 @@ export default async function RashiStatePage({
 
   return (
     <SectionLayout title={`Rashi · ${stateContext}`}>
-      <nav className="mb-3 text-xs text-[#73818f]">
-        <Link href="/rashi" className="text-[#167495] hover:underline">
+      <nav className="mb-3 text-xs text-cui-muted">
+        <Link href="/rashi" className="text-cui-primary-strong hover:underline">
           Rashi
         </Link>
         <span> · </span>

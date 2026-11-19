@@ -10,14 +10,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const [active, won, lost, inactive] = await Promise.all([
-    supabase.from('leads').select('id', { count: 'exact', head: true }).in('status', [...ACTIVE_LEAD_STATUSES]),
-    supabase.from('leads').select('id', { count: 'exact', head: true }).eq('status', 'won'),
-    supabase.from('leads').select('id', { count: 'exact', head: true }).eq('status', 'lost'),
-    supabase.from('leads').select('id', { count: 'exact', head: true }).eq('status', 'inactive'),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null).in('status', [...ACTIVE_LEAD_STATUSES]),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'won'),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'lost'),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'inactive'),
   ]);
 
   return NextResponse.json(

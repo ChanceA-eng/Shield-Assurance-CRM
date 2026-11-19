@@ -13,7 +13,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   const authError = await requireApiSession(request);
   if (authError) return authError;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const { id } = await context.params;
     const scope = await resolveRecordScope(supabase, { type: 'lead', id });
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   const authError = await requireApiSession(request);
   if (authError) return authError;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const { id } = await context.params;
     if (!isUuid(id)) throw new WorkspaceError('A valid lead id is required.', 400);

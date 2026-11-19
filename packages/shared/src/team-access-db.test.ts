@@ -1,0 +1,341 @@
+import { readFile } from 'node:fs/promises';
+import { PGlite } from '@electric-sql/pglite';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { STARTER_TEAM_ROLES, TEAM_PERMISSIONS, TEAM_PERMISSION_DEPENDENCIES, resolveTeamAccess } from './team-access';
+
+const owner = '11111111-1111-4111-8111-111111111111';
+const admin = '22222222-2222-4222-8222-222222222222';
+const producer = '33333333-3333-4333-8333-333333333333';
+const invitee = '44444444-4444-4444-8444-444444444444';
+const invitation = '55555555-5555-4555-8555-555555555555';
+let db: PGlite;
+
+beforeEach(async () => {
+  db = new PGlite();
+  await db.exec(`
+    create role anon; create role authenticated; create role service_role;
+    create schema auth; create schema storage;
+    create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz,banned_until timestamptz);
+    create function auth.uid() returns uuid language sql stable as $$
+      select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid
+    $$;
+    create table public.clients(id uuid primary key); create table public.leads(id uuid primary key);
+    create table storage.objects(id uuid primary key,bucket_id text);
+    alter table storage.objects enable row level security;
+  `);
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261102220000_agency_memberships.sql', import.meta.url), 'utf8'));
+  await db.query(`insert into auth.users(id,email,email_confirmed_at) values
+    ($1,'owner@example.test',now()),($2,'admin@example.test',now()),($3,'producer@example.test',now())`, [owner, admin, producer]);
+  await db.query(`insert into public.agency_members(user_id,email,role) values
+    ($1,'owner@example.test','owner'),($2,'admin@example.test','admin'),($3,'producer@example.test','agent')`, [owner, admin, producer]);
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261110120000_team_access_foundation.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261110121000_protect_agency_owner.sql', import.meta.url), 'utf8'));
+  await db.exec(`
+    alter table public.leads add column archived_at timestamptz;
+    alter table public.leads enable row level security;
+    grant select on public.leads to authenticated;
+    create policy lead_reads on public.leads for select to authenticated using (true);
+    create table public.tasks(id integer primary key,related_type text,related_id uuid,status text,due_date timestamptz);
+    create table public.outreach_settings(id integer primary key,timezone text);
+    create table public.notifications(id integer,type text,message text,href text,read boolean,created_at timestamptz);
+    create function public.dispatch_due_reminders() returns void language plpgsql as $$ begin end; $$;
+    create function public.unread_message_summary() returns jsonb language sql as $$ select '{}'::jsonb $$;
+    create table public.social_intents(id integer primary key,approved_by uuid,publish_dispatched_at timestamptz);
+    alter table public.clients add column full_name text;
+    create table public.policies(id uuid primary key, client_id uuid references public.clients(id), carrier text, policy_number text);
+    create function public.update_policy_record_atomic(p_id uuid,p_updates jsonb,p_actor text) returns jsonb
+    language sql as $$ update public.policies set carrier=p_updates->>'carrier',policy_number=p_updates->>'policy_number'
+      where id=p_id returning to_jsonb(policies) $$;
+  `);
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261119120000_active_task_workspace.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261119121000_team_request_authorization.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261119122000_team_dispatch_authorization.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261119123000_staff_policy_inbox.sql', import.meta.url), 'utf8'));
+}, 30000);
+afterEach(async () => { await db.close(); });
+
+const activate = async (): Promise<void> => { await db.exec('update public.team_access_rollout set enforcement_version=1,enabled=true'); };
+const saveRole = (actor: string, id: string, grants: Record<string, string>, version: number | null = null) =>
+  db.query('select public.save_team_role($1,$2,$2,$3,$4) as saved', [actor, id, grants, version]);
+const changeMember = (actor: string, target: string, role: string | null, exceptions = {}, active = true, version = 1) =>
+  db.query('select public.set_team_member_access($1,$2,$3,$4,$5,$6) as saved', [actor, target, role, exceptions, active, version]);
+const invite = (actor = owner, email = 'writer@example.test') =>
+  db.query('select public.create_team_invitation($1,$2,$3,$4,$5) as saved', [actor, invitation, email, 'content-writer', {}]);
+const delivery = (version: number, user: string | null, error: string | null = null) =>
+  db.query('select public.record_team_invitation_delivery($1,$2,$3,$4,$5) as saved', [owner, invitation, user, version, error]);
+const accept = () => db.query('select public.accept_team_invitation($1,$2) as saved', [invitee, invitation]);
+
+describe('Team access migration in isolated PostgreSQL', () => {
+  it('routes scoped staff requests by urgency without changing policy, and restricts review and corrections to admins', async () => {
+    await db.query(`insert into public.clients(id,agent_user_id,full_name) values ($1,$2,'Assigned'),($3,$4,'Other')`,
+      [invitee, producer, invitation, admin]);
+    await db.query(`insert into public.policies values($1,$1,'Carrier','A1'),($2,$2,'Carrier','B2')`, [invitee, invitation]);
+    const submit = (actor: string, policyId: string, priority: number) => db.query<{ id: string }>(
+      `select public.submit_staff_policy_request($1,$2,$3::smallint,'Review the policy') as id`, [actor, policyId, priority]);
+    await expect(submit(producer, invitee, 1)).rejects.toMatchObject({ code: '42501' });
+    await activate();
+    await saveRole(owner, 'assigned-policy-service', {
+      'accounts.view': 'assigned', 'policies.view': 'assigned', 'policies.edit': 'assigned',
+    });
+    await changeMember(owner, producer, 'assigned-policy-service');
+    await expect(submit(producer, invitation, 3)).rejects.toMatchObject({ code: 'P0002' });
+    const routine = (await submit(producer, invitee, 1)).rows[0].id;
+    const urgent = (await submit(producer, invitee, 3)).rows[0].id;
+    const list = (actor: string, closed = false) => db.query<{ row: { id: string; outcome: string } }>(
+      'select public.list_staff_policy_requests($1,0,$2) as row', [actor, closed]);
+    await expect(list(producer)).rejects.toMatchObject({ code: '42501' });
+    expect((await list(admin)).rows.map(({ row }) => row.id)).toEqual([urgent, routine]);
+    expect((await db.query('select policy_number from public.policies where id=$1', [invitee])).rows).toEqual([{ policy_number: 'A1' }]);
+    const correct = (actor: string) => db.query(`select public.correct_staff_request_policy($1,$2,'New carrier','A2')`, [actor, urgent]);
+    await expect(correct(producer)).rejects.toMatchObject({ code: '42501' });
+    await correct(admin);
+    expect((await db.query('select policy_number from public.policies where id=$1', [invitee])).rows).toEqual([{ policy_number: 'A2' }]);
+    const resolve = (actor: string) => db.query(`select public.resolve_staff_policy_request($1,$2,'handled')`, [actor, urgent]);
+    await expect(resolve(producer)).rejects.toMatchObject({ code: '42501' });
+    await resolve(admin);
+    await expect(resolve(admin)).rejects.toMatchObject({ code: 'PT409' });
+    expect((await list(owner, true)).rows[0].row.outcome).toBe('handled');
+    await changeMember(owner, producer, 'assigned-policy-service', { 'policies.edit': { effect: 'deny' } }, true, 2);
+    await expect(submit(producer, invitee, 1)).rejects.toMatchObject({ code: '42501' });
+  });
+  it('authorizes scheduled and reviewed sends against current record assignment and scoped grants', async () => {
+    await db.query('insert into public.leads(id,agent_user_id) values($1,$2),($3,$4)', [invitee, producer, invitation, admin]);
+    await db.query('insert into public.clients(id,agent_user_id) values($1,$2)', [invitee, producer]);
+    const allowed = async (actor: string | null, lead: string | null, client: string | null) =>
+      (await db.query<{ allowed: boolean }>('select public.team_scheduled_dispatch_allowed($1,$2,$3) as allowed', [actor, lead, client])).rows[0].allowed;
+    expect(await allowed(null, invitee, null)).toBe(true);
+    await activate();
+    expect(await allowed(null, invitee, null)).toBe(false);
+    await saveRole(owner, 'assigned-sender', {
+      'leads.view': 'assigned', 'accounts.view': 'assigned', 'messages.view': 'assigned', 'messages.send': 'assigned',
+    });
+    await changeMember(owner, producer, 'assigned-sender');
+    expect(await allowed(producer, invitee, null)).toBe(true);
+    expect(await allowed(producer, null, invitee)).toBe(true);
+    expect(await allowed(producer, invitee, invitee)).toBe(true);
+    expect(await allowed(producer, invitation, null)).toBe(false);
+    expect(await allowed(producer, null, null)).toBe(false);
+    await db.query('update public.leads set agent_user_id=$1 where id=$2', [admin, invitee]);
+    expect(await allowed(producer, invitee, null)).toBe(false);
+    expect(await allowed(producer, invitee, invitee)).toBe(false);
+    expect(await allowed(owner, invitee, null)).toBe(true);
+    await changeMember(owner, producer, 'assigned-sender', {}, false, 2);
+    expect(await allowed(producer, null, invitee)).toBe(false);
+  });
+
+  it('requires both sending and record-view scopes, including agency scope for unmatched recipients', async () => {
+    await db.query('insert into public.leads(id,agent_user_id) values($1,$2)', [invitee, admin]);
+    await activate();
+    await saveRole(owner, 'mixed-sender', {
+      'leads.view': 'assigned', 'messages.view': 'agency', 'messages.send': 'agency',
+    });
+    await changeMember(owner, producer, 'mixed-sender');
+    const allowed = async (lead: string | null) => (await db.query<{ allowed: boolean }>(
+      'select public.team_record_dispatch_allowed($1,$2,null) as allowed', [producer, lead])).rows[0].allowed;
+    expect(await allowed(invitee)).toBe(false);
+    expect(await allowed(null)).toBe(false);
+    await db.query('update public.leads set agent_user_id=$1 where id=$2', [producer, invitee]);
+    expect(await allowed(invitee)).toBe(true);
+    await db.query(`update public.agency_members set access_exceptions='{"messages.send":{"effect":"deny"}}' where user_id=$1`, [producer]);
+    expect(await allowed(invitee)).toBe(false);
+    await db.query(`update public.agency_members set access_exceptions='{}' where user_id=$1`, [producer]);
+    await db.query(`update public.agency_members set access_exceptions='{"leads.view":{"effect":"allow","scope":"agency"},
+      "accounts.view":{"effect":"allow","scope":"agency"}}' where user_id=$1`, [producer]);
+    expect(await allowed(null)).toBe(true);
+    await db.query(`update auth.users set banned_until=now()+interval '1 day' where id=$1`, [producer]);
+    expect(await allowed(invitee)).toBe(false);
+  });
+
+  it('rejects dispatch after the approver loses publishing access', async () => {
+    await activate();
+    await db.query('insert into public.social_intents values(1,$1,null),(2,$2,null)', [admin, owner]);
+    await changeMember(owner, admin, 'producer');
+    await expect(db.query('update public.social_intents set publish_dispatched_at=now() where id=1'))
+      .rejects.toMatchObject({ code: '42501' });
+    await db.query('update public.social_intents set publish_dispatched_at=now() where id=2');
+    expect((await db.query('select id from public.social_intents where publish_dispatched_at is not null')).rows).toEqual([{ id: 2 }]);
+  });
+  it('blocks direct customer table access for restricted members without removing the owner’s access', async () => {
+    await db.query('insert into public.leads(id) values($1)', [producer]);
+    await activate();
+    await db.exec('set role authenticated');
+    await db.query(`select set_config('request.jwt.claim.sub',$1,false)`, [producer]);
+    expect((await db.query('select id from public.leads')).rows).toEqual([]);
+    const access = await db.query<{ value: { mode: string } }>('select public.team_request_access() as value');
+    expect(access.rows[0].value.mode).toBe('restricted');
+    await db.query(`select set_config('request.jwt.claim.sub',$1,false)`, [owner]);
+    expect((await db.query('select id from public.leads')).rows).toEqual([{ id: producer }]);
+  });
+
+  it('keeps archive-closed tasks in lead history but excludes them from general totals until restore', async () => {
+    await db.query('insert into public.leads(id,archived_at) values($1,now()),($2,null)', [producer, admin]);
+    await db.query(`insert into public.tasks(id,related_type,related_id,status) values
+      (1,'lead',$1,'completed'), (2,'lead',$2,'completed'), (3,null,null,'open')`, [producer, admin]);
+    const visible = () => db.query('select id from public.active_workspace_tasks order by id');
+    expect((await visible()).rows).toEqual([{ id: 2 }, { id: 3 }]);
+    expect((await db.query('select id from public.tasks where related_id=$1', [producer])).rows).toEqual([{ id: 1 }]);
+    await db.query('update public.leads set archived_at=null where id=$1', [producer]);
+    expect((await visible()).rows).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+  });
+
+  it('uses the agency midnight for the tasks badge and skips archived leads', async () => {
+    await db.query('insert into public.leads(id,archived_at) values($1,now())', [producer]);
+    await db.exec(`insert into public.outreach_settings values(1,'America/New_York');
+      insert into public.tasks(id,status,due_date)
+      select 1,'open', (date_trunc('day',now() at time zone 'America/New_York')+interval '1 day') at time zone 'America/New_York'
+      union all select 2,'open', (date_trunc('day',now() at time zone 'America/New_York')+interval '1 day') at time zone 'America/New_York' - interval '1 second';`);
+    await db.query(`insert into public.tasks values(3,'lead',$1,'open',now()-interval '1 day')`, [producer]);
+    const result = await db.query('select public.crm_shell_summary() as summary');
+    expect(result.rows).toEqual([{ summary: { overdueCount: 0, dueTodayCount: 1, notifications: [], unreadCount: 0, unreadMessages: {} } }]);
+  });
+  it('backfills known memberships but leaves new admission and mutations disabled', async () => {
+    const members = await db.query<{ role: string; team_role_id: string | null }>('select role,team_role_id from public.agency_members order by email');
+    expect(members.rows).toEqual([
+      { role: 'admin', team_role_id: 'admin' }, { role: 'owner', team_role_id: null }, { role: 'agent', team_role_id: 'producer' },
+    ]);
+    await expect(saveRole(owner, 'new-role', {})).rejects.toMatchObject({ code: '55000' });
+  });
+
+  it('keeps the database catalog, dependencies and seeded grants aligned with the shared contracts', async () => {
+    const catalog = await db.query<{ permission: string; scopes: string[] }>('select permission,scopes from public.team_permission_catalog');
+    expect(Object.fromEntries(catalog.rows.map((row) => [row.permission, row.scopes])))
+      .toEqual(Object.fromEntries(Object.entries(TEAM_PERMISSIONS).map(([key, value]) => [key, [...value.scopes]])));
+    const dependencies = await db.query<{ permission: string; dependency: string }>('select permission,dependency from public.team_permission_dependencies');
+    expect(dependencies.rows.map((row) => `${row.permission}:${row.dependency}`).sort())
+      .toEqual(Object.entries(TEAM_PERMISSION_DEPENDENCIES).flatMap(([permission, values]) => values.map((value) => `${permission}:${value}`)).sort());
+    const roles = await db.query<{ id: string; grants: Record<string, string> }>('select id,grants from public.team_role_bundles');
+    for (const role of STARTER_TEAM_ROLES) {
+      expect(roles.rows.find((row) => row.id === role.id)?.grants).toEqual(resolveTeamAccess(role.grants));
+    }
+  });
+
+  it('prevents escalation through a shared bundle, member exception or reactivation of a stronger member', async () => {
+    await activate();
+    await db.query(`update public.agency_members set team_role_id='content-writer',
+      access_exceptions='{"team.manage":{"effect":"allow","scope":"agency"}}' where user_id=$1`, [admin]);
+    await expect(saveRole(admin, 'content-writer', { 'social.view': 'agency', 'accounts.view': 'agency' }, 1))
+      .rejects.toMatchObject({ code: '42501' });
+    await expect(changeMember(admin, producer, 'producer')).rejects.toMatchObject({ code: '42501' });
+    await expect(changeMember(admin, admin, 'content-writer', { 'social.publish': { effect: 'allow', scope: 'agency' } }))
+      .rejects.toMatchObject({ code: '42501' });
+    await expect(changeMember(admin, owner, null)).rejects.toMatchObject({ code: '42501' });
+  });
+
+  it('checks exceptions of every affected member before changing a shared bundle', async () => {
+    await activate();
+    await db.query(`update public.agency_members set team_role_id='content-writer',
+      access_exceptions=case when user_id=$1 then '{"team.manage":{"effect":"allow","scope":"agency"}}'::jsonb
+      else '{"accounts.view":{"effect":"allow","scope":"agency"}}'::jsonb end where user_id in ($1,$2)`, [admin, producer]);
+    await expect(saveRole(admin, 'content-writer', { 'social.view': 'agency' }, 1)).rejects.toMatchObject({ code: '42501' });
+  });
+
+  it('audits valid edits and rejects stale versions without changing members or roles', async () => {
+    await activate();
+    await saveRole(admin, 'content-only', { 'social.view': 'agency' });
+    await changeMember(owner, producer, 'content-only');
+    await expect(changeMember(owner, producer, 'producer')).rejects.toMatchObject({ code: 'PT409' });
+    await saveRole(admin, 'content-only', { 'social.view': 'agency', 'social.edit': 'agency' }, 1);
+    await expect(saveRole(admin, 'content-only', {}, 1)).rejects.toMatchObject({ code: 'PT409' });
+    const result = await db.query<{ access: Record<string, string>; access_version: number }>(
+      'select public.team_effective_access(user_id) as access,access_version from public.agency_members where user_id=$1', [producer]);
+    expect(result.rows[0]).toEqual({ access: { 'social.view': 'agency', 'social.edit': 'agency' }, access_version: 3 });
+    const audit = await db.query<{ action: string }>('select action from public.agency_audit order by id');
+    expect(audit.rows.map((row) => row.action)).toEqual(['team_role_saved', 'team_member_access_changed', 'team_role_saved']);
+  });
+
+  it('applies scoped exceptions and denies the same way as the shared evaluator', async () => {
+    const role = STARTER_TEAM_ROLES.find((value) => value.id === 'producer')!;
+    const exceptions = [{ permission: 'leads.edit', effect: 'deny' }, { permission: 'leads.prospect', effect: 'deny' }] as const;
+    const result = await db.query<{ access: Record<string, string> }>('select public.team_apply_exceptions($1,$2) as access', [
+      resolveTeamAccess(role.grants), { 'leads.edit': { effect: 'deny' }, 'leads.prospect': { effect: 'deny' } },
+    ]);
+    expect(result.rows[0].access).toEqual(resolveTeamAccess(role.grants, exceptions));
+    await expect(db.query('select public.team_apply_exceptions($1,$2)', [{}, { 'accounts.view': { effect: 'deny', scope: 'agency' } }]))
+      .rejects.toMatchObject({ code: '22023' });
+    await expect(db.query('select public.team_validate_access($1)', [{ 'accounts.view': 'assigned', 'accounts.edit': 'agency' }]))
+      .rejects.toMatchObject({ code: '22023' });
+  });
+
+  it('protects the last owner and returns no grants for suspended members', async () => {
+    await activate();
+    await expect(changeMember(owner, owner, null, {}, false)).rejects.toMatchObject({ code: '42501' });
+    await changeMember(owner, producer, 'producer', {}, false);
+    const result = await db.query<{ access: object }>('select public.team_effective_access($1) as access', [producer]);
+    expect(result.rows[0].access).toEqual({});
+    await expect(changeMember(producer, admin, 'producer')).rejects.toMatchObject({ code: '42501' });
+  });
+
+  it('protects every owner, including through the old management RPC, while allowing profile updates', async () => {
+    await db.query(`insert into auth.users(id,email,email_confirmed_at) values($1,'another@example.test',now());
+    `, [invitee]);
+    await db.query(`insert into public.agency_members(user_id,email,role) values($1,'another@example.test','owner')`, [invitee]);
+    await activate();
+    await expect(changeMember(owner, invitee, null)).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query(`select public.manage_agency_member($1,$2,'agent',false)`, [owner, invitee])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query(`delete from public.agency_members where user_id=$1`, [invitee])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query(`update public.agency_members set role='owner',team_role_id=null where user_id=$1`, [producer])).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update public.agency_members set email='new-owner@example.test' where user_id=$1`, [owner]);
+  });
+
+  it('retains failed invitations and activates only a verified recipient, independently of mail transport configuration', async () => {
+    await activate();
+    await invite();
+    await invite();
+    await delivery(1, null, 'Invitation email could not be sent. Retry delivery.');
+    await db.query('insert into auth.users(id,email) values($1,$2)', [invitee, 'writer@example.test']);
+    await delivery(2, invitee);
+    const pending = await db.query<{ active: boolean; access: object }>(
+      'select active,public.team_effective_access(user_id) as access from public.agency_members where user_id=$1', [invitee]);
+    expect(pending.rows[0]).toEqual({ active: false, access: {} });
+    await expect(changeMember(owner, invitee, 'content-writer')).rejects.toMatchObject({ code: '22023' });
+    await expect(accept()).rejects.toMatchObject({ code: '42501' });
+    await db.query('update auth.users set email_confirmed_at=now() where id=$1', [invitee]);
+    await accept();
+    await accept();
+    const active = await db.query<{ access: Record<string, string> }>('select public.team_effective_access($1) as access', [invitee]);
+    expect(active.rows[0].access).toMatchObject({ 'social.edit': 'agency', 'tasks.view': 'self' });
+    expect(active.rows[0].access).not.toHaveProperty('accounts.view');
+    await changeMember(owner, invitee, 'content-writer', {}, false, 2);
+    await expect(accept()).rejects.toMatchObject({ code: '42501' });
+  });
+
+  it('blocks revoked invitations and acceptance after the inviting administrator loses authority', async () => {
+    await activate();
+    await invite(admin);
+    await db.query('insert into auth.users(id,email,email_confirmed_at) values($1,$2,now())', [invitee, 'writer@example.test']);
+    await delivery(1, invitee);
+    await changeMember(owner, admin, 'producer');
+    await expect(accept()).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select public.revoke_team_invitation($1,$2,$3)', [owner, invitation, 1])).rejects.toMatchObject({ code: 'PT409' });
+    await db.query('select public.revoke_team_invitation($1,$2,$3)', [owner, invitation, 2]);
+    await expect(accept()).rejects.toMatchObject({ code: '42501' });
+    await expect(delivery(2, invitee)).rejects.toMatchObject({ code: 'PT409' });
+  });
+
+  it('never overwrites existing membership when auth invitation creation and persistence race', async () => {
+    await activate();
+    await expect(invite(owner, 'producer@example.test')).rejects.toMatchObject({ code: 'PT409' });
+    await invite();
+    await db.query('insert into auth.users(id,email,email_confirmed_at) values($1,$2,now())', [invitee, 'writer@example.test']);
+    await db.query(`insert into public.agency_members(user_id,email,role,team_role_id)
+      values($1,$2,'admin','admin')`, [invitee, 'writer@example.test']);
+    await expect(delivery(1, invitee)).rejects.toMatchObject({ code: 'PT409' });
+    const result = await db.query<{ role: string; active: boolean; invitation_id: string | null }>(
+      'select role,active,invitation_id from public.agency_members where user_id=$1', [invitee]);
+    expect(result.rows[0]).toEqual({ role: 'admin', active: true, invitation_id: null });
+  });
+
+  it('does not expose new tables or management RPCs to authenticated or anonymous database clients', async () => {
+    await activate();
+    await db.exec('begin');
+    for (const role of ['anon', 'authenticated']) {
+      await db.exec(`savepoint grants; set local role ${role}`);
+      await expect(db.query('select * from public.team_role_bundles')).rejects.toMatchObject({ code: '42501' });
+      await db.exec('rollback to savepoint grants');
+      await db.exec(`set local role ${role}`);
+      await expect(saveRole(owner, 'forged-owner', {})).rejects.toMatchObject({ code: '42501' });
+      await db.exec('rollback to savepoint grants; release savepoint grants');
+    }
+    await db.exec('rollback');
+  });
+});

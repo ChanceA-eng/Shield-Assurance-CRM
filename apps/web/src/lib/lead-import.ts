@@ -1,6 +1,7 @@
 import { parse as parseCsv } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import { stripContractPrefix } from './lead-identity';
+import { validEvidenceDate, type RenewalEvidence } from '@crm/shared';
 
 /**
  * Vendor-aware lead import engine.
@@ -18,12 +19,7 @@ export interface ProspectContact {
   phone: string | null;
 }
 
-export interface RenewalSignal {
-  type: string;
-  date: string; // ISO yyyy-mm-dd
-  carrier: string | null;
-  broker: string | null;
-}
+export type RenewalSignal = RenewalEvidence;
 
 export interface StagedProspect {
   full_name: string;
@@ -92,12 +88,14 @@ export function parseVendorDate(value: unknown): string | null {
 
   const mdy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
   if (mdy) {
-    return `${mdy[3]}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`;
+    const date = `${mdy[3]}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`;
+    return validEvidenceDate(date) ? date : null;
   }
 
   const ymd = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (ymd) {
-    return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+    const date = `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+    return validEvidenceDate(date) ? date : null;
   }
 
   return null;
@@ -189,7 +187,8 @@ function commercialProspects(rows: Row[]): StagedProspect[] {
     // Contract-award variants ("CPX2024X... - ACME INC") belong to the parent company.
     const { name: company, contract } = stripContractPrefix(rawCompany);
     const zip = pick(n, ['zip']) ?? '';
-    const key = `${company.toLowerCase()}|${zip}`;
+    const street = (pick(n, ['address']) ?? '').toLowerCase();
+    const key = `${company.toLowerCase()}|${zip}|${street}`;
     if (contract) {
       contractsByKey.set(key, [...(contractsByKey.get(key) ?? []), contract]);
     }
@@ -242,11 +241,15 @@ function commercialProspects(rows: Row[]): StagedProspect[] {
 
     // Renewals: union across all rows (variants may carry different coverage lines).
     const renewals: RenewalSignal[] = [];
+    const invalidRenewalFields = new Set<string>();
     const seenRenewals = new Set<string>();
     for (const row of groupRows) {
       for (const spec of RENEWAL_COLUMNS) {
         const date = parseVendorDate(row[spec.dateCol]);
-        if (!date) continue;
+        if (!date) {
+          if (text(row[spec.dateCol])) invalidRenewalFields.add(spec.dateCol);
+          continue;
+        }
         const carrier = spec.carrierCol ? text(row[spec.carrierCol]) : null;
         const renewalKey = `${spec.type}|${date}|${carrier ?? ''}`;
         if (seenRenewals.has(renewalKey)) continue;
@@ -256,6 +259,9 @@ function commercialProspects(rows: Row[]): StagedProspect[] {
           date,
           carrier,
           broker: spec.brokerCol ? text(row[spec.brokerCol]) : null,
+          evidence_class: /Prediction/.test(spec.dateCol) ? 'predicted' : 'vendor_reported',
+          precision: /Prediction/.test(spec.dateCol) ? 'month' : 'date',
+          source_field: spec.dateCol,
         });
       }
     }
@@ -304,6 +310,7 @@ function commercialProspects(rows: Row[]): StagedProspect[] {
       health_violations: text(row0['OSHA Health Violations']),
     };
     const dot = {
+      number: pick(first, ['DOT Number', 'USDOT Number', 'USDOT']),
       units: text(row0['DOT Units']),
       drivers: text(row0['DOT Drivers']),
       violations: text(row0['DOT Violations']),
@@ -366,6 +373,7 @@ function commercialProspects(rows: Row[]): StagedProspect[] {
         },
         contacts,
         renewals,
+        invalid_renewal_fields: [...invalidRenewalFields],
         workers_comp: workersComp,
         pension,
         benefits,

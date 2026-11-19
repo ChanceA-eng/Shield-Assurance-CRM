@@ -21,7 +21,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     if (request.nextUrl.searchParams.get('dueCount') === 'true') {
       const { count, error } = await supabase.from('tasks').select('id', { count: 'exact', head: true })
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const body = await workspaceBody(request);
     const type = body.lead_id ? 'lead' : 'client';
@@ -100,7 +100,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const body = await workspaceBody(request);
     if (!isUuid(body.id)) throw new WorkspaceError('A valid note id is required.', 400);

@@ -9,6 +9,7 @@ import {
   type LessonExperience,
 } from '../../lib/learning/lesson-structure';
 import { normalizeQuizOptions } from '../../lib/learning/quiz-options';
+import { useWorkspaceNavigation } from '../../context/WorkspaceNavigationContext';
 
 interface LessonQuiz {
   id: string;
@@ -52,6 +53,14 @@ interface LessonNavigationItem {
   title: string;
 }
 
+interface ProgressSummary {
+  lessonId: string;
+  completed: boolean;
+  percent: number;
+  score: number | null;
+  lastViewedAt: string;
+}
+
 const blockTypeLabels: Record<LessonDetail['blocks'][number]['type'], string> = {
   VIDEO: 'Video Walkthrough',
   PDF: 'Reference Brief',
@@ -74,29 +83,10 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-const DEFAULT_LEARNER_KEY = 'open-access';
-
-function learnerKey(): string {
-  if (typeof window === 'undefined') {
-    return DEFAULT_LEARNER_KEY;
-  }
-
-  const key = 'learning_learner_key';
-  const existing = window.localStorage.getItem(key);
-  if (existing && existing.trim().length > 0) {
-    return existing;
-  }
-
-  const generated = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-  window.localStorage.setItem(key, generated);
-  return generated;
-}
-
 export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.Element {
+  const { navigate } = useWorkspaceNavigation();
   const [lesson, setLesson] = useState<LessonDetail | null>(null);
+  const [savedProgress, setSavedProgress] = useState<ProgressSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [quizSelections, setQuizSelections] = useState<Record<string, number>>({});
@@ -149,34 +139,49 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       setError(null);
 
       try {
-        const response = await fetch(`/api/learning/lessons/get?id=${lessonId}`);
+        const [response, progressResponse] = await Promise.all([
+          fetch(`/api/learning/lessons/get?id=${lessonId}`),
+          fetch('/api/learning/progress/get'),
+        ]);
         const payload = (await response.json()) as {
           lesson?: LessonDetail;
           navigation?: { previousLesson?: LessonNavigationItem | null; nextLesson?: LessonNavigationItem | null };
           message?: string;
         };
         if (!response.ok || !payload.lesson) {
-          throw new Error(payload.message ?? 'Failed to load lesson.');
+          throw new Error(payload.message ?? 'Lesson could not be loaded. Refresh the page to try again.');
         }
+        if (!progressResponse.ok) {
+          const progressError = (await progressResponse.json()) as { message?: string };
+          throw new Error(progressError.message ?? 'Your learning progress could not be loaded. Refresh and retry.');
+        }
+        const progressPayload = (await progressResponse.json()) as { progress?: ProgressSummary[] };
+        const previousProgress = progressPayload.progress?.find((item) => item.lessonId === lessonId) ?? null;
 
         setLesson(payload.lesson);
+        setSavedProgress(previousProgress);
         setNavigation({
           previousLesson: payload.navigation?.previousLesson ?? null,
           nextLesson: payload.navigation?.nextLesson ?? null,
         });
 
-        await fetch('/api/learning/progress/update', {
+        const savedResponse = await fetch('/api/learning/progress/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            learnerKey: learnerKey(),
             lessonId,
             completed: false,
             percent: 5,
           }),
         });
+        if (!savedResponse.ok) {
+          const saveError = (await savedResponse.json()) as { message?: string };
+          throw new Error(saveError.message ?? 'Your lesson progress could not be saved. Refresh and retry.');
+        }
+        const savedPayload = (await savedResponse.json()) as { progress?: ProgressSummary };
+        if (savedPayload.progress) setSavedProgress(savedPayload.progress);
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : 'Failed to load lesson.');
+        setError(loadError instanceof Error ? loadError.message : 'Lesson could not be loaded. Refresh the page to try again.');
       } finally {
         setLoading(false);
       }
@@ -252,17 +257,23 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       ? Math.round((Object.keys({ ...quizResults, [quiz.id]: payload }).length / lesson.quizzes.length) * 100)
       : 100;
 
-    await fetch('/api/learning/progress/update', {
+    const progressResponse = await fetch('/api/learning/progress/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        learnerKey: learnerKey(),
         lessonId,
         completed: nextPercent === 100,
         percent: nextPercent,
         score: lesson && lesson.quizzes.length > 0 ? Math.round((nextCorrectCount / lesson.quizzes.length) * 100) : 100,
       }),
     });
+    if (!progressResponse.ok) {
+      const progressPayload = (await progressResponse.json()) as { message?: string };
+      setError(progressPayload.message ?? 'The quiz answer was checked, but progress could not be saved. Retry.');
+    } else {
+      const progressPayload = (await progressResponse.json()) as { progress?: ProgressSummary };
+      if (progressPayload.progress) setSavedProgress(progressPayload.progress);
+    }
   }
 
   async function markComplete(): Promise<void> {
@@ -270,11 +281,10 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
     setError(null);
 
     try {
-      await fetch('/api/learning/progress/update', {
+      const response = await fetch('/api/learning/progress/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          learnerKey: learnerKey(),
           lessonId,
           completed: true,
           percent: 100,
@@ -283,6 +293,14 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
             : 100,
         }),
       });
+      if (!response.ok) {
+        const payload = (await response.json()) as { message?: string };
+        throw new Error(payload.message ?? 'Lesson completion could not be saved. Retry.');
+      }
+      const payload = (await response.json()) as { progress?: ProgressSummary };
+      if (payload.progress) setSavedProgress(payload.progress);
+    } catch (completionError) {
+      setError(completionError instanceof Error ? completionError.message : 'Lesson completion could not be saved. Retry.');
     } finally {
       setCompleting(false);
     }
@@ -310,15 +328,15 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
   }
 
   function goToLesson(targetLessonId: string): void {
-    window.location.href = `/learning/lesson/${targetLessonId}?lessonId=${targetLessonId}`;
+    navigate(`/learning/lesson/${targetLessonId}?lessonId=${targetLessonId}`);
   }
 
   if (loading) {
-    return <div className="rounded-lg border border-[#c8ced3] bg-white p-6 text-sm text-[#514f4d]">Loading lesson...</div>;
+    return <div className="rounded-lg border border-cui-border bg-white p-6 text-sm text-[#514f4d]">Loading lesson...</div>;
   }
 
   if (error || !lesson) {
-    return <div className="rounded-lg border border-[#c8ced3] bg-white p-6 text-sm text-[#a61b1b]">{error ?? 'Lesson unavailable.'}</div>;
+    return <div className="rounded-lg border border-cui-border bg-white p-6 text-sm text-[#a61b1b]">{error ?? 'Lesson unavailable.'}</div>;
   }
 
   return (
@@ -327,22 +345,24 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm"
+        className="rounded-lg border border-cui-border bg-white p-4 shadow-sm"
       >
         <p className="text-xs uppercase tracking-wide text-[#706e6b]">{lesson.module.course.title} / {lesson.module.title}</p>
-        <h2 className="mt-1 text-xl font-bold text-[#23282c]">{experience.meta.title || lesson.title}</h2>
+        <h2 className="mt-1 text-xl font-bold text-cui-text">{experience.meta.title || lesson.title}</h2>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#4b5563]">
           <span className="rounded-full bg-[#eef2ff] px-2 py-0.5 font-semibold text-[#1f3f77]">{experience.meta.difficulty}</span>
           <span>{experience.meta.readingTimeMinutes} min read</span>
+          {savedProgress?.completed ? <span className="font-semibold text-green-800">Completed</span> : null}
+          {savedProgress?.score !== null && savedProgress?.score !== undefined ? <span>Best assessment score {savedProgress.score}%</span> : null}
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <a href="/learning" className="rounded-md border border-[#c8ced3] px-3 py-1 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Exit to Learning Center</a>
-          <a href={`/learning/course-builder/${lesson.module.course.id}`} className="rounded-md border border-[#c8ced3] px-3 py-1 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Open Course in Studio</a>
+          <a href="/learning" className="rounded-md border border-cui-border px-3 py-1 text-xs font-semibold text-cui-text hover:bg-cui-light">Exit to Learning Center</a>
+          <a href={`/learning/course-builder/${lesson.module.course.id}`} className="rounded-md border border-cui-border px-3 py-1 text-xs font-semibold text-cui-text hover:bg-cui-light">Open Course in Studio</a>
           {navigation.previousLesson ? (
             <button
               type="button"
               onClick={() => goToLesson(navigation.previousLesson!.id)}
-              className="rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]"
+              className="rounded-md border border-cui-primary-strong px-3 py-1 text-xs font-semibold text-cui-primary-strong hover:bg-[#eef5ff]"
             >
               Back: {navigation.previousLesson.title}
             </button>
@@ -351,7 +371,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
             <button
               type="button"
               onClick={() => goToLesson(navigation.nextLesson!.id)}
-              className="rounded-md bg-[#167495] px-3 py-1 text-xs font-semibold text-white hover:bg-[#0c4e8a]"
+              className="rounded-md bg-cui-primary-strong px-3 py-1 text-xs font-semibold text-white hover:bg-[#0c4e8a]"
             >
               Next: {navigation.nextLesson.title}
             </button>
@@ -360,12 +380,12 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       </motion.div>
 
       {experience.introduction ? (
-        <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+        <section className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
           <p className="text-sm leading-7 text-[#1f2937]">{experience.introduction}</p>
         </section>
       ) : null}
 
-      <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+      <section className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
         <button
           type="button"
           onClick={() => setObjectivesOpen((current) => !current)}
@@ -386,7 +406,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
             >
               <ol className="mt-3 space-y-2">
                 {experience.learningObjectives.map((objective, index) => (
-                  <li key={`${objective}-${index}`} className="rounded-md border border-[#e5e7eb] bg-[#ffffff] p-3 text-sm leading-6 text-[#111827]">
+                  <li key={`${objective}-${index}`} className="rounded-md border border-[#e5e7eb] bg-cui-panel p-3 text-sm leading-6 text-[#111827]">
                     <span className="mr-2 font-semibold text-[#1d4ed8]">{index + 1}.</span>
                     {objective}
                   </li>
@@ -398,8 +418,8 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       </section>
 
       {experience.lexicon.length > 0 ? (
-        <section className="space-y-3 rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
-          <h3 className="text-sm font-semibold text-[#23282c]">Lexicon Board</h3>
+        <section className="space-y-3 rounded-lg border border-cui-border bg-white p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-cui-text">Lexicon Board</h3>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             {experience.lexicon.map((item, index) => {
               const active = activeLexicon === index;
@@ -410,7 +430,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                   onClick={() => setActiveLexicon(index)}
                   className={`rounded-lg border px-3 py-2 text-left transition ${
                     active
-                      ? 'border-[#167495] bg-[#f3f8ff]'
+                      ? 'border-cui-primary-strong bg-[#f3f8ff]'
                       : 'border-[#e5e7eb] bg-white hover:border-[#bfd3f2]'
                   }`}
                 >
@@ -436,13 +456,13 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       ) : null}
 
       {(experience.technicalDeepDive.heading || experience.technicalDeepDive.coreDoctrine || experience.technicalDeepDive.scenarios.length > 0) ? (
-        <section className="space-y-3 rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+        <section className="space-y-3 rounded-lg border border-cui-border bg-white p-4 shadow-sm">
           <h3 className="text-base font-bold text-[#0f172a]">{experience.technicalDeepDive.heading || 'Technical Deep Dive'}</h3>
           {experience.technicalDeepDive.caseLawCitation ? (
             <p className="text-xs font-semibold text-[#334155]">{experience.technicalDeepDive.caseLawCitation}</p>
           ) : null}
           {experience.technicalDeepDive.coreDoctrine ? (
-            <p className="rounded-md border border-[#dbeafe] bg-[#f8f9fa] p-3 text-sm leading-6 text-[#1f2937]">{experience.technicalDeepDive.coreDoctrine}</p>
+            <p className="rounded-md border border-[#dbeafe] bg-cui-light p-3 text-sm leading-6 text-[#1f2937]">{experience.technicalDeepDive.coreDoctrine}</p>
           ) : null}
 
           {experience.technicalDeepDive.scenarios.length > 0 ? (
@@ -460,7 +480,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
             <button
               type="button"
               onClick={() => setExecutionVisible(true)}
-              className="rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]"
+              className="rounded-md border border-cui-primary-strong px-3 py-1 text-xs font-semibold text-cui-primary-strong hover:bg-[#eef5ff]"
             >
               Next Step: Field Execution
             </button>
@@ -475,9 +495,9 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.26, ease: 'easeOut' }}
-            className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm"
+            className="rounded-lg border border-cui-border bg-white p-4 shadow-sm"
           >
-            <h3 className="text-sm font-semibold text-[#23282c]">{experience.fieldExecution.strategyName || 'Field Execution'}</h3>
+            <h3 className="text-sm font-semibold text-cui-text">{experience.fieldExecution.strategyName || 'Field Execution'}</h3>
             {experience.fieldExecution.script ? (
               <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#111827]">{experience.fieldExecution.script}</p>
             ) : null}
@@ -486,16 +506,16 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       </AnimatePresence>
 
       {lesson.contentType === LearningContentType.VIDEO && lesson.contentUrl ? (
-        <video className="w-full rounded-lg border border-[#c8ced3] bg-black" src={lesson.contentUrl} controls />
+        <video className="w-full rounded-lg border border-cui-border bg-black" src={lesson.contentUrl} controls />
       ) : null}
 
       {lesson.contentType === LearningContentType.PDF && lesson.contentUrl ? (
-        <iframe title="Lesson PDF" className="h-[640px] w-full rounded-lg border border-[#c8ced3] bg-white" src={lesson.contentUrl} />
+        <iframe title="Lesson PDF" className="h-[640px] w-full rounded-lg border border-cui-border bg-white" src={lesson.contentUrl} />
       ) : null}
 
       {lesson.blocks.length > 0 ? (
-        <section className="space-y-3 rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
-          <h3 className="text-sm font-semibold text-[#23282c]">Applied Labs</h3>
+        <section className="space-y-3 rounded-lg border border-cui-border bg-white p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-cui-text">Applied Labs</h3>
           <AnimatePresence>
             {lesson.blocks.map((block, index) => {
             const content = asContentObject(block.content);
@@ -509,13 +529,13 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.25, delay: Math.min(index * 0.04, 0.24) }}
-                className="rounded-md border border-[#e4e5e6] p-3"
+                className="rounded-md border border-cui-body p-3"
               >
                 <p className="text-xs uppercase tracking-wide text-[#706e6b]">{blockTypeLabels[block.type]}</p>
-                <h4 className="text-sm font-semibold text-[#23282c]">{block.title ?? 'Untitled block'}</h4>
+                <h4 className="text-sm font-semibold text-cui-text">{block.title ?? 'Untitled block'}</h4>
 
                 {block.type === 'CODE' ? (
-                  <pre className="mt-2 overflow-x-auto rounded bg-[#081a30] p-3 text-xs text-[#e5edf8]">{body || '// Add code snippet in Course Builder block editor.'}</pre>
+                  <pre className="mt-2 overflow-x-auto rounded-lg bg-[#081a30] p-3 text-xs text-[#e5edf8]">{body || '// Add code snippet in Course Builder block editor.'}</pre>
                 ) : null}
 
                 {(block.type === 'TEXT' || block.type === 'EXERCISE' || block.type === 'SIMULATION' || block.type === 'QUIZ') ? (
@@ -523,10 +543,10 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                 ) : null}
 
                 {block.type === 'SIMULATION' ? (
-                  <div className="mt-3 rounded border border-[#d7e4f4] bg-[#f5f9ff] p-3">
+                  <div className="mt-3 rounded-lg border border-[#d7e4f4] bg-[#f5f9ff] p-3">
                     <p className="text-xs font-semibold text-[#234067]">Your Analysis</p>
                     <textarea
-                      className="mt-2 h-24 w-full rounded border border-[#c3d6ec] px-2 py-1 text-xs"
+                      className="mt-2 h-24 w-full rounded-lg border border-[#c3d6ec] px-2 py-1 text-xs"
                       placeholder="Write your coverage position, exclusion analysis, and transfer strategy."
                       value={simulationAnswers[block.id] ?? ''}
                       onChange={(event) => {
@@ -540,23 +560,23 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                       <button
                         type="button"
                         onClick={() => evaluateSimulation(block.id)}
-                        className="rounded border border-[#167495] px-2.5 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]"
+                        className="rounded-lg border border-cui-primary-strong px-2.5 py-1 text-xs font-semibold text-cui-primary-strong hover:bg-[#eef5ff]"
                       >
                         Evaluate Response
                       </button>
                       {simulationScores[block.id] !== undefined ? (
-                        <span className="text-xs font-semibold text-[#167495]">Simulation score: {simulationScores[block.id]}%</span>
+                        <span className="text-xs font-semibold text-cui-primary-strong">Simulation score: {simulationScores[block.id]}%</span>
                       ) : null}
                     </div>
                   </div>
                 ) : null}
 
                 {block.type === 'VIDEO' && url ? (
-                  <video className="mt-2 w-full rounded border border-[#c8ced3] bg-black" controls src={url} />
+                  <video className="mt-2 w-full rounded-lg border border-cui-border bg-black" controls src={url} />
                 ) : null}
 
                 {block.type === 'PDF' && url ? (
-                  <iframe title={`PDF block ${block.id}`} className="mt-2 h-[420px] w-full rounded border border-[#c8ced3]" src={url} />
+                  <iframe title={`PDF block ${block.id}`} className="mt-2 h-[420px] w-full rounded-lg border border-cui-border" src={url} />
                 ) : null}
               </motion.article>
             );
@@ -566,14 +586,14 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
       ) : null}
 
       {lesson.quizzes.length > 0 ? (
-        <section className="space-y-3 rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
-          <h3 className="text-sm font-semibold text-[#23282c]">Knowledge Checks</h3>
+        <section className="space-y-3 rounded-lg border border-cui-border bg-white p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-cui-text">Knowledge Checks</h3>
           {lesson.quizzes.map((quiz) => {
             const result = quizResults[quiz.id];
             const options = normalizeQuizOptions(quiz.options);
 
             return (
-              <div key={quiz.id} className="rounded-md border border-[#e4e5e6] p-3">
+              <div key={quiz.id} className="rounded-md border border-cui-body p-3">
                 <p className="text-sm font-medium text-[#181818]">{quiz.question}</p>
                 <div className="mt-2 space-y-2">
                   {options.map((option, index) => (
@@ -591,7 +611,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                               ? 'border-[#d97706] bg-[#fff7ed] text-[#7c2d12]'
                               : 'border-[#e5e7eb] bg-white text-[#1f2937]'))
                           : (quizSelections[quiz.id] === index
-                            ? 'border-[#167495] bg-[#eef5ff] text-[#0c4e8a]'
+                            ? 'border-cui-primary-strong bg-[#eef5ff] text-[#0c4e8a]'
                             : 'border-[#e5e7eb] bg-white text-[#1f2937] hover:border-[#bfd3f2]')
                       }`}
                     >
@@ -605,7 +625,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                     onClick={() => {
                       void submitQuiz(quiz);
                     }}
-                    className="rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]"
+                    className="rounded-md border border-cui-primary-strong px-3 py-1 text-xs font-semibold text-cui-primary-strong hover:bg-[#eef5ff]"
                   >
                     Submit
                   </button>
@@ -618,7 +638,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
                         <p className="text-xs text-[#334155]">Your answer note: {result.selectedExplanation}</p>
                       ) : null}
                       {!result.correct && result.correctExplanation ? (
-                        <p className="text-xs text-[#167495]">Correct answer note: {result.correctExplanation}</p>
+                        <p className="text-xs text-cui-primary-strong">Correct answer note: {result.correctExplanation}</p>
                       ) : null}
                     </div>
                   ) : null}
@@ -629,13 +649,13 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
         </section>
       ) : null}
 
-      <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+      <section className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-[#23282c]">Progress</h3>
-          <span className="text-xs font-semibold text-[#167495]">{progressPercent}%</span>
+          <h3 className="text-sm font-semibold text-cui-text">Progress</h3>
+          <span className="text-xs font-semibold text-cui-primary-strong">{progressPercent}%</span>
         </div>
-        <div className="h-2 w-full rounded-full bg-[#e4e5e6]">
-          <div className="h-2 rounded-full bg-[#167495]" style={{ width: `${progressPercent}%` }} />
+        <div className="h-2 w-full rounded-full bg-cui-body">
+          <div className="h-2 rounded-full bg-cui-primary-strong" style={{ width: `${progressPercent}%` }} />
         </div>
         <button
           type="button"
@@ -643,7 +663,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
           onClick={() => {
             void markComplete();
           }}
-          className="mt-3 rounded-md bg-[#23282c] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#133a6b] disabled:opacity-60"
+          className="mt-3 rounded-md bg-cui-text px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#133a6b] disabled:opacity-60"
         >
           {completing ? 'Saving...' : 'Mark lesson complete'}
         </button>

@@ -15,7 +15,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json(payload, { status: 200 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to load Rashi stats.' },
+      { message: error instanceof Error ? error.message : 'Rashi stats could not be loaded. Refresh the page to try again.' },
       { status: 500 },
     );
   }

@@ -5,6 +5,9 @@ import type { RecordTarget } from '@crm/shared';
 import { QUOTE_STATUSES, type QuoteOption, type QuoteHistoryEntry } from '../../lib/quote-options';
 import { formatArizonaDateTime } from '../../lib/arizona-time';
 import { workspaceFetch, workspacePages } from '../../lib/workspace-fetch';
+import PlacementDocuments from './PlacementDocuments';
+import Link from 'next/link';
+import { useUnsavedChanges, useWorkspaceNavigation } from '../../context/WorkspaceNavigationContext';
 
 const empty = () => ({ carrier: '', line_of_business: '', premium: '', effective_date: '', expiration_date: '',
   limits: '', deductibles: '', notes: '', status: 'draft' });
@@ -37,7 +40,7 @@ function QuoteHistory({ endpoint, quote }: { endpoint: string; quote: QuoteOptio
       className="text-xs font-semibold text-cui-primary">{open ? 'Hide' : 'View'} history for {quote.carrier}</button>
     {open ? <section id={`quote-history-${quote.id}`} aria-label={`Quote history for ${quote.carrier}`}
       className="mt-2 space-y-3 rounded border border-cui-border bg-cui-body/40 p-3">
-      <p className="text-xs text-cui-muted">Saved revisions, newest first. Times in Arizona. Historical quotes are not proof of binding or confirmed coverage.</p>
+      <p className="text-xs text-cui-muted">Newest first. Times in Arizona.</p>
       {loading ? <p role="status" className="text-sm text-cui-muted">Loading quote history...</p> : null}
       {error ? <div role="alert" className="text-sm text-cui-danger">{error}
         <button type="button" disabled={loading} onClick={() => void load()} className="ml-2 font-semibold underline">Retry history</button></div> : null}
@@ -63,11 +66,17 @@ function QuoteHistory({ endpoint, quote }: { endpoint: string; quote: QuoteOptio
   </div>;
 }
 
-export default function QuoteOptionsPanel({ target, refreshToken }: { target: RecordTarget; refreshToken?: string | null }): JSX.Element {
+export default function QuoteOptionsPanel({ target, refreshToken, contact, accountId }: {
+  target: RecordTarget; refreshToken?: string | null; accountId: string | null;
+  contact: { full_name: string | null; email?: string | null; phone?: string | null; address?: string | null; line_of_business?: string | null };
+}): JSX.Element {
   const [items, setItems] = useState<QuoteOption[]>([]);
+  const { navigate } = useWorkspaceNavigation();
   const [form, setForm] = useState(empty);
+  const [baseline, setBaseline] = useState('');
   const [editing, setEditing] = useState<QuoteOption | null>(null);
   const [open, setOpen] = useState(false);
+  const { confirmDiscard } = useUnsavedChanges(open && JSON.stringify(form) !== baseline);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -95,10 +104,22 @@ export default function QuoteOptionsPanel({ target, refreshToken }: { target: Re
   return <section aria-label="Manual quote options" className="space-y-3">
     <div className="flex items-center justify-between gap-3">
       <div><h3 className="font-semibold text-cui-text">Quote options</h3>
-        <p className="text-xs text-cui-muted">Manual carrier quotes. Acceptance does not bind coverage or mark a lead Won. Link the correct account before saving.</p></div>
-      <button type="button" disabled={open || loading} onClick={() => { setForm(empty()); setEditing(null); saveId.current = null; setOpen(true); }}
+        <p className="text-xs text-cui-muted">Link an account before saving.</p></div>
+      <button type="button" disabled={open || loading} onClick={() => { const draft = { ...empty(), line_of_business: contact.line_of_business ?? '' }; setForm(draft); setBaseline(JSON.stringify(draft)); setEditing(null); saveId.current = null; setOpen(true); }}
         className="shrink-0 rounded bg-cui-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Add quote option</button>
     </div>
+    <details className="rounded border border-cui-border bg-white p-3">
+      <summary className="cursor-pointer text-sm font-semibold">Quote preparation and missing information</summary>
+      <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
+        <div><dt className="text-xs text-cui-muted">Insured / business</dt><dd>{contact.full_name || 'Missing name'}</dd></div>
+        <div><dt className="text-xs text-cui-muted">Contact</dt><dd>{[contact.email, contact.phone].filter(Boolean).join(' · ') || 'Missing phone and email'}</dd></div>
+        <div><dt className="text-xs text-cui-muted">Address</dt><dd>{contact.address || 'Missing address'}</dd></div>
+        <div><dt className="text-xs text-cui-muted">Account</dt><dd>{accountId ? 'Explicitly linked' : 'Missing account link - link this lead before saving carrier options'}</dd></div>
+      </dl>
+      <p className="mt-2 text-xs text-cui-muted">Review missing contact information in the record Overview and the existing assets before requesting a carrier quote. Carrier-specific applications and eligibility must be verified manually. Saving an option requires carrier, line and premium; recording a policy additionally requires term dates, policy number and attested confirmation.</p>
+      {accountId ? <Link className="mt-2 inline-block text-xs font-semibold text-cui-primary underline"
+        href={`/clients/${accountId}?tab=assets`}>Review existing account assets and people</Link> : null}
+    </details>
     {error ? <p role="alert" className="rounded border border-cui-danger/30 bg-cui-danger/10 p-3 text-sm text-cui-danger">{error}
       <button type="button" onClick={() => void load()} className="ml-2 font-semibold underline">Refresh quotes</button></p> : null}
     {open ? <form aria-label="Quote option form" onSubmit={(event) => { event.preventDefault(); void save(); }} className="space-y-3 rounded border border-cui-border bg-white p-3">
@@ -122,7 +143,7 @@ export default function QuoteOptionsPanel({ target, refreshToken }: { target: Re
           className="mt-1 w-full rounded border border-cui-border px-2 py-2 text-sm font-normal" rows={2} />
       </label>)}
       <div className="flex gap-2"><button disabled={busy} className="rounded bg-cui-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? 'Saving...' : 'Save quote option'}</button>
-        <button type="button" disabled={busy} onClick={() => { setOpen(false); setEditing(null); saveId.current = null; }} className="rounded border border-cui-border px-3 py-2 text-sm">Cancel</button></div>
+        <button type="button" disabled={busy} onClick={() => { if (!confirmDiscard()) return; setOpen(false); setEditing(null); saveId.current = null; }} className="rounded border border-cui-border px-3 py-2 text-sm">Cancel</button></div>
     </form> : null}
     {loading ? <p className="text-sm text-cui-muted">Loading quote options...</p> : !items.length && !error ? <p className="text-sm text-cui-muted">No saved quote options.</p> : null}
     {items.map((item) => <article key={item.id} className="rounded border border-cui-border bg-white p-3">
@@ -133,13 +154,14 @@ export default function QuoteOptionsPanel({ target, refreshToken }: { target: Re
       {item.limits ? <p className="mt-2 whitespace-pre-wrap text-sm">Limits: {item.limits}</p> : null}
       {item.deductibles ? <p className="whitespace-pre-wrap text-sm">Deductibles: {item.deductibles}</p> : null}
       {item.notes ? <p className="mt-2 whitespace-pre-wrap text-sm text-cui-muted">{item.notes}</p> : null}
-      <button type="button" disabled={open} onClick={() => { setEditing(item); setForm({ ...item, premium: String(item.premium),
-        effective_date: item.effective_date ?? '', expiration_date: item.expiration_date ?? '' }); setOpen(true); setError(''); }}
+      <button type="button" disabled={open} onClick={() => { const draft = { ...item, premium: String(item.premium),
+        effective_date: item.effective_date ?? '', expiration_date: item.expiration_date ?? '' }; setEditing(item); setForm(draft); setBaseline(JSON.stringify(draft)); setOpen(true); setError(''); }}
         className="mt-2 text-xs font-semibold text-cui-primary disabled:opacity-50">Edit quote from {item.carrier}</button>
-      {item.status === 'accepted' ? <button type="button" onClick={() => window.location.assign(
+      {item.status === 'accepted' ? <button type="button" onClick={() => navigate(
         `/policies?account_id=${item.client_id}&quote_id=${item.id}${target.type === 'lead' && item.lead_id === target.id ? `&lead_id=${target.id}` : ''}`)}
         className="ml-3 mt-2 text-xs font-semibold text-cui-primary">Record policy from {item.carrier}</button> : null}
       <QuoteHistory key={`${endpoint}:${item.id}:${item.updated_at}`} endpoint={endpoint} quote={item} />
+      <PlacementDocuments key={`documents:${item.id}`} accountId={item.client_id} type="quote" recordId={item.id} />
     </article>)}
   </section>;
 }

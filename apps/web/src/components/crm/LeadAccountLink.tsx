@@ -54,7 +54,6 @@ export default function LeadAccountLink({ leadId, onLinked }: { leadId: string; 
         <Link href={`/clients/${linked.clientId}` as Route} className="mt-1 block font-semibold text-cui-primary hover:underline">Open account: {linked.clientName}</Link>
       ) : (
         <>
-          <p className="mt-1 text-xs text-cui-muted">Notes, assets and tasks can be saved now. Link the correct account when ready; do not merge people just because they share an email or name.</p>
           <button type="button" onClick={() => setOpen((value) => !value)} className="mt-2 text-xs font-semibold text-cui-primary">Link / create account</button>
           {open ? (
             <div className="mt-2 space-y-2">
@@ -69,7 +68,6 @@ export default function LeadAccountLink({ leadId, onLinked }: { leadId: string; 
                 <button type="button" disabled={busy || !selected} onClick={() => void link(false)} className="rounded bg-cui-primary px-2 py-1 text-xs font-semibold text-white disabled:opacity-50">Link selected account</button>
                 <button type="button" disabled={busy} onClick={() => void link(true)} className="rounded border border-cui-border px-2 py-1 text-xs font-semibold text-cui-muted">Create separate prospect account</button>
               </div>
-              <p className="text-xs text-cui-muted">Creating an account does not mark this person as an insured client or bind a policy.</p>
             </div>
           ) : null}
         </>

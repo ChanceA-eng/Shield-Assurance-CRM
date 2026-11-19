@@ -1,20 +1,20 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import type { Route } from 'next';
-import { useRouter } from 'next/navigation';
 import { createSupabaseBrowserAuthClient } from '../../lib/supabase-auth-browser';
+import { workspaceFetch } from '../../lib/workspace-fetch';
 
 interface LoginFormProps {
   redirectTo: string;
 }
 
 export default function LoginForm({ redirectTo }: LoginFormProps): JSX.Element {
-  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [recovery, setRecovery] = useState(false);
+  const [notice, setNotice] = useState('');
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
@@ -27,6 +27,13 @@ export default function LoginForm({ redirectTo }: LoginFormProps): JSX.Element {
     setErrorMessage('');
 
     try {
+      if (recovery) {
+        const result = await workspaceFetch<{ message: string }>('/api/auth/recovery', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }),
+        });
+        setNotice(result.message);
+        return;
+      }
       const supabase = createSupabaseBrowserAuthClient();
       const { error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
@@ -38,8 +45,7 @@ export default function LoginForm({ redirectTo }: LoginFormProps): JSX.Element {
         return;
       }
 
-      router.replace(redirectTo as Route);
-      router.refresh();
+      window.location.replace(redirectTo);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Unable to sign in right now.');
     } finally {
@@ -55,9 +61,9 @@ export default function LoginForm({ redirectTo }: LoginFormProps): JSX.Element {
       <div className="relative w-full max-w-md rounded-[28px] border border-white/10 bg-white/8 p-8 shadow-[0_30px_90px_rgba(0,0,0,0.45)] backdrop-blur">
         <div className="mb-8 space-y-3">
           <p className="text-xs font-semibold uppercase tracking-[0.32em] text-cyan-200/80">Shield Assurance</p>
-          <h1 className="text-3xl font-semibold tracking-tight text-white">CRM Access Portal</h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-white">{recovery ? 'Reset password' : 'CRM Access Portal'}</h1>
           <p className="text-sm leading-6 text-slate-300">
-            Sign in with your Supabase account to unlock the full CRM workspace and protected APIs.
+            {recovery ? 'Enter your sign-in email to request a reset link.' : 'Sign in to your agency workspace.'}
           </p>
         </div>
 
@@ -78,7 +84,7 @@ export default function LoginForm({ redirectTo }: LoginFormProps): JSX.Element {
             />
           </div>
 
-          <div className="space-y-2">
+          {!recovery ? <div className="space-y-2">
             <label htmlFor="password" className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">
               Password
             </label>
@@ -92,19 +98,23 @@ export default function LoginForm({ redirectTo }: LoginFormProps): JSX.Element {
               className="w-full rounded-2xl border border-white/12 bg-slate-950/50 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/70 focus:bg-slate-950/70"
               placeholder="Enter your password"
             />
-          </div>
+          </div> : null}
 
           {errorMessage ? (
-            <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">{errorMessage}</div>
+            <div role="alert" className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">{errorMessage}</div>
           ) : null}
+          {notice ? <p role="status" className="text-sm text-cyan-100">{notice}</p> : null}
 
           <button
             type="submit"
             disabled={submitting}
             className="w-full rounded-2xl bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:bg-cyan-300/70"
           >
-            {submitting ? 'Signing in...' : 'Sign in'}
+            {submitting ? recovery ? 'Requesting...' : 'Signing in...' : recovery ? 'Send reset link' : 'Sign in'}
           </button>
+          <button type="button" className="text-sm text-cyan-200 underline" onClick={() => {
+            setRecovery((value) => !value); setErrorMessage(''); setNotice(''); setPassword('');
+          }}>{recovery ? 'Back to sign in' : 'Forgot password?'}</button>
         </form>
       </div>
     </div>

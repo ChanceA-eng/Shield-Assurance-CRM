@@ -1,8 +1,52 @@
 # Shield Assurance CRM: website audit and implementation plan
 
-Date: November 1, 2026  
+Date: November 2, 2026
 Source baseline: `5343baf`  
 Scope: website functionality, action wiring, record handoffs, automation, and product readiness.
+
+## Current phase status
+
+| Phase | Status | What remains |
+|---|---|---|
+| 1-3 | Implemented and substantially verified locally | Coordinated deployment, provider configuration, and operational acceptance remain. |
+| 4 | Implementation and placement acceptance verified locally | Coordinated deployment and operational acceptance. |
+| 5 | Lifecycle, ownership/documents, renewal outcomes and claim task links implemented and locally verified | Coordinated schema release and operational acceptance. Carrier/delivery evidence remains agent-reported. |
+| 6 | Reporting, timezone behavior and source-level authorization review implemented and locally verified | Isolated dry-runs and coordinated application of pending reporting/timezone migrations; operational acceptance. |
+| 7 | Course navigation/progress, assessment history, Rashi citations and optional source-date capture implemented and focused browser-verified locally | Isolated Prisma migration dry-run/release and privacy-safe learning context decision. |
+| 8 | Dashboard responsiveness measured; stale local Next.js dev process refreshed after user authorization | Warm dashboard is responsive; database release gates remain for reporting, policy service requests, and certificates. |
+
+These are implementation phases, not a claim that the CRM is complete. Local phase work is substantially implemented; schema release, broader Phase 7 browser coverage and operational acceptance remain.
+
+### Phase 4 implementation and verification update
+
+- Added carrier confirmation evidence: an uploaded account document or carrier reference, a nonfuture confirmation date, and explicit operator attestation. The server records the authenticated operator; evidence is not independent carrier verification.
+- Added retained quote/policy document links with original filename snapshots, private downloads, and deletion safeguards. Recorded policy revisions cannot be removed through policy deletion or cascading account deletion.
+- Added on-demand policy revision history, exact predecessor/successor navigation, renewal/rewrite handoffs, working rewrite/history pages, and paginated policy registers. A rewrite does not cancel the original term. CRM revisions are not a carrier transaction or accounting ledger.
+- Quote preparation reuses existing record contacts, highlights missing information and links existing inventory. Carrier eligibility remains manual; account inventory is not an insured schedule.
+- Applied only `20261102210000_policy_placement_workspace.sql` and `20261102230000_policy_record_retention.sql`, each after successful scoped transactional dry runs. Twelve SQL fixture suites passed for the retention migration; fixture data was rolled back and original account contact fingerprints remained unchanged.
+- Live integration passed for evidence persistence, concurrent/retried placement, preserved quote and asset snapshots, exact-byte retained downloads, document attachment retry, revision cursor strings and rewrite lineage, including the extended retention/account-deletion scenario after the retention migration. Disposable account/lead/issuance records, private bytes and auth identity were cleaned up.
+- Workspace strict types, 318 web unit tests plus one each in shared, API and worker, and a Vercel production build passed. All six placement and all three quote browser cases passed against the staged Vercel release.
+- The previous agency/outreach syntax blocker was resolved by its owner. The staged-release browser run passed 40 of 41 cases, including all performance, workspace, Gmail and bulk-task UI checks. The added live bulk-task API check exposed a stale-batch conflict returning HTTP 500 instead of 409; this is being coordinated with that feature's owner before promotion.
+- User previously authorized Vercel deployment after validation. Phase 5 lifecycle work is now implemented and locally verified; no Phase 5 deployment or migration apply has occurred.
+
+### Loading performance release
+
+- Replaced five repeated shell/badge requests with one authenticated database summary, preserving exact task counts, unread totals and reminder processing. Hidden tabs stop polling; realtime bursts and overlapping refreshes are coalesced.
+- Explicit GET-only middleware delegation avoids verifying the same session twice only where the handler independently authenticates it. Writes and all other routes keep their middleware checks. All twelve delegated endpoint shapes rejected anonymous access with HTTP 401.
+- Dashboard premium totals now use complete database aggregates rather than downloading every policy page. SQL fixtures verify 1,501-policy completeness, all twelve Arizona-relative months and service-role-only access. The scoped migration passed thirteen rollback fixture suites before application.
+- Initial lead loading now issues one pipeline read and reuses the shell unread summary. All three loading browser cases passed against the production preview.
+- Same-machine warm development API batch: 4,821 ms before, 1,322 ms after (about 73% faster). Production-preview optimized batch: 724 ms cold / 453 ms warm; warm shell 259 ms, home metrics 415 ms, account directory 452 ms. These are measured API timings, not guaranteed page-render times or production latency.
+- Staged Vercel production release: authenticated shell/metrics/directory batch 653 ms first request / 430 ms warm. Login returned HTTP 200 and all twelve auth-delegated endpoint shapes still rejected missing application sessions with HTTP 401.
+- Protected-deployment browser checks accept a local Playwright storage-state file through `PLAYWRIGHT_STORAGE_STATE`; keep that credential-bearing file outside the repository. This does not bypass application authentication.
+
+### Lead archive, permanent delete and plain-language errors
+
+- Deleting a lead previously failed whenever it had tasks, notes or files (almost every lead), and bulk delete hid the reason. Delete is now **Archive**: `archive_leads` atomically closes open lead tasks and their notifications, rejects drafts awaiting approval, dismisses unworked website requests and pauses email sequences. Archived leads drop out of lists, counts, dashboards, reports, duplicate checks, follow-up automation and arrival banners.
+- **Restore** (`restore_leads`) reopens only tasks unchanged since archiving; email sequences stay paused until resumed. A new website submission from an archived lead restores it automatically.
+- **Permanent delete** (`purge_leads`) only works on archived leads, from one row, a selection, or "Delete all archived permanently", and requires typing DELETE. It erases the lead with its tasks, reminders, calendar items, notifications, notes, files, messages, website requests, drafts, sequences and lead-only activity. Records shared with a linked client account and issued policies are kept with that account.
+- All three run through `POST /api/leads/archive` (≤200 IDs per call; the page batches larger sets). Migrations `20261103030000_lead_archive.sql` and `20261103040000_lead_purge.sql` passed 18 rollback fixture suites before application.
+- Raw database and provider errors are no longer shown to staff. API routes pass errors through `friendlyErrorMessage`/`databaseError` (technical detail is logged server-side), and screen messages such as "Failed to load claims." now say what happened and what to do next.
+- Verification: 342 unit tests, strict types, production build, and 45 browser cases including the new archive/restore/permanent-delete flow.
 
 ## Executive conclusion
 
@@ -103,9 +147,9 @@ Evidence: [app shell](apps/web/src/components/layout/AppShell.tsx), [policy rout
 | Tasks | Open/completed, scopes, quick add, complete/reopen, priority, snooze presets/custom time, linked-record open | Partial | Lead/account opening works. Quick add has no account/lead picker. Non-lead/account task types cannot open their record. Custom snooze closes after a failed save because the update helper catches the failure. |
 | Policies | List, new, edit, remove | Partial | Database-backed CRUD, not a complete placement workflow. Requires re-entry, has coarse LOB choices, and can overwrite account contact details. No dedicated policy detail/term/insured-schedule workflow. |
 | Renewals | 30/60/90/overdue filters | Partial | Real data view, but no row link, review action, owner, remarket, confirm, or non-renew workflow. Status/date definitions disagree with the radar and Dashboard. |
-| Claims | New/edit/remove, policy selection | Partial | CRUD and creation automation exist. Open-only list hides completed work. Advanced backend fields lack corresponding form controls. Created tasks use claim IDs instead of openable account targets. |
+| Claims | New/edit, open/in-review/closed filters, retained status history | Partial | Lifecycle and audit events are implemented locally, but the schema migration is pending coordinated release. Advanced backend fields lack corresponding form controls. Created tasks still use claim IDs instead of openable account targets. |
 | Endorsements | New/edit/remove, policy selection | Partial | CRUD and creation automation exist, but not a structured carrier-confirmed change workflow. Open-only list; legacy tasks cannot open from Tasks. |
-| Certificates | New/edit/remove, policy selection | Partial | Tracks certificate records; no demonstrated form generation or verified holder delivery. Record creation can immediately claim issuance. |
+| Certificates | Request/review/issue/delivery-report lifecycle, private document attachment and history | Partial | Source is implemented locally; migrations are pending release. Issuance requires a stored private account document. Delivery is staff-reported; no provider-confirmed delivery or certificate generation is claimed. |
 | Inbox | Search, open thread, open account/lead, send email | Partial | Groups by account only, skips lead-only messages, reads latest 1,000 logs, threads capped at 100. Some load/read failures become empty state or clear badges. Thread does not automatically refresh with conversation-list polling. |
 | Outreach | Edit/approve/send/reject draft, pause/resume/cancel enrollment, settings, refresh, run engine | Code-backed / provider-dependent | Real orchestration. AI/email configuration and scheduled execution are separate dependencies; retain explicit approval and delivery status. |
 | Scheduler | Calendar views, date/event click, add/edit, drag reschedule, task panel | Partial | Real events API. UTC/local conversions can shift dragged times, past events are excluded by default, task due time does not reliably follow event time/reschedule. |
@@ -319,7 +363,7 @@ Depends on stable account identity, documents and ownership from Phases 1-3.
 
 **Insured-asset schedules implemented:** policy issuance now accepts an explicit selection of active assets belonging to the selected account, and records immutable placement-time snapshots transactionally with ordinary or quote-linked issuance. Exact request retries preserve the same policy/schedule; changed selections under a reused request ID, archived assets, and cross-account assets are rejected. Account inventory remains separate, and the policy view labels the schedule as CRM recordkeeping rather than carrier proof. The choices API paginates instead of silently truncating large inventories.
 
-**Verified:** migration `20261102180000_policy_insured_asset_schedule.sql` passed a scoped dry run and SQL fixture checks, then was applied without applying the separate pending outreach-marketing migration. Live integration verified selection, retry, and snapshot immutability; 66 focused route tests, web TypeScript, and production build passed. A later live integration run reached an unrelated existing service-task count assertion (`2` found instead of `1`), and the focused browser case did not reach the New Policy form while the policy list remained in its loading state. These remain follow-ups; no deployment or provider send occurred.
+**Verified:** migration `20261102180000_policy_insured_asset_schedule.sql` passed a scoped dry run and SQL fixture checks, then was applied without applying the separate pending outreach-marketing migration. Live checks verified selection, retry, and snapshot immutability. All 232 web unit tests and the four targeted policy handoff, quote-placement, and renewal browser cases passed; web strict TypeScript and production build passed. The recursive CI typecheck failure was fixed with NodeNext-compatible `.js` shared exports, and Next.js webpack now resolves those specifiers to TypeScript sources. A full live release-integration run has not yet completed end-to-end. No deployment or provider send occurred.
 
 ```text
 Lead
@@ -344,13 +388,22 @@ Acceptance: prepare and bind a quote without retyping the person/business; exact
 
 Depends on policy term/context from Phase 4; basic task/link repairs happen in Phase 1, not here.
 
+- **Policy service-request slice implemented locally:** the existing policy-change request record now supports typed service requests, requested effective dates, submitted/waiting/confirmed/closed/cancelled/reopened states, agent-reported carrier confirmation date/reference, optimistic version checks, and append-only change history. Request changes synchronize a linked task through the existing service automation settings; the task opens the account’s servicing tab. Existing claim, endorsement and certificate task templates and pause gates remain unchanged. Legacy `processed` records remain explicitly legacy and are not rewritten as carrier-confirmed.
+- **Claims history slice implemented locally:** claims now carry optimistic versions and append-only status/detail events; the Claims page can filter open/in-review/closed/all records, inspect the timeline, and close without deleting history. Claim edits are actor-attributed, stale writes conflict, and invalid reserve/payout amounts are rejected.
+- **Certificate lifecycle slice implemented locally:** new records are requests (not issued certificates); review, issuance and delivery-report states are versioned and audited. Issuance requires an uploaded private account file; delivery needs a method and is explicitly agent-reported. Certificate tasks remain active until delivery is reported, and request creation no longer sends an email claiming issuance.
+- **Renewal review slice implemented locally:** reviews are keyed to the active policy term, support owner/follow-up/outcome history, enforce linked same-account next-term lineage for a renewed result, and synchronize the canonical renewal task. The renewals view replacement preserves its existing column order rather than relying on `p.*`.
+- **Service-request ownership/documents implemented locally:** active agency owners can be assigned at creation or update, ownership is included in append-only change snapshots and the follow-up task, and verified private account files can be linked/downloaded with immutable request links and file snapshots. Cross-account, external-link, and non-stored files are rejected.
+- **Claim task links:** the claim lifecycle SQL fixture now asserts that follow-up opens the exact claim; task-link unit and browser coverage exercise the account context. Service-request follow-ups also hydrate the account and open the exact request.
+- **Verified:** migrations `20261105240000_policy_service_request_lifecycle.sql`, `20261105250000_certificate_service_lifecycle.sql`, `20261105260000_renewal_review_lifecycle.sql`, and `20261105270000_service_request_ownership_documents.sql` passed the scoped transactional dry run with all registered SQL fixtures, including claim, certificate, renewal, ownership, file-scope and task-link assertions. Twelve targeted lifecycle/task-link unit tests, strict web TypeScript, and authenticated mock browser flows for service-request owner/documents/status, claim history, and renewal owner/outcome/linkage/history passed. The Phase 5 migrations remain unapplied pending a coordinated code/schema release; no deployment or customer-facing carrier action occurred.
+- **Phase 5 implementation is complete locally.** Carrier and delivery reports remain agent-reported evidence only; they are not independently verified. Coordinated release is still required before these schema-dependent routes can run against the production database.
+
 - Reuse the existing policy-change-request API/model where suitable.
 - Structured request types: address/name change, vehicle/property addition/removal, endorsement, certificate, cancellation and rewrite.
 - Capture requested change, requested effective date, owner, carrier submission, confirmation, documents and status history.
 - Suggested lifecycle: Draft -> Submitted -> Waiting on carrier/client -> Confirmed -> Closed, with Cancelled/Reopened where appropriate.
 - Separate reported profile/inventory updates from carrier-confirmed coverage changes.
 - Claims: adjuster/contact/claim number, follow-up, open/closed history.
-- Certificates: request/review/issued states, real generated or uploaded document, verified delivery audit; no automatic issuance claim on draft creation.
+- Certificates: review and issue only after an uploaded private document is attached; retain a delivery report without calling it provider-verified or automatically sending the holder.
 - Renewals: review/remarket/retain/non-renew action, linked next policy term, cancellation/expiration handling, stale-task reconciliation after date/status changes.
 - Client-facing messages remain intentional and consent-aware.
 
@@ -360,12 +413,19 @@ Acceptance: each request produces one owned, openable work item and a durable ti
 
 Can begin report-query corrections from F12 after Phase 1; expanded lifecycle metrics depend on Phases 3-5.
 
+- **Reporting accuracy and complete detail slice implemented locally:** reporting periods validate MTD, QTD, YTD and rolling 12 months; the database aggregate applies carrier/date filters consistently and the API no longer derives totals from capped client-side samples. Report detail endpoints provide stable 25-row pagination, exact filtered counts, linked policy/claim/endorsement/lead records, and full filtered CSV export. Upcoming renewals are explicitly the next 90 days rather than a sample of recent policies. CSV formula-leading values are neutralized.
+- **Access and integration status:** agency-wide report APIs require an active owner or admin; agents cannot fetch team-wide report data. The owner-only Integrations tab reports database, Resend, per-agent Gmail and OpenAI configuration/health without returning credentials. Existing Team settings handle invitations/roles, and producer assignment is restricted to active owners/admins by the assignment RPC. The final source-level review confirmed owner-only team administration, active-member checks, and active owner/admin assignment checks; the timezone endpoint now also rejects inactive members before reading agency settings.
+- **Verified:** strict web TypeScript and 20 focused report, integration and role tests passed. The reporting migration `20261105280000_reporting_summary.sql` and registered SQL fixture passed the scoped transactional dry run; all fixture writes and migration changes were rolled back. Two authenticated browser tests passed for report pagination/navigation/filter/export and owner integration status. The migration remains unapplied and the schema guard requires it before a release build can consume the reporting RPC.
+- **Timezone implementation update:** agency timezone is owner-configurable and validated; DST-aware boundaries drive outreach eligibility/caps, task due-today filters and briefing counts, renewal radar dates, report ranges, calendar appointment/task synchronization, task entry/display, and snooze behavior. Browser, route, helper and API tests cover owner save/reload, DST boundaries, and agency-local appointments.
+- **Authorization review verified:** timezone settings, agency settings, team management, assignment, and agency-wide reports now have explicit active-member/role checks; the database assignment RPC independently enforces active owner/admin actors and active targets. Focused timezone and authorization regressions pass. This closes the Phase 6 source review, but does not replace the required isolated migration dry-run.
+- **Schema/release gate:** `20261105290000_agency_time_zone.sql` and `20261106000000_agency_calendar_time_zone.sql`, with their rollback fixtures, remain unapplied and have not been dry-run against a confirmed isolated database. Do not release code that reads the new column until both migrations pass the coordinated schema gate.
+- Report scheduling/sharing remains deferred until the report and delivery flows are reliable.
 - Define written premium versus current in-force premium, conversion, response time, retention, overdue work and renewal windows.
 - Correct MTD/QTD/YTD/rolling-12-month and carrier filtering.
 - Full paginated drilldowns, record links and export; reconcile aggregates rather than calculating from capped list data.
 - Real agency settings, timezone/business hours, producer assignment and user administration.
 - Integration status page shows configured/missing/healthy/failed without exposing keys.
-- Decide and enforce team/role permissions before enabling team-wide assignment and reporting. This needs a separate authorization review and tests.
+- Team/role permissions are enforced and covered by dedicated authorization tests; do not enable team-wide features before the coordinated migration/schema release.
 - Favorite reports first; scheduling/sharing only after reports and delivery jobs are reliable.
 
 Acceptance: known seeded data yields exact totals for each date/carrier/status combination; missing/failing integrations are explicit; owner/role rules pass dedicated authorization tests; no fake zero counts.
@@ -378,10 +438,30 @@ Independent of core CRM placement/servicing; lower operational priority.
 - Use the actual course ID/modules for overview/Continue.
 - Replace missing Module 12 link and reconcile static/dynamic course routes.
 - Tie durable progress to the authenticated agent, not device-specific/shared fallback keys.
-- Check every builder mutation before claiming success; preserve drafts and snapshot restore failures.
-- Improve grounded AI output with profile context, citations, source freshness and explicit uncertainty.
+- Check every builder mutation before claiming success; preserve drafts and snapshot restore failures. Course/module/lesson/quiz/block mutations now check HTTP success, show actionable status, and retain editor drafts on failures. Course creation has a regression test for failure retention and successful reload.
+- Static Modules 1–11 now save authenticated practice-attempt history and display the latest result after reload. Results are explicitly practice scores calculated in the browser, not independently verified credentials. Prisma migration `20261105190000_learning_assessment_attempts` is added and validated locally but remains unapplied.
+- Learning Rashi now requires an authenticated learner; answers retain retrieved citations and the Rashi widget displays source titles, safe external links, carrier/state/line context, and library update dates. Rashi answers continue to state uncertainty when indexed evidence cannot verify a criterion.
+- Knowledge documents can record an optional reported publication date; ingestion validates real calendar dates and citation views distinguish that agent-entered date from the library record update timestamp. The assistant is instructed not to treat the latter as proof of source currency. Missing dates remain explicit, never inferred. Prisma migration `20261106100000_knowledge_source_publication_date` is pending isolated dry-run and release.
+- Snapshot restoration now performs course/module/lesson/quiz/block replacement inside one Prisma transaction; two route tests cover successful nested restore and surfaced nested-write failure.
+- Verified this continuation: all 853 web unit tests passed across 80 files; all five Learning browser flows passed; strict web/API TypeScript and Prisma schema validation passed. Prisma client generation emitted updated types but hit a Windows file-lock error while renaming its query-engine DLL; do not restart the user's existing server to retry.
+- Learning browser verification now passes all five focused flows: dynamic course resume, no dead Module 12 link, course builder failed-save draft preservation, failed/successful snapshot restore, and static assessment retry/reload history. The local shared fixture setup can exceed the default 45-second per-test timeout; the focused suite passed with a bounded 120-second timeout. The long-lived server remains untouched.
+- Remaining: profile-specific learning context needs a trusted source model and privacy decision; do not add personal context to learning assistant requests without a clear, consented purpose.
 
-Acceptance: correct course opens; Continue resumes the correct lesson; progress survives another device/session; assessment results persist; AI actions disclose dependency/cost and never stand in for deterministic work prioritization.
+Acceptance: correct course opens; Continue resumes the correct lesson; progress survives another device/session; dynamic and static assessment results persist; AI actions disclose dependency/cost and never stand in for deterministic work prioritization.
+
+### Phase 8: local development responsiveness
+
+The earlier loading-performance release improved shared API round trips and selected production paths. This phase is specifically for the user's reported slow local experience; distinguish cold Next.js compilation, warm route rendering, and API latency instead of treating them as one number.
+
+- Defer nonessential dashboard chart code and let metrics render independently of the renewals request.
+- Capture cold and warm navigation/heading timings and initial API durations for representative routes; keep performance checks deterministic and report the measurements they actually collect.
+- Inspect local server memory and generated build-cache ownership before any restart or cleanup. Never stop an existing server or delete shared `.next*` outputs as an implicit optimization.
+- Prefer route-level/code-loading changes with measurable first-content benefit; preserve authenticated first paint and real API/error states.
+- The long-lived dev process had grown to about 2.96 GB working set while Windows had about 483 MB free. With explicit user authorization, only that Next.js process was restarted; build caches and files were not cleared. After the cold dashboard compile (17.4 seconds), a warm dashboard reload reached DOMContentLoaded in 0.77 seconds and the full dashboard state in 2.37 seconds; the process used about 356 MB and free memory rose to about 1.8 GB. These local measurements are not production SLAs.
+- The dashboard renewal 500 was traced to selecting the not-yet-installed `renewals.renewal_on` view column. The API now derives the same term from `renewal_date` or `expiration_date`, keeps the 250-row bound and chronological ordering, and returns HTTP 200 against the current schema. No visual changes were made.
+- The read-only schema check still reports missing `crm_reporting_summary`, policy-change-request fields and certificate lifecycle fields (migrations `20261105280000`, `20261105240000`, and `20261105250000`). These require the existing isolated dry-run and coordinated schema release; none was applied here.
+
+Acceptance: dashboard metrics are visible without waiting for the renewals table; representative cold/warm local timings identify whether remaining delay is compilation, API or rendering; no user server, shared cache or credentials are disturbed.
 
 ### Deferred: accounting, commission reconciliation, licensed forms and rating
 

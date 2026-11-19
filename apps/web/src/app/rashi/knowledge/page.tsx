@@ -21,6 +21,9 @@ export default function RashiKnowledgePage(): JSX.Element {
           title="Rashi Knowledge Center"
           description="Manage ingestion, scoped tags, and knowledge assets for underwriting retrieval."
         />
+        <Link href={'/rashi/policy-review' as Route} className="inline-flex text-sm font-semibold text-cui-primary">
+          Review de-identified policy wording
+        </Link>
       </div>
     </SectionLayout>
   );

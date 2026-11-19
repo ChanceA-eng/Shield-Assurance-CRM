@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '../../../../../lib/prisma';
+import { getApiSession } from '../../../../../lib/api-auth';
 
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
   try {
-    const { searchParams } = new URL(request.url);
-    const learnerKey = searchParams.get('learnerKey')?.trim() || 'open-access';
-
     const progress = await prisma.userProgress.findMany({
-      where: { learnerKey },
+      where: { learnerKey: session.user.id },
       orderBy: { updatedAt: 'desc' },
       select: {
         lessonId: true,
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ progress });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to load progress.' },
+      { message: error instanceof Error ? error.message : 'Progress could not be loaded. Refresh the page to try again.' },
       { status: 500 },
     );
   }

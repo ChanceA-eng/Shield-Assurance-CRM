@@ -6,6 +6,8 @@ import { formatArizonaDateTime } from '../../lib/arizona-time';
 import { isRecord, validateAsset } from '../../lib/workspace-validation';
 import { workspaceFetch, workspacePages } from '../../lib/workspace-fetch';
 import RecordHistory from './RecordHistory';
+import VehicleDetailsFields from './VehicleDetailsFields';
+import { useUnsavedChanges } from '../../context/WorkspaceNavigationContext';
 
 interface Props {
   target: RecordTarget;
@@ -45,6 +47,8 @@ export default function RecordAssetsPanel({ target, composeToken = 0, refreshTok
   const [form, setForm] = useState<AssetForm>(emptyForm);
   const [editing, setEditing] = useState<WorkspaceAsset | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [baseline, setBaseline] = useState(() => JSON.stringify(emptyForm()));
+  const { confirmDiscard } = useUnsavedChanges(formOpen && JSON.stringify(form) !== baseline);
   const [saving, setSaving] = useState(false);
   const saveId = useRef<string | null>(null);
   const draftsByType = useRef<Partial<Record<AssetKind, AssetDetails>>>({});
@@ -77,13 +81,15 @@ export default function RecordAssetsPanel({ target, composeToken = 0, refreshTok
   }, [composeToken]);
 
   const edit = (asset: WorkspaceAsset): void => {
+    if (!confirmDiscard()) return;
     setEditing(asset);
-    setForm({
+    const draft: AssetForm = {
       title: asset.title, asset_type: isAssetKind(asset.asset_type) ? asset.asset_type : 'general',
       source: isAssetSource(asset.metadata.source) ? asset.metadata.source : 'client_reported',
       details: detailsOf(asset),
       source_reference: typeof asset.metadata.source_reference === 'string' ? asset.metadata.source_reference : '',
-    });
+    };
+    setForm(draft); setBaseline(JSON.stringify(draft));
     setFormOpen(true);
     setNotice(null);
   };
@@ -92,13 +98,15 @@ export default function RecordAssetsPanel({ target, composeToken = 0, refreshTok
     setFormOpen(false);
     setEditing(null);
     setForm(emptyForm());
+    setBaseline(JSON.stringify(emptyForm()));
     draftsByType.current = {};
     saveId.current = null;
   };
 
   const save = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();
-    const validated = validateAsset(form);
+    const validated = validateAsset({ ...form, title: form.title || (form.asset_type === 'vehicle'
+      ? [form.details.year, form.details.make, form.details.model].filter(Boolean).join(' ') : '') });
     if (typeof validated === 'string') { setError(validated); return; }
     setSaving(true);
     setError(null);
@@ -112,7 +120,7 @@ export default function RecordAssetsPanel({ target, composeToken = 0, refreshTok
         }),
       });
       closeForm();
-      setNotice('Asset saved. This records the asset only; coverage has not been changed.');
+      setNotice('Asset saved.');
       await load();
       onChanged();
     } catch (failure) {
@@ -140,7 +148,7 @@ export default function RecordAssetsPanel({ target, composeToken = 0, refreshTok
   };
 
   return (
-    <div className="space-y-3">
+    <div role="region" aria-label="Assets & drivers" className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-bold text-cui-text">Assets &amp; drivers</h3>
@@ -150,9 +158,6 @@ export default function RecordAssetsPanel({ target, composeToken = 0, refreshTok
           Add asset
         </button>
       </div>
-      <p className="rounded border border-cui-warning/40 bg-cui-warning/10 px-3 py-2 text-xs text-cui-text">
-        Inventory is not an insured schedule. Adding, editing or archiving an asset does not bind coverage or process a carrier endorsement.
-      </p>
       {error ? <div role="alert" className="rounded border border-cui-danger/40 bg-cui-danger/10 p-3 text-sm text-cui-danger">{error} <button type="button" onClick={() => void load()} className="font-semibold underline">Refresh</button></div> : null}
       {notice ? <p role="status" className="rounded bg-cui-success/10 p-3 text-sm text-cui-text">{notice}</p> : null}
 
@@ -172,12 +177,16 @@ export default function RecordAssetsPanel({ target, composeToken = 0, refreshTok
               </select>
             </label>
             <label className="text-xs font-semibold text-cui-muted">Name / label
-              <input required maxLength={200} autoFocus value={form.title} onChange={(event) => setForm((previous) => ({ ...previous, title: event.target.value }))}
+              <input required={form.asset_type !== 'vehicle'} maxLength={200} autoFocus value={form.title} onChange={(event) => setForm((previous) => ({ ...previous, title: event.target.value }))}
                 placeholder="Truck 1, rental home, main shop..." className="mt-1 w-full rounded border border-cui-border px-2 py-1.5 text-sm text-cui-text" />
             </label>
-            {ASSET_FIELDS[form.asset_type].map((field) => (
+            {form.asset_type === 'vehicle' ? <VehicleDetailsFields value={form.details} disabled={saving}
+              onChange={(details) => setForm((previous) => ({ ...previous, details }))} /> : null}
+            {ASSET_FIELDS[form.asset_type].filter((field) => form.asset_type !== 'vehicle' || !['vin', 'year', 'make', 'model'].includes(field.key)).map((field) => (
               <label key={field.key} className="text-xs font-semibold text-cui-muted">{field.label}
                 <input value={form.details[field.key] ?? ''} placeholder={field.placeholder} maxLength={4000}
+                  type={['dob', 'license_issued', 'license_expires'].includes(field.key) ? 'date' : field.key === 'years_licensed' ? 'number' : 'text'}
+                  autoComplete={field.key === 'license_number' ? 'off' : undefined}
                   onChange={(event) => setForm((previous) => ({ ...previous, details: { ...previous.details, [field.key]: event.target.value } }))}
                   className="mt-1 w-full rounded border border-cui-border px-2 py-1.5 text-sm text-cui-text" />
               </label>
@@ -201,7 +210,7 @@ export default function RecordAssetsPanel({ target, composeToken = 0, refreshTok
           </div>
           <div className="flex gap-2">
             <button type="submit" disabled={saving} className="rounded bg-cui-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">{saving ? 'Saving...' : 'Save asset'}</button>
-            <button type="button" disabled={saving} onClick={closeForm} className="rounded border border-cui-border px-3 py-1.5 text-sm text-cui-muted">Cancel</button>
+            <button type="button" disabled={saving} onClick={() => { if (confirmDiscard()) closeForm(); }} className="rounded border border-cui-border px-3 py-1.5 text-sm text-cui-muted">Cancel</button>
           </div>
         </form>
       ) : null}

@@ -9,7 +9,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const db = getSupabaseServerClient();
-  if (!db) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     let filters: ReturnType<typeof workdayFilters>;
     try { filters = workdayFilters(request.nextUrl.searchParams); }
@@ -44,7 +44,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const db = getSupabaseServerClient();
-  if (!db) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     let payload: { id?: unknown; expected_updated_at?: unknown; assignee?: unknown; due_date?: unknown };
     try { payload = await request.json() as typeof payload; }

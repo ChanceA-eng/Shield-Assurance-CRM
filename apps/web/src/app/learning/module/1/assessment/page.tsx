@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import SectionLayout from '../../../../../components/crm/SectionLayout';
+import StaticAssessmentHistory from '../../../../../components/learning/StaticAssessmentHistory';
+import { useStaticAssessmentProgress } from '../../../../../lib/learning/static-assessment-progress';
 
 type Choice = 'A' | 'B' | 'C';
 
@@ -118,6 +120,7 @@ const questions: Question[] = [
 export default function ModuleOneAssessmentPage(): JSX.Element {
   const [answers, setAnswers] = useState<Partial<Record<number, Choice>>>({});
   const [submitted, setSubmitted] = useState(false);
+  const assessment = useStaticAssessmentProgress(1);
 
   const score = useMemo(() => {
     return questions.reduce((sum, question) => {
@@ -168,16 +171,22 @@ export default function ModuleOneAssessmentPage(): JSX.Element {
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={() => setSubmitted(true)}
+              onClick={() => {
+                setSubmitted(true);
+                void assessment.saveAttempt(percent, questions.length);
+              }}
+              disabled={assessment.saving || (submitted && !assessment.error)}
               className="rounded-lg bg-slate-950 px-8 py-4 text-lg font-semibold text-white shadow-sm transition-all hover:bg-slate-800"
             >
-              Submit Assessment
+              {assessment.error && submitted ? 'Retry saving result' : 'Submit Assessment'}
             </button>
             <a href="/learning/module/1/lesson/3" className="rounded-lg border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Back to Lesson 3</a>
             <a href="/learning/module/1" className="rounded-lg border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Back to Module Overview</a>
             <a href="/learning" className="rounded-lg border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Exit to Learning Center</a>
           </div>
         </div>
+
+        <StaticAssessmentHistory attempts={assessment.attempts} loading={assessment.loading} error={assessment.error} />
 
         {submitted ? (
           <section className="rounded-lg border border-slate-200 bg-slate-50 p-6">

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../lib/api-auth';
 
+import { friendlyErrorMessage } from '../../../../lib/workspace-api';
 /** Marks all inbound messages for a client as read (conversation was viewed). */
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const authError = await requireApiSession(request);
@@ -9,7 +10,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const body = (await request.json().catch(() => ({}))) as { client_id?: string; lead_id?: string };
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .eq('client_id', clientId)
       .eq('direction', 'inbound')
       .is('read_at', null);
-    if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+    if (error) return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
   if (leadId) {
     const { error } = await supabase
@@ -36,7 +37,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .eq('metadata->>lead_id', leadId)
       .eq('direction', 'inbound')
       .is('read_at', null);
-    if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+    if (error) return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });

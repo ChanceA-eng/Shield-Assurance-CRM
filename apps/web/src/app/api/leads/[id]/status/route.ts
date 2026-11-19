@@ -4,6 +4,7 @@ import { requireApiSession } from '../../../../../lib/api-auth';
 import { processLeadStatusChanged } from '../../../../../lib/automation';
 import { normalizeLeadStatus, LOST_REASONS } from '../../../../../lib/lead-pipeline';
 
+import { friendlyErrorMessage } from '../../../../../lib/workspace-api';
 interface RouteContext {
   params: Promise<{ id: string }>;
 }
@@ -32,7 +33,7 @@ export async function PATCH(
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json().catch(() => ({}))) as StatusPayload;
@@ -74,7 +75,7 @@ export async function PATCH(
     .single();
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   await processLeadStatusChanged({

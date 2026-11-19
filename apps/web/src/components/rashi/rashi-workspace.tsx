@@ -10,6 +10,7 @@ interface RashiDocument {
   title: string;
   sourceType: string;
   sourceUrl: string | null;
+  sourcePublishedAt: string | null;
   carrierName: string | null;
   stateContext: string | null;
   policyType: string | null;
@@ -28,6 +29,8 @@ interface QueryCitation {
   documentTitle: string;
   sourceUrl: string | null;
   sourceType: string;
+  libraryUpdatedAt: string;
+  sourcePublishedAt: string | null;
   insightIndex: number;
   score: number;
   carrierName: string | null;
@@ -58,6 +61,7 @@ interface UploadFormState {
   title: string;
   sourceType: 'PDF' | 'ARTICLE' | 'LINK' | 'VIDEO_TRANSCRIPT' | 'NOTE';
   sourceUrl: string;
+  sourcePublishedAt: string;
   rawText: string;
   carrierName: string;
   stateContext: string;
@@ -73,6 +77,10 @@ interface StatsResponse {
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
+}
+
+function formatSourceDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(value));
 }
 
 function slugify(value: string): string {
@@ -94,6 +102,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
     title: '',
     sourceType: 'PDF',
     sourceUrl: '',
+    sourcePublishedAt: '',
     rawText: '',
     carrierName: scope?.carrierName ?? '',
     stateContext: scope?.stateContext ?? '',
@@ -117,8 +126,8 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
 
     const response = await fetch(`/api/rashi/documents?${params.toString()}`, { cache: 'no-store' });
     if (!response.ok) {
-      const payload = (await response.json().catch(() => ({ message: 'Failed to load Rashi documents.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to load Rashi documents.');
+      const payload = (await response.json().catch(() => ({ message: 'Rashi documents could not be loaded. Refresh the page to try again.' }))) as { message?: string };
+      setError(payload.message ?? 'Rashi documents could not be loaded. Refresh the page to try again.');
       setLoading(false);
       return;
     }
@@ -236,6 +245,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
           const payload = new FormData();
           payload.append('title', form.title);
           payload.append('sourceType', form.sourceType);
+          if (form.sourcePublishedAt) payload.append('sourcePublishedAt', form.sourcePublishedAt);
           if (form.rawText.trim()) payload.append('rawText', form.rawText.trim());
           if (form.sourceUrl.trim()) payload.append('sourceUrl', form.sourceUrl.trim());
           payload.append('carrierName', form.carrierName);
@@ -256,6 +266,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
             title: form.title,
             sourceType: form.sourceType,
             ...(isUrlMode && form.sourceUrl.trim() ? { sourceUrl: form.sourceUrl.trim() } : {}),
+            ...(form.sourcePublishedAt ? { sourcePublishedAt: form.sourcePublishedAt } : {}),
             ...(isTextMode && form.rawText.trim() ? { rawText: form.rawText.trim() } : {}),
             carrierName: form.carrierName || undefined,
             stateContext: form.stateContext || undefined,
@@ -265,8 +276,8 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
         });
 
     if (!response.ok) {
-      const payload = (await response.json().catch(() => ({ message: 'Failed to create Rashi document.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to create Rashi document.');
+      const payload = (await response.json().catch(() => ({ message: 'Rashi document could not be created. Please try again.' }))) as { message?: string };
+      setError(payload.message ?? 'Rashi document could not be created. Please try again.');
       setSubmitting(false);
       return;
     }
@@ -275,6 +286,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
       ...current,
       title: '',
       sourceUrl: '',
+      sourcePublishedAt: '',
       rawText: '',
       topic: '',
     }));
@@ -285,10 +297,10 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
 
   return (
     <div className="space-y-6">
-      <section className="overflow-hidden rounded-2xl border border-[#c8ced3] bg-[radial-gradient(circle_at_top_left,_rgba(1,118,211,0.18),_transparent_38%),linear-gradient(135deg,_#ffffff,_#edf4fb)] p-6 shadow-sm">
+      <section className="overflow-hidden rounded-2xl border border-cui-border bg-[radial-gradient(circle_at_top_left,_rgba(1,118,211,0.18),_transparent_38%),linear-gradient(135deg,_#ffffff,_#edf4fb)] p-6 shadow-sm">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-3xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#167495]">Retrieval-Augmented Shield Intelligence</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cui-primary-strong">Retrieval-Augmented Shield Intelligence</p>
             <h2 className="mt-2 text-3xl font-bold tracking-tight text-[#081a30]">{title}</h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-[#334155]">{description}</p>
           </div>
@@ -306,20 +318,20 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
-        <div className="rounded-2xl border border-[#c8ced3] bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-cui-border bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row">
             <input
               type="text"
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
               placeholder="Ask Rashi anything about appetite, regulations, coverage, or exclusions..."
-              className="min-h-12 flex-1 rounded-xl border border-[#c8ced3] bg-[#f8f9fa] px-4 py-3 text-sm text-[#081a30] outline-none ring-0 transition focus:border-[#20a8d8]"
+              className="min-h-12 flex-1 rounded-xl border border-cui-border bg-cui-light px-4 py-3 text-sm text-[#081a30] outline-none ring-0 transition focus:border-cui-primary-strong"
             />
             <button
               type="button"
               onClick={() => void submitQuestion(question)}
               disabled={querying}
-              className="rounded-xl bg-[#20a8d8] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#1b8eb7] disabled:cursor-not-allowed disabled:bg-[#8eb9df]"
+              className="rounded-xl bg-cui-primary-strong px-5 py-3 text-sm font-semibold text-white transition hover:bg-cui-primary-hover disabled:cursor-not-allowed disabled:bg-[#8eb9df]"
             >
               {querying ? 'Consulting...' : 'Consult Rashi'}
             </button>
@@ -327,7 +339,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
 
           {answer ? (
             <div className="mt-5 rounded-2xl border border-[#d8e6f6] bg-[#f6fbff] p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#167495]">Response</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cui-primary-strong">Response</p>
               <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-6 text-[#223041]">{answer.answer}</pre>
               <div className="mt-4 space-y-3">
                 {answer.citations.map((citation) => (
@@ -337,18 +349,24 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
                   >
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-semibold text-[#081a30]">{citation.documentTitle}</p>
-                      <span className="text-xs font-semibold text-[#167495]">Score {citation.score.toFixed(2)}</span>
+                      <span className="text-xs font-semibold text-cui-primary-strong">Score {citation.score.toFixed(2)}</span>
                     </div>
-                    <p className="mt-2 text-xs uppercase tracking-[0.12em] text-[#73818f]">
+                    <p className="mt-2 text-xs uppercase tracking-[0.12em] text-cui-muted">
                       Key Point {citation.insightIndex + 1} · {citation.sourceType}
+                    </p>
+                    <p className="mt-1 text-xs text-cui-muted">
+                      {citation.sourcePublishedAt
+                        ? `Reported publication date ${formatSourceDate(citation.sourcePublishedAt)}`
+                        : 'Source publication date not recorded'}
+                      {' · '}Library record updated {formatDate(citation.libraryUpdatedAt)}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold">
                       {citation.sourceUrl ? (
-                        <a href={citation.sourceUrl} target="_blank" rel="noreferrer" className="text-[#167495] hover:underline">
+                        <a href={citation.sourceUrl} target="_blank" rel="noreferrer" className="text-cui-primary-strong hover:underline">
                           Open Source
                         </a>
                       ) : null}
-                      <Link href={`/rashi/document/${citation.documentId}` as Route} className="text-[#20a8d8] hover:underline">
+                      <Link href={`/rashi/document/${citation.documentId}` as Route} className="text-cui-primary-strong hover:underline">
                         Open Key Point
                       </Link>
                     </div>
@@ -363,7 +381,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
           )}
         </div>
 
-        <div className="rounded-2xl border border-[#c8ced3] bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-cui-border bg-white p-5 shadow-sm">
           <div className="flex flex-wrap gap-2">
             {(['PDF', 'ARTICLE', 'LINK', 'VIDEO_TRANSCRIPT', 'NOTE'] as UploadFormState['sourceType'][]).map((type) => (
               <button
@@ -374,7 +392,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
                   setUploadFile(null);
                 }}
                 className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                  form.sourceType === type ? 'bg-[#23282c] text-white' : 'bg-[#eef3f8] text-[#23282c] hover:bg-[#dbe8f4]'
+                  form.sourceType === type ? 'bg-cui-text text-white' : 'bg-[#eef3f8] text-cui-text hover:bg-[#dbe8f4]'
                 }`}
               >
                 {type === 'VIDEO_TRANSCRIPT' ? 'Video Link' : type}
@@ -389,18 +407,27 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
               placeholder="Document title"
               value={form.title}
               onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
-              className="w-full rounded-xl border border-[#c8ced3] px-3 py-2.5 text-sm"
+              className="w-full rounded-xl border border-cui-border px-3 py-2.5 text-sm"
             />
+            <label className="block text-xs font-semibold text-[#514f4d]">
+              Reported source publication date (optional)
+              <input
+                type="date"
+                value={form.sourcePublishedAt}
+                onChange={(event) => setForm((current) => ({ ...current, sourcePublishedAt: event.target.value }))}
+                className="mt-1 w-full rounded-xl border border-cui-border px-3 py-2.5 text-sm font-normal"
+              />
+            </label>
             {isPdfMode ? (
-              <div className="rounded-xl border border-dashed border-[#c8ced3] bg-[#f8f9fa] p-3">
-                <label className="block text-xs font-semibold uppercase tracking-[0.12em] text-[#73818f]">PDF Upload</label>
+              <div className="rounded-xl border border-dashed border-cui-border bg-cui-light p-3">
+                <label className="block text-xs font-semibold uppercase tracking-[0.12em] text-cui-muted">PDF Upload</label>
                 <input
                   type="file"
                   accept=".pdf,.txt"
                   onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
-                  className="mt-2 block w-full text-sm text-[#334155] file:mr-4 file:rounded-full file:border-0 file:bg-[#23282c] file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white"
+                  className="mt-2 block w-full text-sm text-[#334155] file:mr-4 file:rounded-full file:border-0 file:bg-cui-text file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white"
                 />
-                <p className="mt-2 text-xs leading-5 text-[#73818f]">
+                <p className="mt-2 text-xs leading-5 text-cui-muted">
                   Upload a PDF/TXT file. Optional: paste extracted text below to override file extraction.
                 </p>
               </div>
@@ -412,7 +439,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
                 placeholder={form.sourceType === 'VIDEO_TRANSCRIPT' ? 'Video URL or transcript link' : 'Article or source URL'}
                 value={form.sourceUrl}
                 onChange={(event) => setForm((current) => ({ ...current, sourceUrl: event.target.value }))}
-                className="w-full rounded-xl border border-[#c8ced3] px-3 py-2.5 text-sm"
+                className="w-full rounded-xl border border-cui-border px-3 py-2.5 text-sm"
               />
             ) : null}
 
@@ -428,7 +455,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
                 }
                 value={form.rawText}
                 onChange={(event) => setForm((current) => ({ ...current, rawText: event.target.value }))}
-                className="w-full rounded-xl border border-[#c8ced3] px-3 py-2.5 text-sm"
+                className="w-full rounded-xl border border-cui-border px-3 py-2.5 text-sm"
               />
             ) : null}
             <div className="grid gap-3 md:grid-cols-3">
@@ -437,21 +464,21 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
                 placeholder="Carrier"
                 value={form.carrierName}
                 onChange={(event) => setForm((current) => ({ ...current, carrierName: event.target.value }))}
-                className="rounded-xl border border-[#c8ced3] px-3 py-2.5 text-sm"
+                className="rounded-xl border border-cui-border px-3 py-2.5 text-sm"
               />
               <input
                 type="text"
                 placeholder="State"
                 value={form.stateContext}
                 onChange={(event) => setForm((current) => ({ ...current, stateContext: event.target.value.toUpperCase() }))}
-                className="rounded-xl border border-[#c8ced3] px-3 py-2.5 text-sm"
+                className="rounded-xl border border-cui-border px-3 py-2.5 text-sm"
               />
               <input
                 type="text"
                 placeholder="Policy Type"
                 value={form.policyType}
                 onChange={(event) => setForm((current) => ({ ...current, policyType: event.target.value.toUpperCase() }))}
-                className="rounded-xl border border-[#c8ced3] px-3 py-2.5 text-sm"
+                className="rounded-xl border border-cui-border px-3 py-2.5 text-sm"
               />
             </div>
             <input
@@ -459,12 +486,12 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
               placeholder="Topic"
               value={form.topic}
               onChange={(event) => setForm((current) => ({ ...current, topic: event.target.value }))}
-              className="w-full rounded-xl border border-[#c8ced3] px-3 py-2.5 text-sm"
+              className="w-full rounded-xl border border-cui-border px-3 py-2.5 text-sm"
             />
             <button
               type="submit"
               disabled={submitting}
-              className="w-full rounded-xl bg-[#23282c] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#13335c] disabled:cursor-not-allowed disabled:bg-[#56708b]"
+              className="w-full rounded-xl bg-cui-text px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#13335c] disabled:cursor-not-allowed disabled:bg-[#56708b]"
             >
               {submitting ? 'Queueing Ingest...' : 'Add to Rashi'}
             </button>
@@ -474,17 +501,17 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
 
       {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
 
-      <section className="rounded-2xl border border-[#c8ced3] bg-white p-5 shadow-sm">
+      <section className="rounded-2xl border border-cui-border bg-white p-5 shadow-sm">
         <h3 className="mb-4 text-lg font-semibold text-[#081a30]">Knowledge Categories</h3>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <div className="rounded-xl border border-[#e2e8f0] bg-[#f8f9fa] p-4">
-            <p className="text-xs uppercase tracking-[0.16em] text-[#73818f]">Carriers</p>
+          <div className="rounded-xl border border-[#e2e8f0] bg-cui-light p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-cui-muted">Carriers</p>
             {tags.carriers.length > 0 ? (
               <ul className="mt-2 space-y-1">
                 {tags.carriers.map((carrier) => (
                   <li key={carrier}>
-                    <Link href={`/rashi/carrier/${slugify(carrier)}` as Route} className="text-sm text-[#167495] hover:underline">
+                    <Link href={`/rashi/carrier/${slugify(carrier)}` as Route} className="text-sm text-cui-primary-strong hover:underline">
                       {carrier}
                     </Link>
                   </li>
@@ -495,13 +522,13 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
             )}
           </div>
 
-          <div className="rounded-xl border border-[#e2e8f0] bg-[#f8f9fa] p-4">
-            <p className="text-xs uppercase tracking-[0.16em] text-[#73818f]">States</p>
+          <div className="rounded-xl border border-[#e2e8f0] bg-cui-light p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-cui-muted">States</p>
             {tags.states.length > 0 ? (
               <ul className="mt-2 space-y-1">
                 {tags.states.map((state) => (
                   <li key={state}>
-                    <Link href={`/rashi/state/${slugify(state)}` as Route} className="text-sm text-[#167495] hover:underline">
+                    <Link href={`/rashi/state/${slugify(state)}` as Route} className="text-sm text-cui-primary-strong hover:underline">
                       {state}
                     </Link>
                   </li>
@@ -512,13 +539,13 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
             )}
           </div>
 
-          <div className="rounded-xl border border-[#e2e8f0] bg-[#f8f9fa] p-4">
-            <p className="text-xs uppercase tracking-[0.16em] text-[#73818f]">Policy Types</p>
+          <div className="rounded-xl border border-[#e2e8f0] bg-cui-light p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-cui-muted">Policy Types</p>
             {tags.policies.length > 0 ? (
               <ul className="mt-2 space-y-1">
                 {tags.policies.map((policy) => (
                   <li key={policy}>
-                    <Link href={`/rashi/policy/${slugify(policy)}` as Route} className="text-sm text-[#167495] hover:underline">
+                    <Link href={`/rashi/policy/${slugify(policy)}` as Route} className="text-sm text-cui-primary-strong hover:underline">
                       {policy}
                     </Link>
                   </li>
@@ -529,15 +556,15 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
             )}
           </div>
 
-          <div className="rounded-xl border border-[#e2e8f0] bg-[#f8f9fa] p-4">
-            <p className="text-xs uppercase tracking-[0.16em] text-[#73818f]">Topics</p>
+          <div className="rounded-xl border border-[#e2e8f0] bg-cui-light p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-cui-muted">Topics</p>
             {tags.topics.length > 0 ? (
               <ul className="mt-2 space-y-1">
                 <li>
                   <button
                     type="button"
                     onClick={() => setSelectedTopic('')}
-                    className={`text-left text-sm hover:underline ${selectedTopic === '' ? 'font-semibold text-[#20a8d8]' : 'text-[#167495]'}`}
+                    className={`text-left text-sm hover:underline ${selectedTopic === '' ? 'font-semibold text-cui-primary-strong' : 'text-cui-primary-strong'}`}
                   >
                     All Topics
                   </button>
@@ -547,7 +574,7 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
                     <button
                       type="button"
                       onClick={() => setSelectedTopic(topic)}
-                      className={`text-left text-sm hover:underline ${selectedTopic === topic ? 'font-semibold text-[#20a8d8]' : 'text-[#167495]'}`}
+                      className={`text-left text-sm hover:underline ${selectedTopic === topic ? 'font-semibold text-cui-primary-strong' : 'text-cui-primary-strong'}`}
                     >
                       {topic}
                     </button>
@@ -563,15 +590,15 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
 
       <RashiSheetWorkspace />
 
-      <section className="rounded-2xl border border-[#c8ced3] bg-white p-5 shadow-sm">
+      <section className="rounded-2xl border border-cui-border bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-lg font-semibold text-[#081a30]">Recent Uploads</p>
-            <p className="text-sm text-[#73818f]">Latest knowledge assets indexed for underwriting answers.</p>
+            <p className="text-sm text-cui-muted">Latest knowledge assets indexed for underwriting answers.</p>
           </div>
         </div>
 
-        {loading ? <p className="mt-4 text-sm text-[#73818f]">Loading knowledge documents...</p> : null}
+        {loading ? <p className="mt-4 text-sm text-cui-muted">Loading knowledge documents...</p> : null}
 
         {!loading && documents.length === 0 ? (
           <div className="mt-4 rounded-2xl border border-dashed border-[#cbd5e1] bg-[#f8fafc] p-4 text-sm text-[#475569]">
@@ -585,28 +612,28 @@ export default function RashiWorkspace({ title, description, scope }: RashiWorks
               <Link
                 key={document.id}
                 href={`/rashi/document/${document.id}` as Route}
-                className="rounded-2xl border border-[#e2e8f0] bg-[#ffffff] p-4 transition hover:border-[#20a8d8]"
+                className="rounded-2xl border border-[#e2e8f0] bg-cui-panel p-4 transition hover:border-cui-primary-strong"
               >
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="text-sm font-semibold text-[#081a30]">{document.title}</p>
-                    <p className="mt-1 text-xs uppercase tracking-[0.12em] text-[#73818f]">{document.sourceType} · {document.status}</p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.12em] text-cui-muted">{document.sourceType} · {document.status}</p>
                   </div>
-                  <div className="rounded-full bg-[#eef3f8] px-3 py-1 text-xs font-semibold text-[#23282c]">
+                  <div className="rounded-full bg-[#eef3f8] px-3 py-1 text-xs font-semibold text-cui-text">
                     {document._count?.insights ?? 0} key points
                   </div>
                 </div>
                 <p className="mt-3 text-sm leading-6 text-[#475569]">{document.summary ?? 'Queued for processing.'}</p>
-                <p className="mt-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#73818f]">
+                <p className="mt-2 text-xs font-semibold uppercase tracking-[0.12em] text-cui-muted">
                   Source: {document.sourceType}{document.sourceUrl ? ' · Linked Source Available' : ''}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                  {document.carrierName ? <span className="rounded-full bg-[#e8f1fb] px-2.5 py-1 font-semibold text-[#167495]">{document.carrierName}</span> : null}
+                  {document.carrierName ? <span className="rounded-full bg-[#e8f1fb] px-2.5 py-1 font-semibold text-cui-primary-strong">{document.carrierName}</span> : null}
                   {document.stateContext ? <span className="rounded-full bg-[#eef2ff] px-2.5 py-1 font-semibold text-[#3730a3]">{document.stateContext}</span> : null}
                   {document.policyType ? <span className="rounded-full bg-[#ecfccb] px-2.5 py-1 font-semibold text-[#3f6212]">{document.policyType}</span> : null}
                   {document.topic ? <span className="rounded-full bg-[#f1f5f9] px-2.5 py-1 font-semibold text-[#475569]">{document.topic}</span> : null}
                 </div>
-                <p className="mt-3 text-xs text-[#73818f]">Updated {formatDate(document.updatedAt)}</p>
+                <p className="mt-3 text-xs text-cui-muted">Updated {formatDate(document.updatedAt)}</p>
               </Link>
             ))}
           </div>

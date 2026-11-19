@@ -10,6 +10,7 @@ interface KnowledgeAssetResponse {
   type: string;
   category: string;
   url: string | null;
+  sourcePublishedAt: string | null;
   indexed: boolean;
   internal: boolean;
   updatedAt: string;
@@ -55,6 +56,7 @@ export async function GET(): Promise<NextResponse> {
       type: mapType(document.sourceType),
       category: mapCategory(document),
       url: document.sourceUrl,
+      sourcePublishedAt: document.sourcePublishedAt?.toISOString() ?? null,
       indexed: document.status === 'READY',
       internal: true,
       updatedAt: document.updatedAt.toISOString(),

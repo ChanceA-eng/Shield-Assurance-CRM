@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { OUTREACH_TEMPLATES, isOutreachTemplate, type MarketingProfile, type RecordTarget } from '@crm/shared';
 import { workspaceFetch } from '../../lib/workspace-fetch';
+import AgentAssignment from './AgentAssignment';
+import Link from 'next/link';
 
 const fields = [
   ['interests', 'Stated insurance interests'],
@@ -40,9 +42,11 @@ export default function MarketingProfilePanel({ target }: { target: RecordTarget
 
   return <details className="rounded border border-cui-border bg-white p-3">
     <summary className="cursor-pointer text-sm font-bold text-cui-text">Marketing profile &amp; email purpose</summary>
-    <p className="mt-2 text-xs text-cui-muted">Record stated insurance needs, not inferred personal interests. Source and confirmation date are required for stated needs. Preferences do not grant permission to send. Linked leads use the account profile when available.</p>
     {error ? <p role="alert" className="mt-2 text-sm text-cui-danger">{error}</p> : null}
     {notice ? <p role="status" className="mt-2 text-sm text-green-700">{notice}</p> : null}
+    <AgentAssignment target={target} />
+    <Link href={target.type === 'client' ? `/clients/${target.id}?tab=communication` : `/leads?lead=${target.id}&tab=conversation`}
+      className="mt-2 inline-block text-xs font-semibold text-cui-primary underline">Open conversation</Link>
     {profile ? <form onSubmit={(event) => { event.preventDefault(); void save(); }} className="mt-3 grid gap-3 sm:grid-cols-2">
       {fields.map(([key, label]) => <label key={key} className="text-xs font-semibold text-cui-muted">{label}
         <textarea maxLength={1000} rows={2} value={profile[key]} onChange={(event) => setProfile({ ...profile, [key]: event.target.value })}

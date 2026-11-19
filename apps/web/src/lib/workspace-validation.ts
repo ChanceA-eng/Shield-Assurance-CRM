@@ -1,4 +1,6 @@
 import { ASSET_FIELDS, isAssetKind, isAssetSource, type AssetDetails, type AssetKind, type AssetSource } from '@crm/shared';
+import { intakeDate, validateAddressHistory, validateLicenseDetails } from './applicant-details';
+import { WorkspaceError } from './record-scope';
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -62,6 +64,18 @@ export function validateAsset(value: unknown): ValidatedAsset | string {
   if (details.vin) details.vin = details.vin.toUpperCase();
   if (details.mileage && (!/^\d+$/.test(details.mileage.replace(/,/g, '')) || Number(details.mileage.replace(/,/g, '')) < 0)) {
     return 'Annual mileage must be a non-negative whole number.';
+  }
+  if (value.asset_type === 'driver') {
+    try {
+      const license = validateLicenseDetails(details);
+      validateAddressHistory(details);
+      const dob = intakeDate(details.dob, 'Driver date of birth', true);
+      if (dob && license.license_issued && license.license_issued < dob) return 'License issue date must not precede the driver birth date.';
+      Object.assign(details, Object.fromEntries(Object.entries({ ...license, dob }).filter(([, value]) => value)));
+    } catch (error) {
+      if (error instanceof WorkspaceError && error.status === 400) return error.message;
+      throw error;
+    }
   }
   return { title: value.title.trim(), asset_type: value.asset_type, details, source: value.source, source_reference: sourceReference || null };
 }

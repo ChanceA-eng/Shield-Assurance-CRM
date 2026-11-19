@@ -14,12 +14,15 @@ import {
   LayoutGrid,
   Network,
   Settings,
+  User,
   UserPlus,
   Users,
 } from 'lucide-react';
 import { navigationCategories, activeNavigationHref, type NavCategory } from '../../config/navigation';
 import { useNav } from '../../context/NavContext';
 import { useNotifications } from '../../context/NotificationContext';
+import { useStaffRecords, useStaffWorkspace } from '../../context/StaffWorkspaceContext';
+import { staffRecords } from '../../lib/staff-records';
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   LayoutGrid,
@@ -57,6 +60,8 @@ function SidebarNavigation(): JSX.Element {
   const search = useSearchParams().toString();
   const activeHref = activeNavigationHref(pathname, search);
   const { isNavOpen, closeNav } = useNav();
+  const workspace = useStaffWorkspace();
+  const records = useStaffRecords();
   const { dueTodayCount, unreadMessages } = useNotifications();
   const messageCount = unreadMessages.total;
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
@@ -93,11 +98,31 @@ function SidebarNavigation(): JSX.Element {
     });
   };
 
-  const sidebarBody = (
+  const sidebarBody = workspace !== 'full' ? (
+    <nav aria-label="Main navigation" className="flex-1 overflow-y-auto py-2">
+      {records.map((kind) => {
+        const { href, label } = staffRecords[kind];
+        const Icon = kind === 'policies' ? FileStack : Users;
+        return <a key={kind} href={href} aria-current={pathname === href ? 'page' : undefined}
+          onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
+          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />{label}
+        </a>;
+      })}
+      {workspace !== 'account' ? <a href="/communication/social" aria-current={pathname === '/communication/social' ? 'page' : undefined}
+        onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
+        <Network className="h-4 w-4 shrink-0" aria-hidden="true" />Social Marketing
+      </a> : null}
+      <a href="/account" aria-current={pathname === '/account' ? 'page' : undefined}
+        onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
+        <User className="h-4 w-4 shrink-0" aria-hidden="true" />My Account
+      </a>
+    </nav>
+  ) : (
     <nav aria-label="Main navigation" className="flex-1 overflow-y-auto py-2">
       <Link
         href="/"
         aria-current={pathname === '/' ? 'page' : undefined}
+        onClick={closeMobileNav}
         className={`flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
           pathname === '/'
             ? 'border-l-4 border-cui-primary bg-cui-sidebar-item pl-3 font-semibold text-white'

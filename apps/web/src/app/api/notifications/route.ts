@@ -2,18 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { requireApiSession } from '../../../lib/api-auth';
 
+import { friendlyErrorMessage } from '../../../lib/workspace-api';
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const authError = await requireApiSession(request);
   if (authError) return authError;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
   const dispatched = await supabase.rpc('dispatch_due_reminders');
-  if (dispatched.error) return NextResponse.json({ message: dispatched.error.message }, { status: 500 });
+  if (dispatched.error) return NextResponse.json({ message: friendlyErrorMessage(dispatched.error) }, { status: 500 });
   if (request.nextUrl.searchParams.get('count') === 'true') {
     const { count, error } = await supabase.from('notifications').select('id', { count: 'exact', head: true }).eq('read', false);
-    if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+    if (error) return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
     return NextResponse.json({ count: count ?? 0 });
   }
 
@@ -26,7 +27,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const { data, error } = await query;
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data ?? [], { status: 200 });
@@ -37,7 +38,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   if (authError) return authError;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json().catch(() => ({}))) as { ids?: string[]; all?: boolean };
@@ -52,7 +53,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 
   const { error } = await query;
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (authError) return authError;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json()) as { client_id?: string; type?: string; message?: string };
@@ -85,7 +86,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     .single();
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data, { status: 201 });

@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { draftOutreach } from '../../../../lib/outreach-ai';
 import { recordOutreachContext } from '../../../../lib/lead-outreach-context';
-import { workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
+import { workspaceApiError, workspaceBody, friendlyErrorMessage } from '../../../../lib/workspace-api';
 import { getApiSession, apiActorName } from '../../../../lib/api-auth';
 import { isUuid } from '../../../../lib/workspace-validation';
 import { isOutreachTemplate } from '@crm/shared';
+import { loadCurrentDossierDraftFacts, type DossierDraftFact } from '../../../../lib/dossier';
 
 function normalize(value?: string | null): string {
   return (value ?? '').trim();
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const clientId = request.nextUrl.searchParams.get('clientId')?.trim();
@@ -37,7 +38,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   let contextData: Awaited<ReturnType<typeof recordOutreachContext>>;
   try {
     payload = await workspaceBody(request);
-    contextData = await recordOutreachContext(supabase, { type: 'client', id: clientId });
+    if (payload.include_dossier !== undefined && typeof payload.include_dossier !== 'boolean') {
+      return NextResponse.json({ message: 'Choose whether to include confirmed dossier findings.' }, { status: 400 });
+    }
+    contextData = await recordOutreachContext(supabase, { type: 'client', id: clientId }, session.user.id);
   } catch (failure) {
     return workspaceApiError(failure, 'account-draft/context');
   }
@@ -46,24 +50,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'prompt is required.' }, { status: 400 });
   }
 
-  const [clientRes, commsRes, policiesRes] = await Promise.all([
-    supabase.from('clients').select('full_name').eq('id', clientId).maybeSingle(),
-    supabase
-      .from('communication_log')
-      .select('direction,subject,body,sent_at')
-      .eq('client_id', clientId)
-      .order('sent_at', { ascending: false })
-      .limit(8),
+  const [clientRes, policiesRes] = await Promise.all([
+    supabase.from('clients').select('full_name,preferred_channel').eq('id', clientId).maybeSingle(),
     supabase.from('policies').select('carrier,line_of_business,effective_date,expiration_date,renewal_date,status').eq('client_id', clientId).limit(50),
   ]);
 
-  if (clientRes.error) return NextResponse.json({ message: clientRes.error.message }, { status: 500 });
-  if (commsRes.error) return NextResponse.json({ message: commsRes.error.message }, { status: 500 });
-  if (policiesRes.error) return NextResponse.json({ message: policiesRes.error.message }, { status: 500 });
+  if (clientRes.error) return NextResponse.json({ message: friendlyErrorMessage(clientRes.error) }, { status: 500 });
+  if (policiesRes.error) return NextResponse.json({ message: friendlyErrorMessage(policiesRes.error) }, { status: 500 });
   if (!clientRes.data) return NextResponse.json({ message: 'Client not found.' }, { status: 404 });
 
   const clientName = normalize(clientRes.data?.full_name) || 'Client';
-  const recentContext = summarizeRecentContext(commsRes.data ?? []);
+  const recentContext = summarizeRecentContext(contextData.recent_conversation);
 
   const policyHint = (() => {
     const active = (policiesRes.data ?? []).find((row) => normalize(row.status).toLowerCase() === 'active');
@@ -77,6 +74,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const channel = payload.channel ?? 'email';
   if (channel !== 'email' && channel !== 'sms') return NextResponse.json({ message: 'Choose email or SMS.' }, { status: 400 });
   if (payload.template !== undefined && !isOutreachTemplate(payload.template)) return NextResponse.json({ message: 'Choose a valid email template.' }, { status: 400 });
+  let confirmedDossierFacts: DossierDraftFact[] = [];
+  try {
+    confirmedDossierFacts = payload.include_dossier === true
+      ? await loadCurrentDossierDraftFacts(supabase, session.user.id, { type: 'client', id: clientId })
+      : [];
+  } catch (failure) {
+    return workspaceApiError(failure, 'account-draft/dossier');
+  }
 
   // Real AI drafting grounded on the client's policies and conversation history.
   try {
@@ -84,6 +89,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     {
       full_name: clientName,
       ...contextData,
+      confirmed_dossier_facts: confirmedDossierFacts,
       channel,
       line_of_business: (policiesRes.data ?? []).find((row) => normalize(row.status).toLowerCase() === 'active')?.line_of_business ?? null,
       form_payload: {
@@ -92,7 +98,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           extras: {
             'Account context': policyHint || 'Active policy details have not been confirmed.',
             'Policy records': JSON.stringify(policiesRes.data ?? []),
-            'Conversation history': (commsRes.data ?? []).map((row) => `${row.sent_at} ${row.direction}: ${row.subject ?? ''}\n${row.body ?? ''}`).join('\n\n') || recentContext,
+            'Account contact preference (not consent)': normalize(clientRes.data.preferred_channel) || 'Not recorded',
             'Channel': channel,
           },
         },
@@ -116,9 +122,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       occurred_at: new Date().toISOString(),
     },
   ]);
-  if (activity.error) return NextResponse.json({ message: activity.error.message }, { status: 500 });
+  if (activity.error) return NextResponse.json({ message: friendlyErrorMessage(activity.error) }, { status: 500 });
 
-  return NextResponse.json({ ok: true, subject, text, cited_signals: aiDraft.cited_signals }, { status: 200 });
+  return NextResponse.json({
+    ok: true,
+    subject,
+    text,
+    cited_signals: aiDraft.cited_signals,
+    dossier_requested: payload.include_dossier === true,
+    dossier_facts_included: confirmedDossierFacts.map((fact) => fact.label),
+  }, { status: 200 });
   } catch (failure) {
     return workspaceApiError(failure, 'account-draft/generation');
   }

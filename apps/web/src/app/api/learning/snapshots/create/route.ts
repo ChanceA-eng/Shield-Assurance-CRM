@@ -73,7 +73,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ snapshot }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to create snapshot.' },
+      { message: error instanceof Error ? error.message : 'Snapshot could not be created. Please try again.' },
       { status: 500 },
     );
   }

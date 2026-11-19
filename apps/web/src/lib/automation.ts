@@ -3,6 +3,7 @@ import { sendOutboundEmail } from './email-adapter';
 import { resolveOutboundEmailRecipient } from './message-delivery';
 import { appendAgencySignature } from './agency-signature';
 import { LEAD_STATUS_LABELS, type LeadStatus } from './lead-pipeline';
+import { getAutomationSettings } from './automation-settings';
 
 export type AutomationChannel = 'email' | 'sms' | 'in_app';
 export type AutomationType = 'renewal' | 'claim' | 'endorsement' | 'lead' | 'new_lead' | 'appointment' | 'certificate' | 'outreach' | 'message';
@@ -154,7 +155,11 @@ export async function schedulePolicyRenewalLifecycle(input: {
   premium: number;
   renewalDate: string;
 }): Promise<void> {
-  const renewalTaskDate = daysBeforeISO(input.renewalDate, 45);
+  const db = getSupabaseServerClient();
+  if (!db) throw new Error('Supabase is not configured for renewal automation.');
+  const policy = (await getAutomationSettings(db)).configuration.automation.renewal;
+  if (!policy.enabled) return;
+  const renewalTaskDate = daysBeforeISO(input.renewalDate, policy.window_days);
 
   await queueInternalAction({
     clientId: input.clientId,
@@ -202,6 +207,10 @@ export async function schedulePolicyRenewalLifecycle(input: {
 
 async function sendEmailIfAllowed(client: ClientPreferences | null, subject: string, body: string, automationType: AutomationType): Promise<void> {
   if (!client?.email || !client.email_consent) return;
+  const settingsDb = getSupabaseServerClient();
+  if (!settingsDb) throw new Error('Supabase is not configured for service automation.');
+  if (['claim', 'endorsement', 'certificate'].includes(automationType)
+    && !(await getAutomationSettings(settingsDb)).configuration.automation.service.acknowledgment_email_enabled) return;
 
   const signedBody = appendAgencySignature(body, 'system');
 
@@ -210,7 +219,7 @@ async function sendEmailIfAllowed(client: ClientPreferences | null, subject: str
     if (!db) throw new Error('Supabase is not configured for consent checks.');
     const target = await resolveOutboundEmailRecipient(db, { clientId: client.id });
     if (!target.ok) throw new Error(target.message);
-    await sendOutboundEmail({ to: target.recipient.to, subject, body: signedBody });
+    await sendOutboundEmail({ to: target.recipient.to, subject, body: signedBody, clientId: client.id });
     await writeCommunicationLog({
       client_id: client.id,
       channel: 'email',
@@ -282,23 +291,25 @@ export async function processEndorsementCreated(input: {
   await sendEmailIfAllowed(client, 'Endorsement received', body, 'endorsement');
 }
 
-export async function processCertificateCreated(input: {
-  certificateId: string;
+export async function processCertificateRequested(input: {
   clientId: string;
   insuredName?: string | null;
   certificateHolder?: string | null;
+  actorName?: string;
 }): Promise<void> {
-  const client = await getClientPreferences(input.clientId);
-  const body = `Your certificate for ${input.insuredName ?? 'policy'} has been issued.`;
-
-  await writeNotification({ client_id: input.clientId, type: 'certificate', message: body });
-  await sendEmailIfAllowed(client, 'Certificate issued', body, 'certificate');
+  const body = `${input.actorName ?? 'An agent'} requested a certificate for ${input.insuredName ?? 'the policy'}. It is awaiting review; no certificate has been issued or sent.`;
+  await writeNotification({
+    client_id: input.clientId,
+    type: 'certificate',
+    href: `/clients/${input.clientId}?tab=policies`,
+    message: body,
+  });
   if (input.certificateHolder) {
     await writeNotification({
       client_id: input.clientId,
       type: 'certificate',
       href: `/clients/${input.clientId}?tab=policies`,
-      message: `Certificate holder delivery is pending: ${input.certificateHolder}. No certificate was automatically sent to the holder.`,
+      message: `Certificate requested for holder ${input.certificateHolder}. Delivery has not been reported.`,
     });
   }
 }
@@ -327,7 +338,7 @@ export async function createDashboardAutomationAlerts(): Promise<void> {
     supabase.from('endorsements').select('id').eq('status', 'open').limit(20),
     supabase.from('tasks').select('id').eq('status', 'open').lt('due_date', todayISO()).limit(20),
     supabase.from('events').select('id').eq('event_date', todayISO()).limit(20),
-    supabase.from('leads').select('id').in('status', ['new', 'contacted']).limit(20),
+    supabase.from('leads').select('id').is('archived_at', null).in('status', ['new', 'contacted']).limit(20),
   ]);
 
   await safeInsert('notifications', [

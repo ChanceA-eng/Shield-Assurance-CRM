@@ -1,21 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { sendEmail } from '../../../../lib/messaging';
+import { sendOutboundEmail } from '../../../../lib/email-adapter';
+import { getApiSession } from '../../../../lib/api-auth';
+import { activeAgencyMember, agencyEnabled } from '../../../../lib/agency-membership';
+import { getSupabaseServerClient } from '../../../../lib/supabase-server';
+import { workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
+import { WorkspaceError } from '../../../../lib/record-scope';
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const payload = (await request.json()) as { to?: string; subject?: string; body?: string };
-
-  if (!payload.to) {
-    return NextResponse.json({ message: 'to is required.' }, { status: 400 });
-  }
-
-  const subject = payload.subject?.trim() || 'Shield CRM test email';
-  const body = payload.body?.trim() || 'This is a test email from Shield CRM automation.';
-
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
   try {
-    await sendEmail({ to: payload.to, subject, body });
-    return NextResponse.json({ ok: true, to: payload.to, subject }, { status: 200 });
+    const payload = await workspaceBody(request);
+    if (agencyEnabled()) {
+      const db = getSupabaseServerClient();
+      if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
+      if ((await activeAgencyMember(db, session.user.id)).role === 'agent') throw new WorkspaceError('Only administrators can test agency email setup.', 403);
+    }
+    const to = session.user.email?.toLowerCase();
+    if (!to || (payload.to !== undefined && payload.to !== to)) throw new WorkspaceError('Setup tests can only be sent to your signed-in email address.', 400);
+    const subject = 'Shield CRM test email';
+    const body = 'This is a test email from Shield CRM automation.';
+    await sendOutboundEmail({ to, subject, body, requestId: typeof payload.request_id === 'string' ? payload.request_id : undefined });
+    return NextResponse.json({ ok: true, to, subject, delivery: 'accepted_by_provider', provider: 'resend' }, { status: 200 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown email test failure';
-    return NextResponse.json({ ok: false, message }, { status: 500 });
+    return workspaceApiError(error, 'email/setup-test');
   }
 }

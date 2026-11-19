@@ -7,10 +7,20 @@ import SectionLayout from '../../components/crm/SectionLayout';
 import NewLeadModal from './NewLeadModal';
 import PipelineBoard from './PipelineBoard';
 import LeadWorkspace from './LeadWorkspace';
+import IntakeRequestDialog from '../../components/crm/IntakeRequestDialog';
 import { LEAD_STATUS_LABELS, type LeadStatus, type LostReason } from '../../lib/lead-pipeline';
 import TaskSnooze from '../../components/crm/TaskSnooze';
-import { arizonaInputToIso, endOfArizonaDay, formatArizonaDateTime } from '../../lib/arizona-time';
+import { agencyInputToIso, endOfAgencyDay, DEFAULT_AGENCY_TIME_ZONE, formatAgencyDateTime } from '../../lib/agency-time';
 import { workspaceFetch, workspacePages } from '../../lib/workspace-fetch';
+import { useNotifications } from '../../context/NotificationContext';
+import { useAgencyTimeZone } from '../../hooks/useAgencyTimeZone';
+import { taskRecordHref } from '../../lib/task-links';
+import { useWorkspaceNavigation } from '../../context/WorkspaceNavigationContext';
+import dynamic from 'next/dynamic';
+import { useStaffWorkspace } from '../../context/StaffWorkspaceContext';
+import StaffRecordList from '../../components/crm/StaffRecordList';
+
+const OpportunityQueue = dynamic(() => import('../../components/crm/OpportunityQueue'));
 
 interface Lead {
   id: string;
@@ -34,7 +44,15 @@ interface Lead {
   form_payload?: Record<string, unknown> | null;
   last_viewed_at?: string | null;
   last_activity_at?: string | null;
+  archived_at?: string | null;
+  archive_reason?: string | null;
 }
+
+type OutcomeFilter = 'active' | 'won' | 'lost' | 'inactive' | 'archived';
+
+const ARCHIVE_EXPLANATION =
+  'Archived leads are hidden from your lists, counts and dashboards. Their open tasks are closed, reminders are cleared, ' +
+  'email sequences are paused and unsent drafts are cancelled. Notes, history and policies are kept, and you can restore them any time from Archived.';
 
 interface NewLeadForm {
   full_name: string;
@@ -50,12 +68,12 @@ type PipelineFilter = 'all' | 'prospects' | 'leads';
 type ListSortKey = 'name' | 'status' | 'premium' | 'followup' | 'created';
 
 const STATUS_PILL_TONES: Record<string, string> = {
-  new: 'bg-[#63c2de]/20 text-[#167495]',
-  contacted: 'bg-[#20a8d8]/15 text-[#167495]',
-  quoted: 'bg-[#ffc107]/25 text-amber-800',
-  won: 'bg-[#4dbd74]/20 text-green-700',
-  lost: 'bg-[#f86c6b]/15 text-[#f86c6b]',
-  inactive: 'bg-[#f0f3f5] text-[#73818f]',
+  new: 'bg-cui-info/20 text-cui-primary-strong',
+  contacted: 'bg-cui-primary-strong/15 text-cui-primary-strong',
+  quoted: 'bg-cui-warning/25 text-amber-800',
+  won: 'bg-cui-success/20 text-green-700',
+  lost: 'bg-cui-danger/15 text-cui-danger',
+  inactive: 'bg-cui-light text-cui-muted',
 };
 
 function premiumOf(lead: { estimated_premium?: number | string | null }): number {
@@ -83,10 +101,12 @@ interface LeadTaskRow {
   due_date: string | null;
   status: string;
   related_id: string | null;
+  action_href?: string | null;
   updated_at?: string;
 }
 
 export default function LeadsPage(): JSX.Element {
+  if (useStaffWorkspace() !== 'full') return <StaffRecordList kind="leads" />;
   // useSearchParams requires a Suspense boundary in the app router.
   return (
     <Suspense fallback={null}>
@@ -96,17 +116,23 @@ export default function LeadsPage(): JSX.Element {
 }
 
 function LeadsPageInner(): JSX.Element {
+  const { navigate } = useWorkspaceNavigation();
   const searchParams = useSearchParams();
+  const agency = useAgencyTimeZone();
+  const timeZone = agency.timeZone ?? DEFAULT_AGENCY_TIME_ZONE;
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showNewLead, setShowNewLead] = useState(false);
+  const [showIntake, setShowIntake] = useState(searchParams.get('intake') === '1');
+  useEffect(() => { if (searchParams.get('intake') === '1') setShowIntake(true); }, [searchParams]);
   const [isCreating, setIsCreating] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [pipelineFilter, setPipelineFilter] = useState<PipelineFilter>('all');
   const [viewMode, setViewMode] = useState<'queue' | 'board' | 'list'>('board');
-  const [outcomeFilter, setOutcomeFilter] = useState<'active' | 'won' | 'lost' | 'inactive'>('active');
-  const outcomeRef = React.useRef<'active' | 'won' | 'lost' | 'inactive'>('active');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>('active');
+  const outcomeRef = React.useRef<OutcomeFilter>('active');
   outcomeRef.current = outcomeFilter;
   const [stats, setStats] = useState<{ active: number; won: number; lost: number; inactive: number }>({ active: 0, won: 0, lost: 0, inactive: 0 });
   const [listSearch, setListSearch] = useState('');
@@ -115,10 +141,22 @@ function LeadsPageInner(): JSX.Element {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkFollowUpAt, setBulkFollowUpAt] = useState('');
   const [leadTasks, setLeadTasks] = useState<LeadTaskRow[]>([]);
-  const [unreadByLead, setUnreadByLead] = useState<Record<string, number>>({});
+  const { unreadMessages } = useNotifications();
+  const unreadByLead = unreadMessages.byLead;
+  useEffect(() => {
+    if (agency.error) setError(agency.error);
+  }, [agency.error]);
+  const loadingLeadWork = React.useRef(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [pendingLeadId, setPendingLeadId] = useState<string | null>(null);
+  const openLead = (lead: Lead | null): void => {
+    setSelectedLead(lead);
+    const url = new URL(window.location.href);
+    if (lead) url.searchParams.set('lead', lead.id);
+    else { url.searchParams.delete('lead'); url.searchParams.delete('intelligence'); }
+    if (url.href !== window.location.href) window.history.replaceState(null, '', url.toString());
+  };
   const [newLead, setNewLead] = useState<NewLeadForm>({
     full_name: '',
     phone: '',
@@ -149,18 +187,18 @@ function LeadsPageInner(): JSX.Element {
   const leadCount = leads.length - prospectCount;
 
   const fetchLeadTasks = async (): Promise<void> => {
+    if (loadingLeadWork.current) return;
+    loadingLeadWork.current = true;
     try {
-      const [taskRows, unread, counts] = await Promise.all([
+      const [taskRows, counts] = await Promise.all([
         workspacePages<LeadTaskRow>('/api/tasks?status=open&related_type=lead&sort=due_asc&limit=200', 200, 'offset'),
-        workspaceFetch<Record<string, number>>('/api/communication-log/unread-by-lead'),
         workspaceFetch<{ active: number; won: number; lost: number; inactive: number }>('/api/leads/stats'),
       ]);
       setLeadTasks(taskRows);
-      setUnreadByLead(unread);
       setStats(counts);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Unable to refresh lead work. Last loaded work is retained.');
-    }
+      setError(failure instanceof Error ? failure.message : 'Tasks and counts could not be refreshed. What you see may be out of date.');
+    } finally { loadingLeadWork.current = false; }
   };
 
   // lead_id -> earliest open task due date (board chips)
@@ -180,7 +218,7 @@ function LeadsPageInner(): JSX.Element {
   // Work queue: open lead tasks due today or overdue, worst first.
   // Scoped to currently-loaded active leads so stale or foreign tasks never clutter the queue.
   const queueTasks = useMemo(() => {
-    const endOfToday = endOfArizonaDay(new Date());
+    const endOfToday = endOfAgencyDay(new Date(), timeZone);
     return leadTasks
       .filter(
         (task) =>
@@ -190,7 +228,7 @@ function LeadsPageInner(): JSX.Element {
           new Date(task.due_date).getTime() <= endOfToday.getTime(),
       )
       .sort((a, b) => new Date(a.due_date ?? 0).getTime() - new Date(b.due_date ?? 0).getTime());
-  }, [leadTasks, leadById]);
+  }, [leadTasks, leadById, timeZone]);
 
   // List view: search + sort over the pipeline-filtered leads.
   const listLeads = useMemo(() => {
@@ -254,12 +292,19 @@ function LeadsPageInner(): JSX.Element {
     setBulkBusy(true);
     setError(null);
     try {
-      const results = await Promise.allSettled([...selectedIds].map((leadId) => operation(leadId)));
-      const failures = results.filter(
-        (result) => result.status === 'rejected' || (result.status === 'fulfilled' && !result.value.ok),
-      ).length;
-      if (failures > 0) {
-        setError(`${failures} of ${results.length} bulk updates failed.`);
+      const ids = [...selectedIds];
+      const results = await Promise.allSettled(ids.map((leadId) => operation(leadId)));
+      const problems: string[] = [];
+      for (const [index, result] of results.entries()) {
+        if (result.status === 'fulfilled' && result.value.ok) continue;
+        const name = leadById.get(ids[index])?.full_name ?? 'A lead';
+        const reason = result.status === 'fulfilled'
+          ? ((await result.value.json().catch(() => ({}))) as { message?: string }).message
+          : 'the connection was lost';
+        problems.push(`${name}: ${reason ?? 'could not be updated'}`);
+      }
+      if (problems.length > 0) {
+        setError(`${problems.length} of ${results.length} leads were not updated. ${problems.slice(0, 3).join(' · ')}${problems.length > 3 ? ' …' : ''}`);
       }
       setSelectedIds(new Set());
       await Promise.all([fetchLeads(false), fetchLeadTasks()]);
@@ -279,22 +324,59 @@ function LeadsPageInner(): JSX.Element {
     );
   };
 
-  const bulkDelete = async (): Promise<void> => {
-    const confirmed = window.confirm(`Remove ${selectedIds.size} selected lead(s)? This cannot be undone.`);
-    if (!confirmed) return;
-    await runBulk((leadId) =>
-      fetch('/api/leads', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: leadId }),
-      }),
-    );
+  const changeArchive = async (action: 'archive' | 'restore' | 'delete', ids: string[]): Promise<void> => {
+    if (ids.length === 0) return;
+    const subject = ids.length === 1 ? 'this lead' : `${ids.length} leads`;
+    if (action === 'archive' && !window.confirm(`Archive ${subject}?\n\n${ARCHIVE_EXPLANATION}`)) return;
+    if (action === 'delete') {
+      const typed = window.prompt(
+        `Permanently delete ${subject}?\n\nThis erases the lead along with its tasks, reminders, calendar items, notes, files, messages, website requests, email drafts and sequences. ` +
+        'Records that belong to a linked client account and issued policies are kept with that account. This cannot be undone.\n\nType DELETE to confirm.',
+      );
+      if (typed === null) return;
+      if (typed.trim().toUpperCase() !== 'DELETE') { setError('Nothing was deleted. Type DELETE to confirm a permanent delete.'); return; }
+    }
+    setBulkBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const messages: string[] = [];
+      for (let start = 0; start < ids.length; start += 200) {
+        const result = await workspaceFetch<{ message: string }>('/api/leads/archive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, ids: ids.slice(start, start + 200) }),
+        });
+        messages.push(result.message);
+      }
+      setNotice(messages.join(' '));
+      setSelectedIds(new Set());
+      await Promise.all([fetchLeads(false), fetchLeadTasks()]);
+    } catch (failure) {
+      const verb = action === 'archive' ? 'archived' : action === 'restore' ? 'restored' : 'deleted';
+      setError(failure instanceof Error ? failure.message : `The leads could not be ${verb}. Please try again.`);
+      await fetchLeads(false);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const deleteAllArchived = async (): Promise<void> => {
+    setError(null);
+    try {
+      const archived = await workspaceFetch<Lead[]>('/api/leads?status=archived&limit=1000');
+      if (archived.length === 0) { setNotice('There are no archived leads to delete.'); return; }
+      await changeArchive('delete', archived.map((lead) => lead.id));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Archived leads could not be loaded. Please try again.');
+    }
   };
 
   const bulkScheduleFollowUp = async (): Promise<void> => {
     if (!bulkFollowUpAt) return;
-    const dueIso = arizonaInputToIso(bulkFollowUpAt);
-    if (!dueIso) { setError('Choose a valid Arizona date and time.'); return; }
+    if (!agency.timeZone) { setError(agency.error ?? 'Agency time zone is still loading.'); return; }
+    const dueIso = agencyInputToIso(bulkFollowUpAt, timeZone);
+    if (!dueIso) { setError('Choose a valid date and time.'); return; }
     await runBulk((leadId) => {
       const lead = leadById.get(leadId);
       return fetch('/api/tasks', {
@@ -311,6 +393,15 @@ function LeadsPageInner(): JSX.Element {
     setBulkFollowUpAt('');
   };
 
+  const openQueueTask = (task: LeadTaskRow): void => {
+    const href = taskRecordHref({ ...task, related_type: 'lead' });
+    if (task.action_href && href) {
+      navigate(href);
+      return;
+    }
+    openLead(task.related_id ? leadById.get(task.related_id) ?? null : null);
+  };
+
   const completeQueueTask = async (task: LeadTaskRow, advance: boolean): Promise<void> => {
     try {
       await workspaceFetch('/api/tasks', {
@@ -324,8 +415,8 @@ function LeadsPageInner(): JSX.Element {
     await fetchLeadTasks();
     if (advance) {
       const next = queueTasks.find((candidate) => candidate.id !== task.id && candidate.related_id);
-      const nextLead = next?.related_id ? leadById.get(next.related_id) : null;
-      setSelectedLead(nextLead ?? null);
+      if (next) openQueueTask(next);
+      else openLead(null);
     }
   };
 
@@ -353,14 +444,14 @@ function LeadsPageInner(): JSX.Element {
       const statusParam = outcomeRef.current === 'active' ? 'open' : outcomeRef.current;
       const res = await fetch(`/api/leads?owner=me&status=${statusParam}`, { cache: 'no-store' });
       if (!res.ok) {
-        setError('Failed to load leads.');
+        setError('Leads could not be loaded. Refresh the page to try again.');
         return;
       }
 
       const data = (await res.json()) as Lead[];
       setLeads(data);
     } catch {
-      setError('Network error while loading leads. Please try again.');
+      setError('We could not reach the CRM. Check your internet connection and try again.');
     } finally {
       if (showLoader) {
         setLoading(false);
@@ -389,8 +480,8 @@ function LeadsPageInner(): JSX.Element {
       });
 
       if (!res.ok) {
-        const payload = (await res.json().catch(() => ({ message: 'Failed to update lead stage.' }))) as { message?: string };
-        setError(payload.message ?? 'Failed to update lead stage.');
+        const payload = (await res.json().catch(() => ({ message: 'Lead stage could not be updated. Please try again.' }))) as { message?: string };
+        setError(payload.message ?? 'Lead stage could not be updated. Please try again.');
         setLeads(previous);
         return;
       }
@@ -398,7 +489,7 @@ function LeadsPageInner(): JSX.Element {
       // Terminal statuses drop out of the open-leads query on next refresh.
       await fetchLeads(false);
     } catch {
-      setError('Network error while updating lead stage.');
+      setError('We could not reach the CRM. Check your internet connection and try again.');
       setLeads(previous);
     }
   };
@@ -412,11 +503,10 @@ function LeadsPageInner(): JSX.Element {
 
   useEffect(() => {
 
-    void (async () => {
-      await Promise.all([fetchLeads(true), fetchLeadTasks()]);
-    })();
+    void fetchLeadTasks();
 
     const refreshInterval = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
       void fetchLeads(false);
       void fetchLeadTasks();
     }, 30000);
@@ -446,23 +536,13 @@ function LeadsPageInner(): JSX.Element {
     if (leadParam) setPendingLeadId(leadParam);
   }, [searchParams]);
 
-  // Once handled, strip the param so clicking the same lead again retriggers.
-  const clearLeadParam = (): void => {
-    const url = new URL(window.location.href);
-    if (url.searchParams.has('lead')) {
-      url.searchParams.delete('lead');
-      window.history.replaceState(null, '', url.toString());
-    }
-  };
-
   // Deep link: /leads?lead=<id> opens the workspace drawer once leads load.
   useEffect(() => {
     if (!pendingLeadId) return;
     const target = leads.find((lead) => lead.id === pendingLeadId);
     if (target) {
-      setSelectedLead(target);
+      openLead(target);
       setPendingLeadId(null);
-      clearLeadParam();
       return;
     }
     if (loading) return;
@@ -472,14 +552,13 @@ function LeadsPageInner(): JSX.Element {
       try {
         const res = await fetch(`/api/leads/${encodeURIComponent(pendingLeadId)}`, { cache: 'no-store' });
         if (res.ok && !cancelled) {
-          setSelectedLead((await res.json()) as Lead);
+          openLead((await res.json()) as Lead);
         }
       } catch {
         // Lead no longer exists; nothing to open.
       } finally {
         if (!cancelled) {
           setPendingLeadId(null);
-          clearLeadParam();
         }
       }
     })();
@@ -500,8 +579,8 @@ function LeadsPageInner(): JSX.Element {
     });
 
     if (!res.ok) {
-      const payload = (await res.json().catch(() => ({ message: 'Failed to create lead.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to create lead.');
+      const payload = (await res.json().catch(() => ({ message: 'Lead could not be created. Please try again.' }))) as { message?: string };
+      setError(payload.message ?? 'Lead could not be created. Please try again.');
       setIsCreating(false);
       return;
     }
@@ -532,8 +611,8 @@ function LeadsPageInner(): JSX.Element {
     });
 
     if (!res.ok) {
-      const payload = (await res.json().catch(() => ({ message: 'Failed to update lead.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to update lead.');
+      const payload = (await res.json().catch(() => ({ message: 'Lead could not be updated. Please try again.' }))) as { message?: string };
+      setError(payload.message ?? 'Lead could not be updated. Please try again.');
       setIsSavingEdit(false);
       return;
     }
@@ -543,41 +622,24 @@ function LeadsPageInner(): JSX.Element {
     await fetchLeads();
   };
 
-  const handleRemoveLead = async (id: string): Promise<void> => {
-    const confirmed = window.confirm('Remove this lead? This action cannot be undone.');
-    if (!confirmed) return;
-
-    const res = await fetch('/api/leads', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    });
-
-    if (!res.ok) {
-      const payload = (await res.json().catch(() => ({ message: 'Failed to remove lead.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to remove lead.');
-      return;
-    }
-
-    await fetchLeads();
-  };
 
   return (
     <SectionLayout title="Leads">
-      <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-[#5c6873]">Manage open insurance leads and intake.</p>
-        <div className="flex items-center gap-2">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-cui-muted">Manage open insurance leads and intake.</p>
+        <div className="flex flex-wrap items-center gap-2">
           <Link
             href="/leads/import"
-            className="rounded border border-[#a8d4ff] bg-[#f5fbff] px-3 py-2 text-xs font-semibold text-[#167495] transition hover:bg-[#e7f3ff]"
+            className="crm-button"
           >
             Import Center
           </Link>
+          <button type="button" className="crm-button" onClick={() => setShowIntake(true)}>Intake requests</button>
 
           <button
             type="button"
             onClick={() => setShowNewLead(true)}
-            className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7]"
+            className="crm-button-primary"
           >
             + New Lead
           </button>
@@ -589,7 +651,7 @@ function LeadsPageInner(): JSX.Element {
           type="button"
           onClick={() => setPipelineFilter('all')}
           className={`rounded border px-3 py-1.5 font-semibold ${
-            pipelineFilter === 'all' ? 'border-[#167495] bg-[#167495] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
+            pipelineFilter === 'all' ? 'border-cui-primary-strong bg-cui-primary-strong text-white' : 'border-cui-border bg-white text-cui-text'
           }`}
         >
           {outcomeFilter === 'active' ? `All Active (${leads.length})` : `All ${outcomeFilter} (${leads.length})`}
@@ -598,7 +660,7 @@ function LeadsPageInner(): JSX.Element {
           type="button"
           onClick={() => setPipelineFilter('prospects')}
           className={`rounded border px-3 py-1.5 font-semibold ${
-            pipelineFilter === 'prospects' ? 'border-[#167495] bg-[#167495] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
+            pipelineFilter === 'prospects' ? 'border-cui-primary-strong bg-cui-primary-strong text-white' : 'border-cui-border bg-white text-cui-text'
           }`}
         >
           Prospects ({prospectCount})
@@ -607,19 +669,19 @@ function LeadsPageInner(): JSX.Element {
           type="button"
           onClick={() => setPipelineFilter('leads')}
           className={`rounded border px-3 py-1.5 font-semibold ${
-            pipelineFilter === 'leads' ? 'border-[#167495] bg-[#167495] text-white' : 'border-[#d5dde5] bg-white text-[#28557f]'
+            pipelineFilter === 'leads' ? 'border-cui-primary-strong bg-cui-primary-strong text-white' : 'border-cui-border bg-white text-cui-text'
           }`}
         >
           Leads ({leadCount})
         </button>
 
-        <span className="mx-1 h-5 w-px bg-[#d5dde5]" />
+        <span className="mx-1 h-5 w-px bg-cui-border" />
 
         {(
           [
-            ['won', 'Won', stats.won, 'text-green-700 border-[#4dbd74]/50', 'bg-[#4dbd74] text-white border-[#4dbd74]'],
-            ['lost', 'Lost', stats.lost, 'text-[#f86c6b] border-[#f86c6b]/50', 'bg-[#f86c6b] text-white border-[#f86c6b]'],
-            ['inactive', 'Inactive', stats.inactive, 'text-[#73818f] border-[#c8ced3]', 'bg-[#73818f] text-white border-[#73818f]'],
+            ['won', 'Won', stats.won, 'text-green-700 border-cui-success/50', 'bg-cui-success text-white border-cui-success'],
+            ['lost', 'Lost', stats.lost, 'text-cui-danger border-cui-danger/50', 'bg-cui-danger text-white border-cui-danger'],
+            ['inactive', 'Inactive', stats.inactive, 'text-cui-muted border-cui-border', 'bg-cui-muted text-white border-cui-muted'],
           ] as Array<['won' | 'lost' | 'inactive', string, number, string, string]>
         ).map(([key, label, count, idle, selected]) => (
           <button
@@ -639,15 +701,31 @@ function LeadsPageInner(): JSX.Element {
             {label} ({count})
           </button>
         ))}
+        <button
+          type="button"
+          onClick={() => {
+            if (outcomeFilter === 'archived') {
+              setOutcomeFilter('active');
+            } else {
+              setOutcomeFilter('archived');
+              setViewMode('list');
+            }
+          }}
+          className={`rounded border px-3 py-1.5 font-semibold ${outcomeFilter === 'archived' ? 'border-[#2f353a] bg-[#2f353a] text-white' : 'border-cui-border bg-white text-[#2f353a]'}`}
+          title="View archived leads"
+          aria-label="Archived leads"
+        >
+          Archived
+        </button>
 
-        <div className="ml-auto flex items-center overflow-hidden rounded border border-[#d5dde5]">
+        <div className="ml-auto flex items-center overflow-hidden rounded-lg border border-cui-border">
           <button
             type="button"
             onClick={() => {
               setOutcomeFilter('active');
               setViewMode('queue');
             }}
-            className={`px-3 py-1.5 font-semibold ${viewMode === 'queue' ? 'bg-[#167495] text-white' : 'bg-white text-[#28557f]'}`}
+            className={`px-3 py-1.5 font-semibold ${viewMode === 'queue' ? 'bg-cui-primary-strong text-white' : 'bg-white text-cui-text'}`}
           >
             Queue ({queueTasks.length})
           </button>
@@ -657,14 +735,14 @@ function LeadsPageInner(): JSX.Element {
               setOutcomeFilter('active');
               setViewMode('board');
             }}
-            className={`px-3 py-1.5 font-semibold ${viewMode === 'board' ? 'bg-[#167495] text-white' : 'bg-white text-[#28557f]'}`}
+            className={`px-3 py-1.5 font-semibold ${viewMode === 'board' ? 'bg-cui-primary-strong text-white' : 'bg-white text-cui-text'}`}
           >
             Board
           </button>
           <button
             type="button"
             onClick={() => setViewMode('list')}
-            className={`px-3 py-1.5 font-semibold ${viewMode === 'list' ? 'bg-[#167495] text-white' : 'bg-white text-[#28557f]'}`}
+            className={`px-3 py-1.5 font-semibold ${viewMode === 'list' ? 'bg-cui-primary-strong text-white' : 'bg-white text-cui-text'}`}
           >
             List
           </button>
@@ -672,30 +750,48 @@ function LeadsPageInner(): JSX.Element {
       </div>
 
       {outcomeFilter !== 'active' ? (
-        <div className="mb-3 flex items-center gap-2 rounded border border-[#c8ced3] bg-[#f0f3f5] px-3 py-2 text-sm text-[#5c6873]">
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-cui-border bg-cui-light px-3 py-2 text-sm text-cui-muted">
           Viewing <span className="font-bold uppercase">{outcomeFilter}</span> leads.
-          <button type="button" onClick={() => setOutcomeFilter('active')} className="font-semibold text-[#167495] hover:underline">
+          {outcomeFilter === 'archived' ? <span>Restore a lead to bring it back to your lists. Paused email sequences stay paused until you resume them.</span> : null}
+          {outcomeFilter === 'archived' && leads.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => void deleteAllArchived()}
+              disabled={bulkBusy}
+              className="ml-auto rounded-lg border border-cui-danger bg-white px-2.5 py-1 text-xs font-bold text-[#c23934] hover:bg-cui-danger/10 disabled:opacity-50"
+            >
+              Delete all archived permanently
+            </button>
+          ) : null}
+          <button type="button" onClick={() => setOutcomeFilter('active')} className="font-semibold text-cui-primary-strong hover:underline">
             Back to active pipeline
           </button>
         </div>
       ) : null}
 
-      {error ? <div role="alert" className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <div role="alert" className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {notice ? (
+        <div role="status" className="mb-3 flex items-start gap-2 rounded-lg border border-cui-success/40 bg-cui-success/10 px-3 py-2 text-sm text-[#2f6b45]">
+          <span className="flex-1">{notice}</span>
+          <button type="button" onClick={() => setNotice(null)} className="text-xs font-semibold hover:underline">Dismiss</button>
+        </div>
+      ) : null}
 
-      {loading ? <div className="text-sm text-[#73818f]">Loading leads...</div> : null}
+      {loading ? <div className="text-sm text-cui-muted">Loading leads...</div> : null}
 
       {!loading && viewMode === 'queue' ? (
-        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-[#f0f3f5] bg-[#f8f9fa] px-4 py-2.5">
-            <p className="text-sm font-bold text-[#23282c]">
-              Work Queue <span className="font-normal text-[#73818f]">— follow-ups due today or overdue</span>
+        <>
+        <div className="rounded-lg border border-cui-border bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-cui-light bg-cui-light px-4 py-2.5">
+            <p className="text-sm font-bold text-cui-text">
+              Work Queue <span className="font-normal text-cui-muted">— follow-ups due today or overdue</span>
             </p>
-            <p className="text-xs font-semibold text-[#73818f]">{queueTasks.length} to work</p>
+            <p className="text-xs font-semibold text-cui-muted">{queueTasks.length} to work</p>
           </div>
           {queueTasks.length === 0 ? (
-            <p className="p-6 text-center text-sm text-[#73818f]">Queue is clear. Nothing due today — nice work.</p>
+            <p className="p-6 text-center text-sm text-cui-muted">Queue is clear. Nothing due today — nice work.</p>
           ) : (
-            <ul className="divide-y divide-[#f0f3f5]">
+            <ul className="divide-y divide-cui-light">
               {queueTasks.map((task) => {
                 const lead = task.related_id ? leadById.get(task.related_id) : undefined;
                 const due = task.due_date ? new Date(task.due_date) : null;
@@ -704,30 +800,30 @@ function LeadsPageInner(): JSX.Element {
                   <li key={task.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                     <span
                       className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
-                        overdue ? 'bg-[#f86c6b] text-white' : 'bg-[#ffc107]/25 text-amber-800'
+                        overdue ? 'bg-cui-danger text-white' : 'bg-cui-warning/25 text-amber-800'
                       }`}
                     >
                       {overdue ? 'Overdue' : 'Today'}
                     </span>
                     <button
                       type="button"
-                      onClick={() => lead && setSelectedLead(lead)}
+                      onClick={() => openQueueTask(task)}
                       disabled={!lead}
                       className="min-w-0 flex-1 text-left disabled:cursor-default"
                     >
-                      <p className="truncate text-sm font-semibold text-[#167495] hover:underline">
+                      <p className="truncate text-sm font-semibold text-cui-primary-strong hover:underline">
                         {lead?.full_name ?? 'Unknown lead'}
                       </p>
-                      <p className="truncate text-xs text-[#73818f]">{task.subject}</p>
+                      <p className="truncate text-xs text-cui-muted">{task.subject}</p>
                     </button>
-                    <span className="shrink-0 text-xs text-[#73818f]">
-                      {task.due_date ? `${formatArizonaDateTime(task.due_date)} AZ` : '--'}
+                    <span className="shrink-0 text-xs text-cui-muted">
+                      {task.due_date ? formatAgencyDateTime(task.due_date, timeZone) : '--'}
                     </span>
-                    <TaskSnooze subject={task.subject} onSave={(iso) => snoozeQueueTask(task, iso)} />
+                    <TaskSnooze subject={task.subject} timeZone={agency.timeZone ?? undefined} onSave={(iso) => snoozeQueueTask(task, iso)} />
                     <button
                       type="button"
                       onClick={() => void completeQueueTask(task, true)}
-                      className="shrink-0 rounded bg-[#4dbd74] px-2.5 py-1.5 text-xs font-bold text-white hover:brightness-95"
+                      className="shrink-0 rounded-lg bg-cui-success px-2.5 py-1.5 text-xs font-bold text-white hover:brightness-95"
                     >
                       Complete & Next
                     </button>
@@ -737,6 +833,8 @@ function LeadsPageInner(): JSX.Element {
             </ul>
           )}
         </div>
+        <OpportunityQueue initiallyOpen={searchParams.get('reviews') === '1'} />
+        </>
       ) : null}
 
       {!loading && viewMode === 'board' ? (
@@ -746,31 +844,31 @@ function LeadsPageInner(): JSX.Element {
           unreadByLead={unreadByLead}
           terminalCounts={{ won: stats.won, lost: stats.lost, inactive: stats.inactive }}
           onStatusChange={handlePipelineStatusChange}
-          onSelectLead={(lead) => setSelectedLead(leads.find((candidate) => candidate.id === lead.id) ?? null)}
+          onSelectLead={(lead) => openLead(leads.find((candidate) => candidate.id === lead.id) ?? null)}
         />
       ) : null}
 
       {!loading && viewMode === 'list' ? (
-        <div className="rounded border border-[#c8ced3] bg-white shadow-sm">
-          <div className="flex flex-wrap items-center gap-3 border-b border-[#f0f3f5] bg-[#f8f9fa] px-4 py-2.5">
+        <div className="rounded-lg border border-cui-border bg-white shadow-sm">
+          <div className="flex flex-wrap items-center gap-3 border-b border-cui-light bg-cui-light px-4 py-2.5">
             <input
               type="search"
               value={listSearch}
               onChange={(event) => setListSearch(event.target.value)}
               placeholder="Search name, email, phone, line, source?"
-              className="w-72 max-w-full rounded border border-[#c8ced3] bg-white px-3 py-1.5 text-sm"
+              className="w-72 max-w-full rounded-lg border border-cui-border bg-white px-3 py-1.5 text-sm"
             />
-            <p className="ml-auto text-xs font-semibold text-[#73818f]">
+            <p className="ml-auto text-xs font-semibold text-cui-muted">
               {listLeads.length} of {filteredLeads.length} leads
             </p>
           </div>
 
           {selectedIds.size > 0 ? (
-            <div className="flex flex-wrap items-center gap-2 border-b border-[#1b8eb7]/30 bg-[#20a8d8]/10 px-4 py-2">
-              <p className="text-sm font-bold text-[#167495]">
+            <div className="flex flex-wrap items-center gap-2 border-b border-cui-primary-hover/30 bg-cui-primary-strong/10 px-4 py-2">
+              <p className="text-sm font-bold text-cui-primary-strong">
                 {selectedIds.size} selected
                 {selectedPremium > 0 ? (
-                  <span className="ml-1 font-semibold text-[#4dbd74]">(${selectedPremium.toLocaleString()} est.)</span>
+                  <span className="ml-1 font-semibold text-cui-success">(${selectedPremium.toLocaleString()} est.)</span>
                 ) : null}
               </p>
               <select
@@ -781,7 +879,7 @@ function LeadsPageInner(): JSX.Element {
                   event.target.value = '';
                   if (status) void bulkSetStatus(status);
                 }}
-                className="rounded border border-[#c8ced3] bg-white px-2 py-1 text-xs font-semibold text-[#5c6873]"
+                className="rounded-lg border border-cui-border bg-white px-2 py-1 text-xs font-semibold text-cui-muted"
               >
                 <option value="" disabled>Set status…</option>
                 <option value="new">New</option>
@@ -794,48 +892,59 @@ function LeadsPageInner(): JSX.Element {
               <div className="flex items-center gap-1">
                 <input
                   type="datetime-local"
+                  aria-label={`Schedule follow-up - ${timeZone}`}
                   value={bulkFollowUpAt}
                   onChange={(event) => setBulkFollowUpAt(event.target.value)}
-                  disabled={bulkBusy}
-                  className="rounded border border-[#c8ced3] bg-white px-2 py-1 text-xs"
+                  disabled={bulkBusy || !agency.timeZone}
+                  className="rounded-lg border border-cui-border bg-white px-2 py-1 text-xs"
                 />
                 <button
                   type="button"
                   onClick={() => void bulkScheduleFollowUp()}
                   disabled={bulkBusy || !bulkFollowUpAt}
-                  className="rounded bg-[#167495] px-2.5 py-1 text-xs font-bold text-white disabled:opacity-50"
+                  className="rounded-lg bg-cui-primary-strong px-2.5 py-1 text-xs font-bold text-white disabled:opacity-50"
                 >
                   Schedule follow-up
                 </button>
               </div>
               <button
                 type="button"
-                onClick={() => void bulkDelete()}
+                onClick={() => void changeArchive(outcomeFilter === 'archived' ? 'restore' : 'archive', [...selectedIds])}
                 disabled={bulkBusy}
-                className="rounded border border-[#f86c6b]/50 bg-white px-2.5 py-1 text-xs font-bold text-[#f86c6b] hover:bg-[#f86c6b]/10 disabled:opacity-50"
+                className="rounded-lg border border-cui-danger/50 bg-white px-2.5 py-1 text-xs font-bold text-cui-danger hover:bg-cui-danger/10 disabled:opacity-50"
               >
-                Delete
+                {outcomeFilter === 'archived' ? 'Restore' : 'Archive'}
               </button>
+              {outcomeFilter === 'archived' ? (
+                <button
+                  type="button"
+                  onClick={() => void changeArchive('delete', [...selectedIds])}
+                  disabled={bulkBusy}
+                  className="rounded-lg border border-cui-danger bg-cui-danger px-2.5 py-1 text-xs font-bold text-white hover:bg-[#e04e4d] disabled:opacity-50"
+                >
+                  Delete permanently
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setSelectedIds(new Set())}
                 disabled={bulkBusy}
-                className="ml-auto text-xs font-semibold text-[#73818f] hover:underline"
+                className="ml-auto text-xs font-semibold text-cui-muted hover:underline"
               >
                 Clear selection
               </button>
-              {bulkBusy ? <span className="text-xs font-semibold text-[#167495]">Working…</span> : null}
+              {bulkBusy ? <span className="text-xs font-semibold text-cui-primary-strong">Working…</span> : null}
             </div>
           ) : null}
 
           {listLeads.length === 0 ? (
-            <div className="p-6 text-center text-sm text-[#73818f]">
+            <div className="p-6 text-center text-sm text-cui-muted">
               {listSearch ? 'No leads match your search.' : 'No leads found.'}
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full table-fixed text-left text-sm">
-                <thead className="border-b border-[#e1e6ea] bg-[#f8f9fa] text-xs uppercase tracking-wide text-[#73818f]">
+                <thead className="border-b border-[#e1e6ea] bg-cui-light text-xs uppercase tracking-wide text-cui-muted">
                   <tr>
                     <th className="w-10 px-4 py-2.5">
                       <input
@@ -863,7 +972,7 @@ function LeadsPageInner(): JSX.Element {
                           <button
                             type="button"
                             onClick={() => toggleListSort(key as ListSortKey)}
-                            className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-[#167495]"
+                            className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-cui-primary-strong"
                           >
                             {label}
                             {listSort.key === key ? <span>{listSort.dir === 'asc' ? '\u25B2' : '\u25BC'}</span> : null}
@@ -875,7 +984,7 @@ function LeadsPageInner(): JSX.Element {
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#f0f3f5]">
+                <tbody className="divide-y divide-cui-light">
                   {listLeads.map((lead) => {
                     const premium = premiumOf(lead);
                     const dueAt = taskDueByLead[lead.id];
@@ -889,8 +998,8 @@ function LeadsPageInner(): JSX.Element {
                     return (
                       <tr
                         key={lead.id}
-                        onClick={() => setSelectedLead(lead)}
-                        className="cursor-pointer transition hover:bg-[#f0f3f5]/70"
+                        onClick={() => openLead(lead)}
+                        className="cursor-pointer transition hover:bg-cui-light/70"
                       >
                         <td className="px-3 py-2.5" onClick={(event) => event.stopPropagation()}>
                           <input
@@ -902,12 +1011,12 @@ function LeadsPageInner(): JSX.Element {
                           />
                         </td>
                         <td className="px-3 py-2.5">
-                          <p className="truncate font-semibold text-[#167495]">{lead.full_name}</p>
-                          <p className="truncate text-xs text-[#73818f]">{lead.line_of_business || 'No line of business'}</p>
+                          <p className="truncate font-semibold text-cui-primary-strong">{lead.full_name}</p>
+                          <p className="truncate text-xs text-cui-muted">{lead.line_of_business || 'No line of business'}</p>
                         </td>
                         <td className="px-3 py-2.5">
-                          <p className="max-w-40 truncate text-[#23282c]">{formatPhone(lead.phone) || '--'}</p>
-                          <p className="max-w-40 truncate text-xs text-[#73818f]">{lead.email || '--'}</p>
+                          <p className="max-w-40 truncate text-cui-text">{formatPhone(lead.phone) || '--'}</p>
+                          <p className="max-w-40 truncate text-xs text-cui-muted">{lead.email || '--'}</p>
                         </td>
                         <td className="px-3 py-2.5">
                           <span
@@ -918,18 +1027,18 @@ function LeadsPageInner(): JSX.Element {
                             {LEAD_STATUS_LABELS[lead.status as LeadStatus] ?? lead.status}
                           </span>
                         </td>
-                        <td className="px-3 py-2.5 text-right font-semibold text-[#23282c]">
-                          {premium > 0 ? `$${premium.toLocaleString()}` : <span className="font-normal text-[#c8ced3]">--</span>}
+                        <td className="px-3 py-2.5 text-right font-semibold text-cui-text">
+                          {premium > 0 ? `$${premium.toLocaleString()}` : <span className="font-normal text-cui-border">--</span>}
                         </td>
                         <td className="px-3 py-2.5">
                           {due ? (
                             <span
                               className={`rounded px-2 py-0.5 text-[11px] font-bold ${
                                 overdue
-                                  ? 'bg-[#f86c6b] text-white'
+                                  ? 'bg-cui-danger text-white'
                                   : dueToday
-                                    ? 'bg-[#ffc107]/25 text-amber-800'
-                                    : 'bg-[#f0f3f5] text-[#73818f]'
+                                    ? 'bg-cui-warning/25 text-amber-800'
+                                    : 'bg-cui-light text-cui-muted'
                               }`}
                             >
                               {overdue
@@ -937,15 +1046,15 @@ function LeadsPageInner(): JSX.Element {
                                 : due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                             </span>
                           ) : (
-                            <span className="text-xs text-[#c8ced3]">--</span>
+                            <span className="text-xs text-cui-border">--</span>
                           )}
                         </td>
                         <td className="px-3 py-2.5">
-                          <span className="rounded bg-[#f0f3f5] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#73818f]">
+                          <span className="rounded-lg bg-cui-light px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-cui-muted">
                             {lead.source || 'unknown'}
                           </span>
                         </td>
-                        <td className="px-3 py-2.5 text-xs text-[#73818f]">
+                        <td className="px-3 py-2.5 text-xs text-cui-muted">
                           {new Date(lead.created_at).toLocaleDateString()}
                         </td>
                         <td className="px-3 py-2.5 text-right text-xs" onClick={(event) => event.stopPropagation()}>
@@ -957,18 +1066,27 @@ function LeadsPageInner(): JSX.Element {
                           </Link>
                           <button
                             type="button"
-                            className="mr-2 font-semibold text-[#167495] hover:underline"
+                            className="mr-2 font-semibold text-cui-primary-strong hover:underline"
                             onClick={() => setEditingLead(lead)}
                           >
                             Edit
                           </button>
                           <button
                             type="button"
-                            className="font-semibold text-[#c23934] hover:underline"
-                            onClick={() => void handleRemoveLead(lead.id)}
+                            className={`font-semibold hover:underline ${lead.archived_at ? 'text-cui-primary-strong' : 'text-[#c23934]'}`}
+                            onClick={() => void changeArchive(lead.archived_at ? 'restore' : 'archive', [lead.id])}
                           >
-                            Remove
+                            {lead.archived_at ? 'Restore' : 'Archive'}
                           </button>
+                          {lead.archived_at ? (
+                            <button
+                              type="button"
+                              className="ml-2 font-semibold text-[#c23934] hover:underline"
+                              onClick={() => void changeArchive('delete', [lead.id])}
+                            >
+                              Delete
+                            </button>
+                          ) : null}
                         </td>
                       </tr>
                     );
@@ -982,9 +1100,11 @@ function LeadsPageInner(): JSX.Element {
 
       {showNewLead ? (
         <NewLeadModal
+          onAccountCreated={(accountId) => { setShowNewLead(false); navigate(`/clients/${accountId}`); }}
           onClose={() => setShowNewLead(false)}
-          onCreated={(leadId) => {
+          onCreated={(leadId, warning) => {
             setShowNewLead(false);
+            if (warning) setError(warning);
             setPendingLeadId(leadId);
             void fetchLeads();
           }}
@@ -993,42 +1113,42 @@ function LeadsPageInner(): JSX.Element {
 
       {editingLead ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
-            <h2 className="mb-3 text-lg font-bold text-[#23282c]">Edit Lead</h2>
+          <div className="w-full max-w-md rounded-lg border border-cui-border bg-white p-4 shadow-xl">
+            <h2 className="mb-3 text-lg font-bold text-cui-text">Edit Lead</h2>
             <form onSubmit={handleUpdateLead} className="space-y-2">
               <input
                 required
                 type="text"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingLead.full_name}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, full_name: e.target.value } : prev))}
               />
               <input
                 type="text"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingLead.phone || ''}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, phone: e.target.value } : prev))}
               />
               <input
                 type="email"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingLead.email || ''}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, email: e.target.value } : prev))}
               />
               <input
                 type="text"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingLead.line_of_business || ''}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, line_of_business: e.target.value } : prev))}
               />
               <input
                 type="text"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingLead.source || ''}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, source: e.target.value } : prev))}
               />
               <select
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingLead.status}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, status: e.target.value } : prev))}
               >
@@ -1044,7 +1164,7 @@ function LeadsPageInner(): JSX.Element {
                 min="0"
                 step="50"
                 placeholder="Estimated premium ($)"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingLead.estimated_premium != null && editingLead.estimated_premium !== '' ? String(editingLead.estimated_premium) : ''}
                 onChange={(e) => setEditingLead((prev) => (prev ? { ...prev, estimated_premium: e.target.value } : prev))}
               />
@@ -1052,14 +1172,14 @@ function LeadsPageInner(): JSX.Element {
               <button
                 type="submit"
                 disabled={isSavingEdit}
-                className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:opacity-60"
+                className="w-full rounded-lg bg-cui-primary-strong px-3 py-2 text-sm font-semibold text-white hover:bg-cui-primary-hover disabled:opacity-60"
               >
                 {isSavingEdit ? 'Saving Changes...' : 'Save Changes'}
               </button>
               <button
                 type="button"
                 onClick={() => setEditingLead(null)}
-                className="w-full rounded bg-[#e4e5e6] px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#c8ced3]"
+                className="w-full rounded-lg bg-cui-body px-3 py-2 text-sm font-semibold text-cui-muted hover:bg-cui-border"
               >
                 Cancel
               </button>
@@ -1071,13 +1191,17 @@ function LeadsPageInner(): JSX.Element {
       {selectedLead ? (
         <LeadWorkspace
           lead={selectedLead}
-          onClose={() => setSelectedLead(null)}
+          onClose={() => openLead(null)}
+          onIntakeRequest={() => setShowIntake(true)}
           onChanged={() => {
             void fetchLeads(false);
             void fetchLeadTasks();
           }}
         />
       ) : null}
+      {showIntake && (!searchParams.get('lead') || selectedLead) ? <IntakeRequestDialog
+        target={selectedLead ? { type: 'lead', id: selectedLead.id } : undefined}
+        onClose={() => setShowIntake(false)} onReviewed={() => { void fetchLeads(false); void fetchLeadTasks(); }} /> : null}
     </SectionLayout>
   );
 }

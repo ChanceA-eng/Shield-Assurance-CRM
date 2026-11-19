@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { processEndorsementCreated } from '../../../lib/automation';
 
+import { friendlyErrorMessage } from '../../../lib/workspace-api';
 interface NewEndorsementPayload {
   id?: string;
   policy_id?: string;
@@ -15,7 +16,7 @@ interface NewEndorsementPayload {
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const status = request.nextUrl.searchParams.get('status') ?? 'open';
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const { data, error } = await query;
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data ?? [], { status: 200 });
@@ -41,7 +42,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json()) as NewEndorsementPayload;
@@ -53,7 +54,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!clientId) {
     const policyResult = await supabase.from('policies').select('client_id').eq('id', payload.policy_id).maybeSingle();
     if (policyResult.error) {
-      return NextResponse.json({ message: policyResult.error.message }, { status: 500 });
+      return NextResponse.json({ message: friendlyErrorMessage(policyResult.error) }, { status: 500 });
     }
 
     clientId = policyResult.data?.client_id ?? '';
@@ -79,7 +80,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     .single();
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   await processEndorsementCreated({
@@ -95,7 +96,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json()) as NewEndorsementPayload;
@@ -117,7 +118,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 
   const { data, error } = await supabase.from('endorsements').update(updates).eq('id', payload.id).select('*').single();
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data, { status: 200 });
@@ -126,7 +127,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 export async function DELETE(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json()) as { id?: string };
@@ -136,7 +137,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
 
   const { error } = await supabase.from('endorsements').delete().eq('id', payload.id);
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { askRashi } from '../../../../lib/rashi-server';
 import { prisma } from '../../../../lib/prisma';
+import { crmHelpAnswer } from '../../../../lib/crm-help';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -12,6 +13,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!message) {
       return NextResponse.json({ message: 'message is required.' }, { status: 400 });
     }
+    const help = body.documentId || body.carrierName || body.policyType ? null : crmHelpAnswer(message);
+    if (help) return NextResponse.json({ answer: help, citations: [] });
 
     const sessionId = typeof body.sessionId === 'string' && body.sessionId.trim()
       ? body.sessionId.trim()

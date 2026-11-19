@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../../lib/api-auth';
 
+import { friendlyErrorMessage } from '../../../../../lib/workspace-api';
 interface RouteContext {
   params: Promise<{ clientId: string }>;
 }
@@ -12,7 +13,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const { clientId } = await context.params;
@@ -30,12 +31,12 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
 
   const clientQuery = await supabase
     .from('clients')
-    .select('id,full_name,phone,email,address,source,account_type,assigned_producer,csr,since_date,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at')
+    .select('id,full_name,phone,email,address,source,account_type,assigned_producer,csr,since_date,email_consent,sms_consent,preferred_channel,created_at,policy_effective_at,last_viewed_at,last_activity_at,intake_details')
     .eq('id', clientId)
     .maybeSingle();
 
   if (clientQuery.error) {
-    return NextResponse.json({ message: clientQuery.error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(clientQuery.error) }, { status: 500 });
   }
 
   if (!clientQuery.data) {
@@ -159,7 +160,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
 
   for (const [key, result] of Object.entries(namedResponses)) {
     if (result.error) {
-      return NextResponse.json({ message: result.error.message ?? 'Failed to load client workspace data.' }, { status: 500 });
+      return NextResponse.json({ message: friendlyErrorMessage(result.error) ?? 'Client workspace data could not be loaded. Refresh the page to try again.' }, { status: 500 });
     }
   }
 

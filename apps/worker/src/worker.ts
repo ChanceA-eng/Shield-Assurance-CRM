@@ -1,15 +1,28 @@
 import 'dotenv/config';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'node:url';
 import { Worker } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import {
   RASHI_JOB_NAMES,
   RASHI_QUEUE_NAMES,
   WORKFLOW_EVENTS,
+  isLegacyDealBoundAutomationEnabled,
+  LEGACY_DEAL_BOUND_AUTOMATION_ENV,
   type DealBoundEventPayload,
   type KnowledgeIngestJobPayload,
 } from '@crm/shared';
-import { sendSms, sendWelcomeEmail } from './services.js';
+import { sendWelcomeEmail } from './services.js';
 import { processKnowledgeDocument } from './knowledge.js';
+import { startGmailWorker } from './gmail.js';
+import { startSocialWorker } from './social.js';
+import { startIntelligenceWorker } from './intelligence.js';
+
+dotenv.config({ path: fileURLToPath(new URL('../../../.env', import.meta.url)) });
+
+const gmailWorker = await startGmailWorker();
+const socialWorker = await startSocialWorker();
+const intelligenceWorker = await startIntelligenceWorker();
 
 function buildPrismaDatabaseUrl(): string | undefined {
   const rawUrl = process.env.DATABASE_URL;
@@ -56,6 +69,11 @@ const workflowWorker = new Worker(
       return;
     }
 
+    if (!isLegacyDealBoundAutomationEnabled(process.env[LEGACY_DEAL_BOUND_AUTOMATION_ENV])) {
+      console.warn(`[worker] Skipping ${job.name} (${job.id}); legacy workflow policy is disabled.`);
+      return;
+    }
+
     const payload = job.data as DealBoundEventPayload;
 
     const deal = await prisma.deal.findUnique({ where: { id: payload.dealId } });
@@ -76,15 +94,11 @@ const workflowWorker = new Worker(
       throw new Error(`No primary contact found for account: ${account.id}`);
     }
 
-    const smsResult = await sendSms({
-      to: primaryContact.phone ?? '',
-      body: `Congrats ${primaryContact.firstName}, your policy for ${account.name} is now bound.`,
-    });
-
     const emailResult = await sendWelcomeEmail({
       to: primaryContact.email,
       accountName: account.name,
       dealTitle: deal.title,
+      requestId: `deal-bound:${deal.id}`,
     });
 
     await prisma.activity.create({
@@ -93,7 +107,7 @@ const workflowWorker = new Worker(
         type: 'SYSTEM_NOTE',
         direction: 'OUTBOUND',
         subject: 'Policy Bound Automation Completed',
-        body: `Automation sent SMS (${smsResult.providerId}) and Email (${emailResult.providerId}) for deal ${deal.id}.`,
+        body: `Automation sent Email (${emailResult.providerId}) for deal ${deal.id}.`,
       },
     });
   },
@@ -143,6 +157,9 @@ knowledgeWorker.on('failed', (job, err) => {
 });
 
 async function shutdown(): Promise<void> {
+  await intelligenceWorker?.close();
+  await socialWorker?.close();
+  await gmailWorker?.close();
   await knowledgeWorker.close();
   await workflowWorker.close();
   await prisma.$disconnect();

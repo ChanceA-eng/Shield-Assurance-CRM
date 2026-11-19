@@ -2,6 +2,8 @@ import type { DocumentInsight, KnowledgeDocument, SourceType } from '@prisma/cli
 import pdf from 'pdf-parse';
 import { RASHI_SOURCE_TYPES, buildDeterministicEmbedding, buildKnowledgeInsights, cosineSimilarity } from '@crm/shared';
 import { prisma } from './prisma';
+import { WorkspaceError } from './record-scope';
+import type { PolicyKnowledgeCandidate } from './policy-knowledge';
 
 export interface RashiFilters {
   documentId?: string;
@@ -15,13 +17,87 @@ export interface IngestRashiInput extends RashiFilters {
   title: string;
   sourceType: string;
   sourceUrl?: string;
+  sourcePublishedAt?: string;
   rawText?: string;
+}
+
+export class RashiInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RashiInputError';
+  }
+}
+
+export async function publishReviewedPolicyWording(actor: string, id: string, revision: number): Promise<string> {
+  const documentId = await prisma.$transaction(async (tx) => {
+    const owners = await tx.$queryRaw<Array<{ user_id: string }>>`
+      select user_id from public.agency_members where user_id=${actor}::uuid and active and role='owner' for share`;
+    if (!owners.length) throw new WorkspaceError('Only an active owner can publish policy knowledge.', 403);
+    const candidates = await tx.$queryRaw<PolicyKnowledgeCandidate[]>`
+      select * from public.policy_knowledge_candidates where id=${id}::uuid for update`;
+    const candidate = candidates[0];
+    if (!candidate || candidate.revision !== revision || candidate.approved_revision !== revision) {
+      throw new WorkspaceError('This exact wording revision must be approved before publication.', 409);
+    }
+    if (candidate.state === 'published') return id;
+    if (candidate.state !== 'approved') throw new WorkspaceError('Approve this candidate before publishing.', 409);
+    const scopedText = `Observed policy form wording; not carrier-wide underwriting appetite.
+Carrier: ${candidate.carrier}
+Form: ${candidate.form_number}; edition: ${candidate.edition}
+Jurisdiction: ${candidate.jurisdiction}; line: ${candidate.line_of_business}
+Agent/owner-reviewed de-identified excerpt:
+${candidate.wording}`;
+    // Only approved sanitized wording reaches the embedding adapter.
+    const embedding = await createEmbedding(scopedText, true);
+    await tx.knowledgeDocument.create({ data: {
+      id, title: `${candidate.carrier} / ${candidate.form_number} / ${candidate.edition}`,
+      sourceType: 'NOTE', sourceUrl: null, rawText: scopedText, carrierName: candidate.carrier,
+      stateContext: normalizeState(candidate.jurisdiction), policyType: normalizePolicyType(candidate.line_of_business),
+      topic: 'Observed policy form wording', topicTags: ['Observed policy form wording'],
+      status: 'READY', summary: 'Owner-reviewed policy-specific wording. Not evidence of carrier-wide underwriting appetite.',
+    } });
+    const insight = await tx.documentInsight.create({ data: {
+      documentId: id, insightIndex: 0, content: scopedText, embeddingValues: embedding,
+    } });
+    await tx.$executeRaw`update "DocumentInsight" set embedding=${`[${embedding.join(',')}]`}::vector where id=${insight.id}`;
+    await tx.$executeRaw`update public.policy_knowledge_candidates set state='published',document_id=${id},
+      updated_at=clock_timestamp() where id=${id}::uuid`;
+    await tx.$executeRaw`insert into public.policy_knowledge_review_events(candidate_id,actor_id,action,revision)
+      values(${id}::uuid,${actor}::uuid,'published',${revision})`;
+    return id;
+  }, { timeout: 45000 });
+  metadataCatalogCache = null;
+  return documentId;
+}
+
+export async function withdrawReviewedPolicyWording(actor: string, id: string, revision: number): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const owners = await tx.$queryRaw<Array<{ user_id: string }>>`
+      select user_id from public.agency_members where user_id=${actor}::uuid and active and role='owner' for share`;
+    if (!owners.length) throw new WorkspaceError('Only an active owner can withdraw policy knowledge.', 403);
+    const candidates = await tx.$queryRaw<Array<{ revision: number; state: string }>>`
+      select revision,state from public.policy_knowledge_candidates where id=${id}::uuid for update`;
+    if (!candidates[0] || candidates[0].revision !== revision) throw new WorkspaceError('Candidate changed. Reload before withdrawing.', 409);
+    if (candidates[0].state === 'withdrawn') return;
+    await tx.knowledgeDocument.deleteMany({ where: { id } });
+    await tx.$executeRaw`update public.policy_knowledge_candidates set state='withdrawn',document_id=null,
+      approved_revision=null,approved_by=null,updated_at=clock_timestamp() where id=${id}::uuid`;
+    await tx.$executeRaw`insert into public.policy_knowledge_review_events(candidate_id,actor_id,action,revision)
+      values(${id}::uuid,${actor}::uuid,'withdrawn',${revision})`;
+  });
+  metadataCatalogCache = null;
 }
 
 export interface AskRashiInput extends RashiFilters {
   question: string;
   topK?: number;
   history?: Array<{ role: 'user' | 'assistant'; text: string }>;
+}
+
+export async function assertRegularRashiSource(documentId: string): Promise<void> {
+  const protectedSource = await prisma.$queryRaw<Array<{ id: string }>>`
+    select id::text from public.policy_knowledge_candidates where id::text=${documentId} limit 1`;
+  if (protectedSource.length) throw new WorkspaceError('Use Policy wording review to withdraw or replace this owner-reviewed excerpt. Private originals cannot be attached to Rashi.', 409);
 }
 
 export type RashiAnalyzeAction = 'APPETITE' | 'ELIGIBILITY' | 'EXCLUSIONS' | 'DECISION';
@@ -35,6 +111,8 @@ interface QueryRow {
   documentId: string;
   title: string;
   sourceUrl: string | null;
+  updatedAt: Date;
+  sourcePublishedAt: Date | null;
   carrierName: string | null;
   stateContext: string | null;
   policyType: string | null;
@@ -87,6 +165,25 @@ function normalizeState(value?: string | null): string | undefined {
 function normalizePolicyType(value?: string | null): string | undefined {
   const trimmed = normalizeOptional(value);
   return trimmed ? trimmed.toUpperCase() : undefined;
+}
+
+export function parseSourcePublishedAt(value?: unknown): Date | null {
+  if (value !== undefined && value !== null && typeof value !== 'string') {
+    throw new RashiInputError('Source publication date must use YYYY-MM-DD.');
+  }
+  const normalized = normalizeOptional(value);
+  if (!normalized) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+  if (!match) throw new RashiInputError('Source publication date must use YYYY-MM-DD.');
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (year < 1000 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    throw new RashiInputError('Source publication date must be a real calendar date.');
+  }
+  return date;
 }
 
 function parseUnderwritingIntent(question: string): UnderwritingIntent {
@@ -489,9 +586,10 @@ async function persistDocumentInsights(
   };
 }
 
-async function createEmbedding(input: string): Promise<number[]> {
+async function createEmbedding(input: string, requireProvider = false): Promise<number[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
+    if (requireProvider) throw new WorkspaceError('Configure OPENAI_API_KEY before publishing approved policy knowledge.', 503);
     return buildDeterministicEmbedding(input);
   }
 
@@ -511,17 +609,23 @@ async function createEmbedding(input: string): Promise<number[]> {
       }),
       signal: AbortSignal.timeout(12000),
     });
-  } catch {
+  } catch (failure) {
+    if (requireProvider) {
+      console.error('[policy-knowledge/embedding]', failure instanceof Error ? failure.name : 'Provider request failed');
+      throw new WorkspaceError('The embedding service could not be reached. Approval is retained; retry publication.', 503);
+    }
     return buildDeterministicEmbedding(input);
   }
 
   if (!response.ok) {
+    if (requireProvider) throw new WorkspaceError('The embedding service rejected publication. Check its configuration and retry; nothing was indexed.', 503);
     return buildDeterministicEmbedding(input);
   }
 
   const payload = (await response.json()) as { data?: Array<{ embedding?: number[] }> };
   const embedding = payload.data?.[0]?.embedding;
-  if (!embedding || embedding.length === 0) {
+  if (!embedding || embedding.length === 0 || !embedding.every((value) => Number.isFinite(value))) {
+    if (requireProvider) throw new WorkspaceError('The embedding service returned an invalid result. Nothing was indexed; retry publication.', 503);
     return buildDeterministicEmbedding(input);
   }
 
@@ -592,6 +696,7 @@ export async function ingestRashiDocument(input: IngestRashiInput): Promise<{
       title,
       sourceType,
       sourceUrl: normalizeOptional(input.sourceUrl) ?? null,
+      sourcePublishedAt: parseSourcePublishedAt(input.sourcePublishedAt),
       rawText,
       carrierName: carrierName ?? null,
       stateContext: stateContext ?? null,
@@ -705,6 +810,8 @@ async function findRelevantInsights(questionEmbedding: number[], filters: RashiF
       dc."documentId",
       kd."title",
       kd."sourceUrl",
+      kd."updatedAt",
+      kd."sourcePublishedAt",
       kd."carrierName",
       kd."stateContext",
       kd."policyType",
@@ -876,6 +983,8 @@ async function composeAnswer(
         `State: ${citation.stateContext ?? 'n/a'}\n` +
         `Policy: ${citation.policyType ?? 'n/a'}\n` +
         `Topic: ${citation.topic ?? 'n/a'}\n` +
+        `Reported Publication Date: ${citation.sourcePublishedAt?.toISOString().slice(0, 10) ?? 'not recorded'}\n` +
+        `Library Record Updated: ${citation.updatedAt.toISOString().slice(0, 10)}\n` +
         `Insight Index: ${citation.insightIndex + 1}\n` +
         `Key Point: ${parseStoredInsight(citation.content).point}`,
     )
@@ -909,6 +1018,8 @@ Formatting requirements:
 Reasoning requirements:
 - Answer only from provided key points.
 - Synthesize overlapping points into clean guidance.
+- Treat publication dates as agent-reported, not independently verified. A library update date is record metadata, not proof that the source content is current.
+- When publication dates are absent, conflicting, or materially old for the question, state that limitation and do not infer current rules.
 - Maintain continuity with recent conversation history when relevant.`;
 
   const userMessage = `Conversation history:\n${historyContext || 'No prior history.'}\n\nQuestion:\n${question}\n\nIntent:\n${intent}\n\nRetrieval scope:\n${retrievalScope}\n\nRetrieved key points:\n${evidence}\n\nSynthesize the answer now. Do not copy labels or raw source lines.`;
@@ -1009,6 +1120,8 @@ export async function askRashi(input: AskRashiInput): Promise<{
     documentTitle: string;
     sourceUrl: string | null;
     sourceType: string;
+    libraryUpdatedAt: string;
+    sourcePublishedAt: string | null;
     insightIndex: number;
     score: number;
     carrierName: string | null;
@@ -1053,6 +1166,8 @@ export async function askRashi(input: AskRashiInput): Promise<{
       documentTitle: citation.title,
       sourceUrl: citation.sourceUrl,
       sourceType: citation.sourceType,
+      libraryUpdatedAt: citation.updatedAt.toISOString(),
+      sourcePublishedAt: citation.sourcePublishedAt?.toISOString() ?? null,
       insightIndex: citation.insightIndex,
       score: Number(citation.similarity.toFixed(4)),
       carrierName: citation.carrierName,
@@ -1064,6 +1179,7 @@ export async function askRashi(input: AskRashiInput): Promise<{
 }
 
 export async function reingestRashiDocument(documentId: string): Promise<{ success: true; totalInsightsProcessed: number }> {
+  await assertRegularRashiSource(documentId);
   const document = await prisma.knowledgeDocument.findUnique({
     where: { id: documentId },
     select: {

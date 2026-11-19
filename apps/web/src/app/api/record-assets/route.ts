@@ -21,7 +21,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const scope = await resolveRecordScope(supabase, targetOf(request));
     const page = Number(request.nextUrl.searchParams.get('page') ?? '0');
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const scope = await resolveRecordScope(supabase, targetOf(request));
     const body = await workspaceBody(request);
@@ -74,7 +74,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const scope = await resolveRecordScope(supabase, targetOf(request));
     const body = await workspaceBody(request);

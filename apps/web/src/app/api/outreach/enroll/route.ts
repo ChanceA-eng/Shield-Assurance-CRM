@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
-import { requireApiSession } from '../../../../lib/api-auth';
+import { requireApiSession, getApiSession } from '../../../../lib/api-auth';
+import { workspaceApiError } from '../../../../lib/workspace-api';
 import { enrollLead } from '../../../../lib/outreach-engine';
 
 /** Returns the live enrollment (if any) for a lead — used by the lead drawer. */
@@ -9,7 +10,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (authError) return authError;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const leadId = request.nextUrl.searchParams.get('lead_id')?.trim();
   if (!leadId) return NextResponse.json({ message: 'lead_id is required.' }, { status: 400 });
@@ -27,17 +28,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
 /** Enrolls a lead into the email sequence and drafts step 1 immediately. */
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const payload = (await request.json().catch(() => ({}))) as { lead_id?: string };
   const leadId = payload.lead_id?.trim();
   if (!leadId) return NextResponse.json({ message: 'lead_id is required.' }, { status: 400 });
 
-  const result = await enrollLead(supabase, leadId);
+  try {
+  const result = await enrollLead(supabase, leadId, session.user.id);
   if (!result.enrollment) {
     return NextResponse.json({ message: result.message ?? 'Enrollment failed.' }, { status: 409 });
   }
@@ -45,10 +47,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     {
       enrollment: result.enrollment,
       drafted: result.drafted,
-      message: result.drafted
+      message: result.message ?? (result.drafted
         ? 'Enrolled — the first email is waiting in the outbox for your approval.'
-        : 'Enrolled, but the first draft could not be generated yet. Use "Run engine" on the Outreach page to retry.',
+        : 'Enrolled, but the first draft could not be generated yet. Use "Run engine" on the Outreach page to retry.'),
     },
     { status: 201 },
   );
+  } catch (error) { return workspaceApiError(error, 'outreach/enroll'); }
 }

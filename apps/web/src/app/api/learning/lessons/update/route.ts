@@ -62,7 +62,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ lesson });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to update lesson.' },
+      { message: error instanceof Error ? error.message : 'Lesson could not be updated. Please try again.' },
       { status: 500 },
     );
   }

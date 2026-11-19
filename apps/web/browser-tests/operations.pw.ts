@@ -1,4 +1,79 @@
-import { test, expect } from './workspace-fixtures';
+import { test, expect, leadId } from './workspace-fixtures';
+
+test('task titles and lead queue actions open the exact sequence approval without sending', async ({ page, data }) => {
+  const attempt = '168413e9-a6a4-4dff-a8bf-8f8df83dace8';
+  const task = data.tasks[0];
+  task.subject = 'Approve outreach: Leo Example';
+  task.action_category = 'approval';
+  task.action_href = `/outreach?attempt=${attempt}`;
+  task.due_date = new Date(Date.now() - 60000).toISOString();
+  data.outreachPending.push({
+    id: attempt, lead_id: leadId, lead_name: 'Leo Example', step_number: 1, to_email: 'leo@example.invalid',
+    subject: 'Your next step', body: 'Draft awaiting review', cited_signals: ['Commercial auto'],
+    draft_revision: 0, created_at: new Date().toISOString(),
+  });
+
+  await page.goto('/tasks');
+  await page.getByRole('button', { name: task.subject, exact: true }).click();
+  await expect(page).toHaveURL(`/outreach?attempt=${attempt}`);
+  await expect(page.locator(`[id="attempt-${attempt}"]`)).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Approve and send', exact: true })).toBeVisible();
+
+  await page.goto('/leads?view=queue');
+  await page.getByRole('button').filter({ hasText: task.subject }).click();
+  await expect(page).toHaveURL(`/outreach?attempt=${attempt}`);
+  await expect(page.locator(`[id="attempt-${attempt}"]`)).toBeInViewport();
+  expect(data.requests.filter((request) => request.includes('/outbox/'))).toEqual([]);
+});
+
+test('profile task titles open their saved action rather than leaving the agent on the profile', async ({ page, data }) => {
+  const task = data.tasks[0];
+  task.subject = 'Approve outreach: Leo Example';
+  task.action_category = 'approval';
+  task.action_href = '/outreach?attempt=168413e9-a6a4-4dff-a8bf-8f8df83dace8';
+  await page.goto(`/leads?lead=${leadId}`);
+  const drawer = page.getByRole('complementary', { name: 'Lead profile' });
+  await drawer.getByRole('button', { name: /^Tasks \(/ }).click();
+  await drawer.getByRole('link', { name: task.subject, exact: true }).click();
+  await expect(page).toHaveURL(task.action_href);
+});
+
+test('account next actions and task lists both open the saved destination', async ({ page, data }) => {
+  const task = data.tasks[0];
+  task.subject = 'Approve account outreach';
+  task.related_type = 'client';
+  task.related_id = data.account.id;
+  task.action_category = 'approval';
+  task.action_href = '/outreach?attempt=168413e9-a6a4-4dff-a8bf-8f8df83dace8';
+  await page.goto(`/clients/${data.account.id}`);
+  await page.getByRole('button').filter({ hasText: task.subject }).click();
+  await expect(page).toHaveURL(task.action_href);
+  await page.goto(`/clients/${data.account.id}?tab=tasks`);
+  await page.getByRole('link', { name: task.subject, exact: true }).click();
+  await expect(page).toHaveURL(task.action_href);
+});
+
+test('ordinary queue tasks still open the profile and Complete and Next follows the next action', async ({ page, data }) => {
+  const first = data.tasks[0];
+  first.due_date = new Date(Date.now() - 120000).toISOString();
+  const action = {
+    ...first, id: '168413e9-a6a4-4dff-a8bf-8f8df83dace9', subject: 'Approve next sequence email',
+    due_date: new Date(Date.now() - 60000).toISOString(),
+    action_href: '/outreach?attempt=168413e9-a6a4-4dff-a8bf-8f8df83dace8',
+    action_category: 'approval' as const,
+  };
+  data.tasks.push(action);
+  await page.goto('/leads?view=queue');
+  await page.getByRole('button').filter({ hasText: first.subject }).click();
+  await expect(page.getByRole('complementary', { name: 'Lead profile' })).toBeVisible();
+  await page.getByRole('button', { name: 'Close workspace', exact: true }).click();
+  await page.getByRole('listitem').filter({ hasText: first.subject })
+    .getByRole('button', { name: 'Complete & Next', exact: true }).click();
+  await expect(page).toHaveURL(action.action_href);
+  expect(data.tasks[0].status).toBe('completed');
+  expect(data.tasks[1].status).toBe('open');
+  expect(data.requests.filter((request) => request.includes('/outbox/'))).toEqual([]);
+});
 
 test('automated message actions use ordinary Tasks assignment and snooze without a separate work screen', async ({ page, data }) => {
   const task = data.tasks[0];
@@ -13,7 +88,7 @@ test('automated message actions use ordinary Tasks assignment and snooze without
   await page.reload();
   await expect(page.getByText('Servicing agent', { exact: true })).toBeVisible();
   await page.getByLabel(`Snooze ${task.subject}`, { exact: true }).selectOption('custom');
-  await page.getByLabel('Snooze until (Arizona time)').fill('2099-12-10T10:30');
+  await page.getByLabel('Snooze until (agency time)').fill('2099-12-10T10:30');
   await page.getByRole('button', { name: 'Save snooze', exact: true }).click();
   await expect.poll(() => task.due_date).toBe('2099-12-10T17:30:00.000Z');
   await page.reload();
@@ -48,15 +123,16 @@ test('Inbox pages all conversations and explicitly loads older messages', async 
   await expect(page.getByText('The recent question', { exact: true })).toBeVisible();
 });
 
-test('automation health distinguishes a partial run from the last successful run', async ({ page }) => {
+test('automation health distinguishes a partial run from the last successful run', async ({ page, settingsOwner }) => {
+  void settingsOwner;
   await page.route('**/api/automation/health', (route) => route.fulfill({ json: { jobs: [{
     job: 'website-intake', last_success_at: '2026-11-01T16:00:00Z',
     latest: { id: 'qa-run', job: 'website-intake', status: 'partial',
       started_at: '2026-11-02T16:00:00Z', finished_at: '2026-11-02T16:01:00Z', error: 'One submission needs retry.' },
   }] } }));
-  await page.goto('/settings');
-  await page.getByText('Intake & automation health', { exact: true }).click();
-  await expect(page.getByText('website intake: partial', { exact: true })).toBeVisible();
+  await page.goto('/settings?tab=automation&section=runs');
+  await expect(page.getByText('Run results', { exact: true })).toBeVisible();
+  await expect(page.getByRole('row', { name: /website intake.*partial/ })).toBeVisible();
   await expect(page.getByText('One submission needs retry.', { exact: true })).toBeVisible();
-  await expect(page.getByText(/Last success:.*2026.*AZ/)).toBeVisible();
+  await expect(page.getByRole('cell').filter({ hasText: 'Nov 1, 2026' })).toBeVisible();
 });

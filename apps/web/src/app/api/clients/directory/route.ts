@@ -10,7 +10,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const authError = await requireApiSession(request);
   if (authError) return authError;
   const db = getSupabaseServerClient();
-  if (!db) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const page = Number(request.nextUrl.searchParams.get('page') ?? '0');
     const filter = request.nextUrl.searchParams.get('filter') ?? 'all';

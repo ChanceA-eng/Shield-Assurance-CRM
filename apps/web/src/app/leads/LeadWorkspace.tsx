@@ -1,6 +1,12 @@
 'use client';
 
+import AgentSenderBadge from '../../components/crm/AgentSenderBadge';
+import { useEmailDocument } from '../../hooks/useEmailDocument';
+import IntelligenceDossierPanel from '../../components/crm/IntelligenceDossierPanel';
+import { useUnsavedChanges, useWorkspaceNavigation } from '../../context/WorkspaceNavigationContext';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
 import { Landmark, Mail, Phone, Send, Sparkles, X } from 'lucide-react';
 import type { FmcsaCandidate, FmcsaRecord, OshaRecord } from '../../lib/enrichment';
 import { LEAD_STATUS_LABELS, type LeadStatus } from '../../lib/lead-pipeline';
@@ -13,8 +19,23 @@ import { workspaceFetch } from '../../lib/workspace-fetch';
 import { MESSAGES_READ_EVENT } from '../../context/NotificationContext';
 import { unreadInboundIds } from '../../lib/conversations';
 import { markMessagesRead, messageStatusLabel, readErrorMessage } from '../../lib/message-read';
+import EmailOpenStatus from '../../components/crm/EmailOpenStatus';
+import { useEmailReceipts } from '../../lib/use-email-receipts';
+import { receiptForMessage } from '../../lib/message-receipts';
+import { watchConversationUpdates } from '../../lib/conversation-updates';
+import LeadScheduleSend from '../../components/crm/LeadScheduleSend';
 import { readIntakeSections } from '../../lib/agent-lead-intake';
-import { OUTREACH_TEMPLATES, isOutreachTemplate } from '@crm/shared';
+import { OUTREACH_TEMPLATES, isOutreachTemplate, readRenewalEvidence, renewalEvidenceLabel } from '@crm/shared';
+import SalesTemplatePicker, { type SelectedSalesTemplate } from '../../components/crm/SalesTemplatePicker';
+import SalesSequences from '../../components/crm/SalesSequences';
+import MessageComposer, { composerDraftClass, composerSendClass } from '../../components/crm/MessageComposer';
+import ConversationMessage from '../../components/crm/ConversationMessage';
+import ConversationHistory from '../../components/crm/ConversationHistory';
+import ConversationAppointment from '../../components/crm/ConversationAppointment';
+import ConversationReplyControl from '../../components/crm/ConversationReplyControl';
+import ContactPreferenceControl from '../../components/crm/ContactPreferenceControl';
+import ProspectingCadence from '../../components/crm/ProspectingCadence';
+import IntakeRequestDialog from '../../components/crm/IntakeRequestDialog';
 
 export interface WorkspaceLead {
   id: string;
@@ -36,6 +57,7 @@ interface LeadWorkspaceProps {
   onClose: () => void;
   /** Called after any change that affects lists outside the drawer (tasks, premium, notes). */
   onChanged: () => void;
+  onIntakeRequest?: () => void;
 }
 
 interface ConversationItem {
@@ -48,13 +70,6 @@ interface ConversationItem {
   automation_type?: string | null;
   read_at?: string | null;
   metadata?: Record<string, unknown> | null;
-}
-
-interface ProfileRenewal {
-  type?: string;
-  date?: string;
-  carrier?: string | null;
-  broker?: string | null;
 }
 
 interface ProfileContact {
@@ -176,12 +191,14 @@ function EnrichmentSections({ profile }: { profile: Record<string, unknown> }): 
     <>
       {fmcsa ? (
         <ProfileSection title="DOT Safety Record (FMCSA)">
+          <Field label="Match" value={fmcsa.match_method === 'agent_selected_dot'
+            ? 'Agent-selected DOT; verify business identity' : 'Name match not confirmed; verify business identity'} />
           <Field label="DOT number" value={fmcsa.dot_number} />
           <Field label="Legal name" value={fmcsa.dba_name ? `${fmcsa.legal_name} (DBA ${fmcsa.dba_name})` : fmcsa.legal_name} />
           <Field label="Operating status" value={fmcsa.operating_status} />
           <Field
             label="Safety rating"
-            value={fmcsa.safety_rating ? [fmcsa.safety_rating, fmcsa.safety_rating_date].filter(Boolean).join(' · ') : 'None issued'}
+            value={fmcsa.safety_rating ? [fmcsa.safety_rating, fmcsa.safety_rating_date].filter(Boolean).join(' · ') : 'Not reported'}
           />
           <Field label="Power units" value={fmcsa.power_units} />
           <Field label="Drivers" value={fmcsa.drivers} />
@@ -190,7 +207,7 @@ function EnrichmentSections({ profile }: { profile: Record<string, unknown> }): 
           {fmcsa.crashes_total !== null ? (
             <Field
               label="Crashes (24 mo)"
-              value={`${fmcsa.crashes_total} total · ${fmcsa.crashes_fatal ?? 0} fatal · ${fmcsa.crashes_injury ?? 0} injury · ${fmcsa.crashes_tow ?? 0} tow-away`}
+              value={`${fmcsa.crashes_total} total · ${fmcsa.crashes_fatal ?? 'Unknown'} fatal · ${fmcsa.crashes_injury ?? 'Unknown'} injury · ${fmcsa.crashes_tow ?? 'Unknown'} tow-away`}
             />
           ) : null}
           <Field label="Inspections (24 mo)" value={fmcsa.inspections_total} />
@@ -233,6 +250,7 @@ function EnrichmentSections({ profile }: { profile: Record<string, unknown> }): 
             </>
           )}
           <Field label="Retrieved" value={prettyDateTime(osha.fetched_at)} />
+          <Field label="Match" value="Name search; establishment identity not confirmed" />
         </ProfileSection>
       ) : null}
     </>
@@ -246,7 +264,9 @@ function StructuredProfile({ profile }: { profile: Record<string, unknown> }): J
   if (kind === 'commercial') {
     const company = (profile.company ?? {}) as Record<string, unknown>;
     const contacts = Array.isArray(profile.contacts) ? (profile.contacts as ProfileContact[]) : [];
-    const renewals = Array.isArray(profile.renewals) ? (profile.renewals as ProfileRenewal[]) : [];
+    const renewals = readRenewalEvidence(profile.renewals);
+    const invalidRenewalFields = Array.isArray(profile.invalid_renewal_fields)
+      ? profile.invalid_renewal_fields.filter((field): field is string => typeof field === 'string') : [];
     const risks = Array.isArray(profile.risk_signals) ? (profile.risk_signals as string[]) : [];
     const contractAwards = Array.isArray(profile.contract_awards) ? (profile.contract_awards as string[]) : [];
     const workersComp = (profile.workers_comp ?? {}) as CoverageLine;
@@ -270,6 +290,9 @@ function StructuredProfile({ profile }: { profile: Record<string, unknown> }): J
 
     return (
       <div className="space-y-4">
+        {invalidRenewalFields.length ? (
+          <p className="text-xs text-cui-danger">Review invalid source dates: {invalidRenewalFields.join(', ')}. These dates were excluded from renewal tasks.</p>
+        ) : null}
         <ProfileSection title="Company">
           <Field label="Industry" value={company.industry} />
           <Field label="NAICS" value={company.naics} />
@@ -302,7 +325,7 @@ function StructuredProfile({ profile }: { profile: Record<string, unknown> }): J
               <div key={`${renewal.type}-${index}`} className="flex items-center justify-between gap-2 text-sm">
                 <span className="font-semibold text-cui-text">{renewal.type}</span>
                 <span className="text-cui-muted">
-                  {renewal.date}
+                  {renewalEvidenceLabel(renewal)}
                   {renewal.carrier ? ` · ${renewal.carrier}` : ''}
                 </span>
               </div>
@@ -310,14 +333,14 @@ function StructuredProfile({ profile }: { profile: Record<string, unknown> }): J
           </ProfileSection>
         ) : null}
 
-        <CoverageSection title="Workers Comp" line={workersComp} />
-        <CoverageSection title="Pension" line={pension} />
-        <CoverageSection title="Benefits" line={benefits} />
+        <CoverageSection title="Workers Comp (vendor reported)" line={workersComp} />
+        <CoverageSection title="Pension (vendor reported)" line={pension} />
+        <CoverageSection title="Benefits (vendor reported)" line={benefits} />
 
         {liability.gl_xdate || liability.commercial_auto_xdate || liability.fidelity_bond ? (
           <ProfileSection title="Liability">
-            <Field label="GL X-date (predicted)" value={liability.gl_xdate} />
-            <Field label="Commercial Auto X-date (predicted)" value={liability.commercial_auto_xdate} />
+            <Field label="GL renewal month (predicted)" value={typeof liability.gl_xdate === 'string' ? liability.gl_xdate.slice(0, 7) : null} />
+            <Field label="Commercial Auto renewal month (predicted)" value={typeof liability.commercial_auto_xdate === 'string' ? liability.commercial_auto_xdate.slice(0, 7) : null} />
             <Field label="Fidelity bond" value={money(liability.fidelity_bond)} />
           </ProfileSection>
         ) : null}
@@ -822,14 +845,19 @@ function statusBadgeTone(status: string): string {
   return 'bg-cui-info/15 text-cui-info';
 }
 
-export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }: LeadWorkspaceProps): JSX.Element {
+export default function LeadWorkspace({ lead: initialLead, onClose, onChanged, onIntakeRequest }: LeadWorkspaceProps): JSX.Element {
+  const [showIntake, setShowIntake] = useState(false);
+  const { navigate, confirmDiscard } = useWorkspaceNavigation();
+  const closeWorkspace = (): void => { if (confirmDiscard()) onClose(); };
   const [lead, setLead] = useState(initialLead);
+  const [doNotContact, setDoNotContact] = useState(true);
   const [tab, setTab] = useState<DrawerTab>('overview');
   const [visitedTabs, setVisitedTabs] = useState<Set<DrawerTab>>(() => new Set(['overview']));
   useEffect(() => { setVisitedTabs((previous) => previous.has(tab) ? previous : new Set([...previous, tab])); }, [tab]);
   const [error, setError] = useState<string | null>(null);
 
-  // Quick edit: premium + contact info
+  const [isEditing, setIsEditing] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [premiumDraft, setPremiumDraft] = useState<string>(() => {
     const value = toNumber(lead.estimated_premium);
     return value > 0 ? String(value) : '';
@@ -838,11 +866,9 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
   const [addressDraft, setAddressDraft] = useState<string>(lead.address ?? '');
   const [phoneDraft, setPhoneDraft] = useState<string>(lead.phone ?? '');
   const [emailDraft, setEmailDraft] = useState<string>(lead.email ?? '');
-  const [isSavingPremium, setIsSavingPremium] = useState(false);
+  const [isSavingLead, setIsSavingLead] = useState(false);
 
   const [openTaskCount, setOpenTaskCount] = useState(0);
-  const [compose, setCompose] = useState<{ kind: 'note' | 'reminder'; token: number }>();
-  const [assetComposeToken, setAssetComposeToken] = useState(0);
   const [recordRefreshToken, setRecordRefreshToken] = useState(0);
   const [intakeIds, setIntakeIds] = useState<string[]>([]);
 
@@ -856,13 +882,31 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
   const [conversationNotice, setConversationNotice] = useState<string | null>(null);
   const [subjectDraft, setSubjectDraft] = useState('');
   const [bodyDraft, setBodyDraft] = useState('');
+  const { bodyDocument, setBodyDocument } = useEmailDocument(bodyDraft);
+  const [emailProvider, setEmailProvider] = useState<'default' | 'gmail'>('default');
+  const [replyId, setReplyId] = useState('');
+  useEffect(() => { setReplyId(''); }, [lead.id, emailProvider]);
   const [isSending, setIsSending] = useState(false);
   const [isDrafting, setIsDrafting] = useState(false);
+  const sendRequest = useRef<string | null>(null);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
   const [citedSignals, setCitedSignals] = useState<string[]>([]);
+  const [includeDossierInAiDraft, setIncludeDossierInAiDraft] = useState(false);
+  const [draftDossierFacts, setDraftDossierFacts] = useState<string[]>([]);
+  const [draftRequestedDossier, setDraftRequestedDossier] = useState(false);
   const [draftTemplate, setDraftTemplate] = useState('');
+  const [salesTemplate, setSalesTemplate] = useState<SelectedSalesTemplate | null>(null);
+  useUnsavedChanges(Boolean(subjectDraft || bodyDraft));
+  const { confirmDiscard: confirmEditDiscard } = useUnsavedChanges(isEditing && (nameDraft !== (lead.full_name ?? '')
+    || addressDraft !== (lead.address ?? '') || phoneDraft !== (lead.phone ?? '') || emailDraft !== (lead.email ?? '')
+    || premiumDraft !== (toNumber(lead.estimated_premium) > 0 ? String(toNumber(lead.estimated_premium)) : '')));
 
   // Pre-call talking points (Overview tab)
   const [talkingPoints, setTalkingPoints] = useState<string[] | null>(null);
+  const [talkingPointCitations, setTalkingPointCitations] = useState<string[]>([]);
+  const [includeDossierInTalkingPoints, setIncludeDossierInTalkingPoints] = useState(false);
+  const [talkingPointsDossierRequested, setTalkingPointsDossierRequested] = useState(false);
+  const [talkingPointsDossierFacts, setTalkingPointsDossierFacts] = useState<string[]>([]);
   const [isLoadingPoints, setIsLoadingPoints] = useState(false);
 
   // Public-records enrichment (Overview tab)
@@ -968,10 +1012,11 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
   }, []);
 
   const conversationRequest = useRef(0);
+  const emailReceipts = useEmailReceipts(lead.email, tab === 'conversation');
   /** Loads the thread; inbound messages are marked read only after a successful load while the tab is shown. */
-  const loadConversation = useCallback(async (options: { markRead: boolean; offset?: number }): Promise<void> => {
+  const loadConversation = useCallback(async (options: { markRead: boolean; offset?: number; silent?: boolean }): Promise<void> => {
     const requestId = ++conversationRequest.current;
-    setIsLoadingConversation(true);
+    if (!options.silent) setIsLoadingConversation(true);
     try {
       const res = await fetch(`/api/leads/${encodeURIComponent(lead.id)}/conversation?offset=${options.offset ?? 0}`, { cache: 'no-store' });
       if (requestId !== conversationRequest.current) return;
@@ -982,8 +1027,9 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
       const payload = (await res.json()) as { clientId: string | null; items: ConversationItem[]; nextOffset?: number | null };
       if (requestId !== conversationRequest.current) return;
       setClientId(payload.clientId);
-      setConversation((current) => [...new Map([...(options.offset ? current : []), ...payload.items].map((item) => [item.id, item])).values()]);
-      setConversationNext(payload.nextOffset ?? null);
+      setConversation((current) => [...new Map([...(options.offset || options.silent ? current : []), ...payload.items].map((item) => [item.id, item])).values()]
+        .sort((a, b) => new Date(a.sent_at ?? 0).getTime() - new Date(b.sent_at ?? 0).getTime() || a.id.localeCompare(b.id)));
+      if (!options.silent) setConversationNext(payload.nextOffset ?? null);
       setHasLoadedConversation(true);
       setConversationError(null);
 
@@ -1012,9 +1058,30 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
     void loadConversation({ markRead: true });
   }, [tab, loadConversation, recordRefreshToken]);
 
-  const savePremium = async (): Promise<void> => {
-    setIsSavingPremium(true);
-    setError(null);
+  useEffect(() => {
+    if (tab !== 'conversation') return;
+    return watchConversationUpdates(() => loadConversation({ markRead: true, silent: true }));
+  }, [tab, loadConversation]);
+
+  const setEditing = (open: boolean): void => {
+    if (isSavingLead) return;
+    if (!open && !confirmEditDiscard()) return;
+    if (open) {
+      setNameDraft(lead.full_name);
+      setPhoneDraft(lead.phone ?? '');
+      setEmailDraft(lead.email ?? '');
+      setAddressDraft(lead.address ?? '');
+      const premium = toNumber(lead.estimated_premium);
+      setPremiumDraft(premium > 0 ? String(premium) : '');
+      setEditError(null);
+    }
+    setIsEditing(open);
+  };
+
+  const saveLeadDetails = async (): Promise<void> => {
+    if (isSavingLead) return;
+    setIsSavingLead(true);
+    setEditError(null);
     try {
       const res = await fetch('/api/leads', {
         method: 'PATCH',
@@ -1030,32 +1097,41 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
       });
       if (!res.ok) {
         const failure = (await res.json()) as { message?: string };
-        setError(failure.message || 'Failed to save changes.');
+        setEditError(failure.message || 'Changes could not be saved. Please try again.');
         return;
       }
       const updated = (await res.json()) as WorkspaceLead;
       setLead(updated);
+      setIsEditing(false);
       onChanged();
     } catch {
-      setError('Failed to save changes.');
+      setEditError('Changes could not be saved. Please try again.');
     } finally {
-      setIsSavingPremium(false);
+      setIsSavingLead(false);
     }
   };
 
   const draftWithAi = async (): Promise<void> => {
     setIsDrafting(true);
     setError(null);
+    setDraftRequestedDossier(false);
     try {
       const res = await fetch(`/api/leads/${encodeURIComponent(lead.id)}/draft-outreach`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'draft', instruction: bodyDraft.trim() || undefined, template: draftTemplate || undefined }),
+        body: JSON.stringify({
+          mode: 'draft',
+          instruction: bodyDraft.trim() || undefined,
+          template: draftTemplate || undefined,
+          include_dossier: includeDossierInAiDraft,
+        }),
       });
       const payload = (await res.json().catch(() => ({}))) as {
         subject?: string;
         body?: string;
         cited_signals?: string[];
+        dossier_requested?: boolean;
+        dossier_facts_included?: string[];
         message?: string;
       };
       if (!res.ok || !payload.body) {
@@ -1064,7 +1140,11 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
       }
       setSubjectDraft(payload.subject ?? '');
       setBodyDraft(payload.body);
+      setSalesTemplate(null);
+      sendRequest.current = null;
       setCitedSignals(payload.cited_signals ?? []);
+      setDraftRequestedDossier(payload.dossier_requested === true);
+      setDraftDossierFacts(payload.dossier_facts_included ?? []);
     } catch {
       setError('Drafting is unavailable right now.');
     } finally {
@@ -1075,18 +1155,28 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
   const loadTalkingPoints = async (): Promise<void> => {
     setIsLoadingPoints(true);
     setError(null);
+    setTalkingPointsDossierRequested(false);
     try {
       const res = await fetch(`/api/leads/${encodeURIComponent(lead.id)}/draft-outreach`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'talking_points' }),
+        body: JSON.stringify({ mode: 'talking_points', include_dossier: includeDossierInTalkingPoints }),
       });
-      const payload = (await res.json().catch(() => ({}))) as { points?: string[]; message?: string };
+      const payload = (await res.json().catch(() => ({}))) as {
+        points?: string[];
+        cited_signals?: string[];
+        dossier_requested?: boolean;
+        dossier_facts_included?: string[];
+        message?: string;
+      };
       if (!res.ok || !Array.isArray(payload.points)) {
         setError(payload.message ?? 'Talking points are unavailable right now.');
         return;
       }
       setTalkingPoints(payload.points);
+      setTalkingPointCitations(payload.cited_signals ?? []);
+      setTalkingPointsDossierRequested(payload.dossier_requested === true);
+      setTalkingPointsDossierFacts(payload.dossier_facts_included ?? []);
     } catch {
       setError('Talking points are unavailable right now.');
     } finally {
@@ -1113,11 +1203,16 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
         body: JSON.stringify({
           lead_id: lead.id,
           client_id: clientId ?? undefined,
+          request_id: sendRequest.current ?? (sendRequest.current = crypto.randomUUID()),
           channel: 'email',
           direction: 'outbound',
           subject: subjectDraft.trim() || 'Message from Shield Assurance',
           body,
           automation_type: 'manual',
+          ...(emailProvider === 'gmail' ? { email_provider: 'gmail' as const } : {}),
+          sales_template: salesTemplate,
+          ...(bodyDocument ? { body_document: bodyDocument } : {}),
+          ...(replyId ? { reply_to_message_id: replyId } : {}),
           to: lead.email,
         }),
       });
@@ -1128,8 +1223,11 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
       }
 
       setBodyDraft('');
+      setReplyId('');
+      setSalesTemplate(null);
+      sendRequest.current = null;
       setSubjectDraft('');
-      setConversationNotice('Email accepted by the provider for delivery.');
+      setConversationNotice(null);
       await loadConversation({ markRead: false });
       onChanged();
     } catch {
@@ -1192,11 +1290,12 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
   const requestContext = fullPayload && isRecord(fullPayload._request) ? fullPayload._request : null;
 
   return (
-    <div className="fixed inset-0 z-30 flex justify-end bg-black/40">
-      <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
-      <aside className="relative flex h-full w-full max-w-xl flex-col bg-white shadow-panel">
+    <Dialog.Root open={isEditing} onOpenChange={setEditing}>
+    <div className="fixed inset-0 z-[90] flex justify-end bg-black/40">
+      <div className="absolute inset-0" onClick={closeWorkspace} aria-hidden="true" />
+      <aside aria-label="Lead profile" className={`relative flex h-full min-w-0 w-full max-w-xl flex-col bg-white shadow-panel ${tab === 'conversation' ? 'overflow-hidden' : 'overflow-y-auto overscroll-contain'}`}>
         {/* Header */}
-        <div className="shrink-0 border-b border-cui-border/60 px-4 py-3">
+        <div data-lead-profile-header className="shrink-0 border-b border-slate-700 bg-slate-900 px-3 py-2 [&_h2]:text-white [&_p]:text-slate-300">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -1204,96 +1303,44 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
                 <span className={`rounded px-2 py-0.5 text-[11px] font-bold uppercase ${statusBadgeTone(lead.status)}`}>
                   {LEAD_STATUS_LABELS[lead.status as LeadStatus] ?? lead.status}
                 </span>
+                {fullPayload?.questionnaire_review === 'needs_review' ? <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900">Needs review</span> : null}
               </div>
               <p className="mt-0.5 truncate text-xs text-cui-muted">
                 {lead.line_of_business || 'No line of business'} · {lead.source || 'unknown source'}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
+              <Dialog.Trigger asChild>
+                <button type="button" className="rounded border border-slate-600 px-2 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800 hover:text-white">
+                  Edit
+                </button>
+              </Dialog.Trigger>
+              <button type="button" onClick={onIntakeRequest ?? (() => setShowIntake(true))}
+                className="rounded border border-slate-600 px-2 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800 hover:text-white">
+                Intake requests
+              </button>
               {clientId && ['new', 'contacted', 'quoted'].includes(lead.status) ? (
-                <button type="button" onClick={() => window.location.assign(`/policies?account_id=${clientId}&lead_id=${lead.id}`)}
+                <button type="button" onClick={() => navigate(`/policies?account_id=${clientId}&lead_id=${lead.id}`)}
                   className="rounded border border-cui-primary px-2 py-1.5 text-xs font-semibold text-cui-primary">
                   Record policy
                 </button>
               ) : null}
-              {lead.phone ? (
-                <a href={`tel:${lead.phone}`} className="rounded border border-cui-border/60 p-1.5 text-cui-muted hover:bg-cui-light hover:text-cui-primary" title={`Call ${lead.phone}`}>
+              {lead.phone && !doNotContact ? (
+                <a href={`tel:${lead.phone}`} className="rounded border border-slate-600 p-1.5 text-slate-300 hover:bg-slate-800 hover:text-white" title={`Call ${lead.phone}`}>
                   <Phone className="h-4 w-4" />
                 </a>
               ) : null}
-              {lead.email ? (
-                <a href={`mailto:${lead.email}`} className="rounded border border-cui-border/60 p-1.5 text-cui-muted hover:bg-cui-light hover:text-cui-primary" title={`Email ${lead.email}`}>
+              {lead.email && !doNotContact ? (
+                <a href={`mailto:${lead.email}`} className="rounded border border-slate-600 p-1.5 text-slate-300 hover:bg-slate-800 hover:text-white" title={`Email ${lead.email}`}>
                   <Mail className="h-4 w-4" />
                 </a>
               ) : null}
-              <button type="button" onClick={onClose} className="rounded border border-cui-border/60 p-1.5 text-cui-muted hover:bg-cui-light hover:text-cui-text" aria-label="Close workspace">
+              <button type="button" onClick={closeWorkspace} className="rounded border border-slate-600 p-1.5 text-slate-300 hover:bg-slate-800 hover:text-white" aria-label="Close workspace">
                 <X className="h-4 w-4" />
               </button>
             </div>
           </div>
 
-          {/* Quick edit: identity + contact + premium (fix anything a client corrects on a call) */}
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <input
-              type="text"
-              value={nameDraft}
-              onChange={(event) => setNameDraft(event.target.value)}
-              placeholder="Name"
-              title="Legal or preferred name — edit if the client corrects it"
-              className="w-48 rounded border border-cui-border px-2 py-1 text-sm"
-            />
-            <input
-              type="tel"
-              value={phoneDraft}
-              onChange={(event) => setPhoneDraft(event.target.value)}
-              placeholder="Phone"
-              className="w-36 rounded border border-cui-border px-2 py-1 text-sm"
-            />
-            <input
-              type="email"
-              value={emailDraft}
-              onChange={(event) => setEmailDraft(event.target.value)}
-              placeholder="Email"
-              className="w-52 rounded border border-cui-border px-2 py-1 text-sm"
-            />
-            <input
-              type="text"
-              value={addressDraft}
-              onChange={(event) => setAddressDraft(event.target.value)}
-              placeholder="Address"
-              title="Street, city, state, ZIP"
-              className="w-72 min-w-48 flex-1 rounded border border-cui-border px-2 py-1 text-sm"
-            />
-            <div className="flex items-center gap-1">
-              <span className="text-xs font-semibold text-cui-muted">$</span>
-              <input
-                type="number"
-                min="0"
-                step="50"
-                value={premiumDraft}
-                onChange={(event) => setPremiumDraft(event.target.value)}
-                placeholder="Premium"
-                className="w-24 rounded border border-cui-border px-2 py-1 text-sm"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => void savePremium()}
-              disabled={isSavingPremium}
-              className="rounded bg-cui-primary px-2.5 py-1 text-xs font-semibold text-white hover:brightness-95 disabled:opacity-60"
-            >
-              {isSavingPremium ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" onClick={() => { setTab('notes'); setCompose((value) => ({ kind: 'note', token: (value?.token ?? 0) + 1 })); }}
-              className="rounded border border-cui-primary px-2.5 py-1 text-xs font-semibold text-cui-primary">Add note</button>
-            <button type="button" onClick={() => { setTab('tasks'); setCompose((value) => ({ kind: 'reminder', token: (value?.token ?? 0) + 1 })); }}
-              className="rounded border border-cui-primary px-2.5 py-1 text-xs font-semibold text-cui-primary">Add reminder</button>
-            <button type="button" onClick={() => { setTab('assets'); setAssetComposeToken((value) => value + 1); }}
-              className="rounded border border-cui-primary px-2.5 py-1 text-xs font-semibold text-cui-primary">Add asset</button>
-          </div>
           <div className="mt-3 flex flex-wrap gap-1">
             {(
               [
@@ -1308,9 +1355,10 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
               <button
                 key={key}
                 type="button"
+                aria-pressed={tab === key}
                 onClick={() => setTab(key)}
                 className={`rounded-t border-b-2 px-3 py-1.5 text-sm font-semibold transition ${
-                  tab === key ? 'border-cui-primary text-cui-primary' : 'border-transparent text-cui-muted hover:text-cui-text'
+                  tab === key ? 'border-cui-primary bg-white/10 text-white' : 'border-transparent text-slate-300 hover:bg-white/5 hover:text-white'
                 }`}
               >
                 {label}
@@ -1326,8 +1374,8 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
         ) : null}
 
         {/* Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div hidden={tab !== 'quotes'}>{visitedTabs.has('quotes') ? <QuoteOptionsPanel key={lead.id} target={{ type: 'lead', id: lead.id }} refreshToken={clientId} /> : null}</div>
+        <div className={tab === 'conversation' ? 'flex min-h-0 flex-1 flex-col' : 'shrink-0 flex-1 p-4'}>
+          <div hidden={tab !== 'quotes'}>{visitedTabs.has('quotes') ? <QuoteOptionsPanel key={lead.id} target={{ type: 'lead', id: lead.id }} refreshToken={clientId} contact={lead} accountId={clientId} /> : null}</div>
           {tab === 'overview' ? (
             <div className="space-y-4">
               <div className="grid gap-2 text-sm md:grid-cols-2">
@@ -1338,6 +1386,14 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
                 <div><span className="font-semibold text-cui-muted">Account:</span> {clientId ? 'Linked' : 'Not linked'}</div>
               </div>
               <LeadAccountLink leadId={lead.id} onLinked={onAccountLinked} />
+              <ContactPreferenceControl type="lead" id={lead.id} onValue={setDoNotContact} onSaved={onChanged} />
+              <ProspectingCadence
+                key={`prospecting:${lead.id}`}
+                leadId={lead.id}
+                eligible={['new', 'contacted'].includes(lead.status)}
+                blocked={doNotContact}
+                onChanged={onChanged}
+              />
 
               {/* Pre-call prep */}
               <div className="rounded border border-cui-primary/30">
@@ -1355,12 +1411,32 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
                     {isLoadingPoints ? 'Preparing…' : talkingPoints ? 'Refresh' : 'Generate talking points'}
                   </button>
                 </div>
+                <div className="space-y-1 px-3 pt-2">
+                  <label className="flex items-start gap-2 text-xs text-cui-muted">
+                    <input type="checkbox" checked={includeDossierInTalkingPoints}
+                      onChange={(event) => setIncludeDossierInTalkingPoints(event.target.checked)} />
+                    <span>Include current confirmed dossier findings in this call prep only</span>
+                  </label>
+                  <p className="text-[11px] text-cui-muted">
+                    Confirmed business findings and their confirmation date are sent to AI only when selected. Internal evidence references stay in the CRM.
+                  </p>
+                  {talkingPointsDossierRequested ? <p role="status" className="text-[11px] text-cui-muted">
+                    {talkingPointsDossierFacts.length > 0
+                      ? `Dossier findings included: ${talkingPointsDossierFacts.join(', ')}`
+                      : 'No current confirmed dossier findings were available; no dossier content was sent.'}
+                  </p> : null}
+                </div>
                 {talkingPoints ? (
-                  <ul className="list-disc space-y-1 py-2 pl-7 pr-3 text-sm text-cui-text">
-                    {talkingPoints.map((point, index) => (
-                      <li key={index}>{point}</li>
-                    ))}
-                  </ul>
+                  <div className="space-y-2 px-3 py-2">
+                    <ul className="list-disc space-y-1 pl-4 text-sm text-cui-text">
+                      {talkingPoints.map((point, index) => (
+                        <li key={index}>{point}</li>
+                      ))}
+                    </ul>
+                    {talkingPointCitations.length > 0 ? <p className="text-[11px] text-cui-muted">
+                      Grounded in: {talkingPointCitations.join(' · ')}
+                    </p> : null}
+                  </div>
                 ) : (
                   <p className="px-3 py-2 text-xs text-cui-muted">
                     Generate conversation starters and risk observations from this lead&rsquo;s profile before you call.
@@ -1410,6 +1486,14 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
               </div>
 
               {structuredProfile ? <StructuredProfile profile={structuredProfile} /> : null}
+              <IntelligenceDossierPanel key={lead.id} target={{ type: 'lead', id: lead.id }} />
+              {isRecord(fullPayload?.import) ? (
+                <ProfileSection title="Imported evidence">
+                  <Field label="Source file" value={fullPayload.import.file_name} />
+                  <Field label="Captured" value={typeof fullPayload.import.observed_at === 'string' ? prettyDateTime(fullPayload.import.observed_at) : 'Legacy import; capture date unknown'} />
+                  <p className="text-xs text-cui-muted">Vendor-reported information. Capture time is not the source reporting date; verify policy timing and entity matches before outreach.</p>
+                </ProfileSection>
+              ) : null}
 
               {/* Public-records enrichment */}
               <div className="rounded border border-cui-border/60">
@@ -1508,7 +1592,8 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
           ) : null}
 
           {tab === 'conversation' ? (
-            <div className="space-y-3">
+            <ConversationHistory key={lead.id} revision={conversation.map((item) => `${item.id}:${item.sent_at}:${item.body}`).join('|')}>
+              {emailReceipts.error ? <p role="alert" className="text-sm text-cui-danger">{emailReceipts.error}</p> : null}
               {conversationError ? (
                 <div role="alert" className="flex items-center gap-2 rounded border border-cui-danger/40 bg-cui-danger/10 px-3 py-1.5 text-sm text-cui-danger">
                   <span className="flex-1">{conversationError}</span>
@@ -1525,44 +1610,74 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
               {conversation.map((item) => {
                 const outbound = (item.direction ?? 'outbound') === 'outbound';
                 return (
-                  <div key={item.id} className={`max-w-[85%] rounded border p-2.5 text-sm ${outbound ? 'ml-auto border-cui-primary/30 bg-cui-primary/5' : 'border-cui-border/60 bg-cui-light/60'}`}>
-                    <div className="mb-1 flex items-center justify-between gap-3 text-[11px] text-cui-muted">
+                  <ConversationMessage key={item.id} messageId={item.id} outbound={outbound} channel={item.channel ?? 'email'} subject={item.subject} body={item.body}
+                    header={<>
                       <span className="font-bold uppercase">{item.channel ?? 'email'} · {messageStatusLabel({ id: item.id, channel: item.channel ?? null, direction: item.direction ?? null, automation_type: item.automation_type ?? null, metadata: item.metadata ?? null })}</span>
                       <span>{prettyDateTime(item.sent_at)}</span>
-                    </div>
-                    {item.subject ? <p className="font-semibold text-cui-text">{item.subject}</p> : null}
-                    <p className="whitespace-pre-wrap text-cui-text">{item.body || '--'}</p>
-                  </div>
+                    </>}>
+                    {outbound && item.channel === 'email' ? <div className="mt-2"><EmailOpenStatus receipt={receiptForMessage(item.metadata, emailReceipts.receipts)}
+                      status={typeof item.metadata?.delivery_status === 'string' ? item.metadata.delivery_status : undefined} /></div> : null}
+                  </ConversationMessage>
                 );
               })}
-            </div>
+            </ConversationHistory>
           ) : null}
 
           <div hidden={tab !== 'assets'}>
-            {visitedTabs.has('assets') ? <RecordAssetsPanel target={{ type: 'lead', id: lead.id }} composeToken={assetComposeToken} refreshToken={recordRefreshToken} onChanged={onChanged} /> : null}
+            {visitedTabs.has('assets') ? <RecordAssetsPanel target={{ type: 'lead', id: lead.id }} refreshToken={recordRefreshToken} onChanged={onChanged} /> : null}
           </div>
           <div hidden={tab !== 'tasks' && tab !== 'notes'}>
             <RecordWorkPanel target={{ type: 'lead', id: lead.id }} name={lead.full_name} section={tab === 'notes' ? 'notes' : 'tasks'}
-              compose={compose} refreshToken={recordRefreshToken} onChanged={onChanged} onTaskCount={setOpenTaskCount} />
+              refreshToken={recordRefreshToken} onChanged={onChanged} onTaskCount={setOpenTaskCount} />
           </div>
         </div>
 
-        {/* Composer pinned to bottom on Conversation tab */}
         {tab === 'conversation' ? (
           <div className="shrink-0 border-t border-cui-border/60 p-3">
+            <MessageComposer subject={subjectDraft} body={bodyDraft} onSubjectChange={setSubjectDraft} onBodyChange={setBodyDraft}
+              bodyDocument={bodyDocument} onDocumentChange={setBodyDocument}
+              emailDesign={salesTemplate?.email_design}
+              disabled={scheduleBusy || isSending || isDrafting} sender={<AgentSenderBadge />}
+              draftFeedback={error ? <p role="alert" className="text-xs text-cui-danger">{error}</p> : null}
+              emailProvider={emailProvider} onEmailProviderChange={setEmailProvider}
+              reply={emailProvider === 'gmail' ? <ConversationReplyControl key={`reply:${lead.id}`} target={{ type: 'lead', id: lead.id }}
+                value={replyId} disabled={isSending || scheduleBusy || isDrafting} hasDraft={Boolean(bodyDraft.trim())}
+                onBusy={setScheduleBusy}
+                onChange={(id, subject) => { setReplyId(id); if (subject) setSubjectDraft(subject); sendRequest.current = null; }}
+                onDraft={(body) => { setBodyDraft(body); setSalesTemplate(null); sendRequest.current = null; }} /> : null}
+              tools={<ConversationAppointment key={`appointment:${lead.id}`} target={{ type: 'lead', id: lead.id }} name={lead.full_name}
+                disabled={isSending || scheduleBusy || isDrafting} />}
+              bodyPlaceholder={`Email ${lead.email ?? '(no email on file)'} — or type an instruction and use Draft`}
+              templates={<SalesTemplatePicker key={`sales:${lead.id}`} conversation={`lead:${lead.id}`}
+              appliedTemplate={salesTemplate} onRemove={() => {
+                setSubjectDraft(''); setBodyDraft(''); setSalesTemplate(null); sendRequest.current = null;
+                setCitedSignals([]); setDraftRequestedDossier(false); setDraftDossierFacts([]);
+              }}
+              disabled={scheduleBusy || isSending || isDrafting} hasDraft={Boolean(bodyDraft.trim())} onBusy={setScheduleBusy}
+              onApply={(draft) => { setSubjectDraft(draft.subject); setBodyDraft(draft.body); setSalesTemplate(draft.template); sendRequest.current = null; }} />}
+              draftAction={<>
+                <button type="button" onClick={() => void draftWithAi()} disabled={isDrafting || scheduleBusy || isSending}
+                  title="Draft a personalized email from this lead's profile data" className={composerDraftClass}>
+                  <Sparkles className="h-3.5 w-3.5" />{isDrafting ? 'Drafting…' : 'Draft'}
+                </button>
+              </>}
+              actions={<>
+                <button type="button" onClick={() => void sendMessage()}
+                  disabled={isSending || scheduleBusy || isDrafting || !bodyDraft.trim() || !lead.email} className={composerSendClass}>
+                  <Send className="h-3.5 w-3.5" />{isSending ? 'Sending…' : 'Send'}
+                </button>
+              </>}
+              schedule={<LeadScheduleSend key={`schedule:${lead.id}`} leadId={lead.id} subject={subjectDraft} body={bodyDraft} bodyDocument={bodyDocument}
+                  replySelected={Boolean(replyId)}
+                  template={salesTemplate} emailProvider={emailProvider} disabled={isSending || isDrafting || !lead.email} onBusy={setScheduleBusy}
+                  onScheduled={() => { setBodyDraft(''); setSubjectDraft(''); setSalesTemplate(null); sendRequest.current = null; }} />}
+              footer={<>
+                <SalesSequences key={`sequences:${lead.id}`} leadId={lead.id} />
+              </>}>
             {conversationNotice ? (
               <p role="status" className="mb-2 rounded border border-cui-success/40 bg-cui-success/10 px-2.5 py-1.5 text-xs text-[#2a7a48]">{conversationNotice}</p>
             ) : null}
-            <div className="mb-2 flex items-center gap-2">
-              <span className="rounded bg-cui-light px-2 py-1.5 text-xs font-semibold text-cui-muted" title="Text messages cannot be sent from the CRM yet">Email</span>
-              <input
-                type="text"
-                value={subjectDraft}
-                onChange={(event) => setSubjectDraft(event.target.value)}
-                placeholder="Subject"
-                className="min-w-0 flex-1 rounded border border-cui-border px-2 py-1.5 text-sm"
-              />
-            </div>
+            <fieldset disabled={scheduleBusy || isSending || isDrafting} className="mt-2 space-y-3">
             <label className="mb-2 block text-xs font-semibold text-cui-muted">Email purpose
               <select value={draftTemplate} onChange={(event) => {
                 if (!event.target.value || isOutreachTemplate(event.target.value)) setDraftTemplate(event.target.value);
@@ -1571,44 +1686,79 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged }:
                 {Object.entries(OUTREACH_TEMPLATES).map(([key, template]) => <option key={key} value={key}>{template.label}</option>)}
               </select>
             </label>
+            <label className="mb-1 flex items-start gap-2 text-xs text-cui-muted">
+              <input type="checkbox" checked={includeDossierInAiDraft}
+                onChange={(event) => setIncludeDossierInAiDraft(event.target.checked)} />
+              <span>Include current confirmed dossier findings in this AI draft only</span>
+            </label>
+            <p className="mb-2 text-[11px] text-cui-muted">
+              Confirmed business findings and their confirmation date are sent to AI only when selected. Evidence references stay in the CRM. Review every generated fact before sending.
+            </p>
+            {draftRequestedDossier ? <p role="status" className="mb-2 text-[11px] text-cui-muted">
+              {draftDossierFacts.length > 0
+                ? `Dossier findings included in the most recent draft: ${draftDossierFacts.join(', ')}`
+                : 'No current confirmed dossier findings were available; no dossier content was sent.'}
+            </p> : null}
             {citedSignals.length > 0 ? (
               <p className="mb-2 rounded border border-cui-primary/30 bg-cui-primary/5 px-2.5 py-1.5 text-[11px] text-cui-muted">
                 <span className="font-semibold text-cui-primary">Draft grounded on:</span> {citedSignals.join(' · ')}
               </p>
             ) : null}
-            <div className="flex items-end gap-2">
-              <textarea
-                value={bodyDraft}
-                onChange={(event) => setBodyDraft(event.target.value)}
-                placeholder={`Email ${lead.email ?? '(no email on file)'} — or type an instruction and use Draft`}
-                className="min-h-16 flex-1 rounded border border-cui-border px-3 py-2 text-sm"
-              />
-              <div className="flex flex-col gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => void draftWithAi()}
-                  disabled={isDrafting}
-                  title="Draft a personalized email from this lead's profile data"
-                  className="flex items-center gap-1.5 rounded border border-cui-primary/40 bg-cui-primary/10 px-3 py-2 text-sm font-semibold text-cui-primary hover:bg-cui-primary/20 disabled:opacity-60"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  {isDrafting ? 'Drafting…' : 'Draft'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void sendMessage()}
-                  disabled={isSending || bodyDraft.trim().length === 0 || !lead.email}
-                  className="flex items-center gap-1.5 rounded bg-cui-primary px-3 py-2 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-60"
-                >
-                  <Send className="h-3.5 w-3.5" />
-                  {isSending ? 'Sending…' : 'Send'}
-                </button>
-              </div>
-            </div>
-            <p className="mt-1.5 text-[11px] text-cui-muted">Texts cannot be sent from the CRM yet — call or text from your phone and add a note.</p>
+            </fieldset>
+            </MessageComposer>
           </div>
         ) : null}
       </aside>
     </div>
+    <Dialog.Portal>
+      <Dialog.Overlay className="fixed inset-0 z-[100] bg-slate-950/40" />
+      <Dialog.Content className="fixed left-1/2 top-1/2 z-[100] max-h-[90dvh] w-[min(94vw,30rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded border border-cui-border bg-white text-cui-text shadow-xl">
+        <div className="flex items-center justify-between gap-3 border-b border-cui-border px-4 py-3">
+          <Dialog.Title className="font-semibold">Edit lead</Dialog.Title>
+          <Dialog.Description className="sr-only">Update lead contact details and estimated premium.</Dialog.Description>
+          <Dialog.Close asChild>
+            <button type="button" disabled={isSavingLead} aria-label="Close lead editor" className="rounded p-1 text-cui-muted hover:bg-cui-light disabled:opacity-60">
+              <X className="h-4 w-4" />
+            </button>
+          </Dialog.Close>
+        </div>
+        <form onSubmit={(event) => { event.preventDefault(); void saveLeadDetails(); }} className="p-4">
+          <fieldset disabled={isSavingLead} className="space-y-3">
+            <label className="block text-sm font-semibold">Name
+              <input type="text" required value={nameDraft} onChange={(event) => setNameDraft(event.target.value)}
+                className="mt-1 w-full rounded border border-cui-border px-3 py-2 font-normal" />
+            </label>
+            <label className="block text-sm font-semibold">Phone
+              <input type="tel" value={phoneDraft} onChange={(event) => setPhoneDraft(event.target.value)}
+                className="mt-1 w-full rounded border border-cui-border px-3 py-2 font-normal" />
+            </label>
+            <label className="block text-sm font-semibold">Email
+              <input type="email" value={emailDraft} onChange={(event) => setEmailDraft(event.target.value)}
+                className="mt-1 w-full rounded border border-cui-border px-3 py-2 font-normal" />
+            </label>
+            <label className="block text-sm font-semibold">Address
+              <input type="text" value={addressDraft} onChange={(event) => setAddressDraft(event.target.value)}
+                className="mt-1 w-full rounded border border-cui-border px-3 py-2 font-normal" />
+            </label>
+            <label className="block text-sm font-semibold">Estimated premium ($)
+              <input type="number" min="0" step="0.01" value={premiumDraft} onChange={(event) => setPremiumDraft(event.target.value)}
+                className="mt-1 w-full rounded border border-cui-border px-3 py-2 font-normal" />
+            </label>
+            {editError ? <p role="alert" className="text-sm text-cui-danger">{editError}</p> : null}
+            <div className="flex justify-end gap-2 pt-1">
+              <Dialog.Close asChild>
+                <button type="button" className="rounded border border-cui-border px-3 py-2 text-sm font-semibold">Cancel</button>
+              </Dialog.Close>
+              <button type="submit" className="rounded bg-cui-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
+                {isSavingLead ? 'Saving...' : 'Save changes'}
+              </button>
+            </div>
+          </fieldset>
+        </form>
+      </Dialog.Content>
+    </Dialog.Portal>
+    {showIntake ? <IntakeRequestDialog target={{ type: 'lead', id: lead.id }}
+      onClose={() => setShowIntake(false)} onReviewed={onChanged} /> : null}
+    </Dialog.Root>
   );
 }

@@ -2,17 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 import { DEFAULT_OUTREACH_SENDER, EMPTY_MARKETING_PROFILE, OUTREACH_TEMPLATES, isOutreachTemplate } from '@crm/shared';
-import { buildGrounding, draftOutreach, draftSequenceStep } from './outreach-ai';
+import { buildGrounding, draftOutreach, draftSequenceStep, rewriteOutreach } from './outreach-ai';
 import { outreachQualityIssues } from './outreach-quality';
 import { getMarketingProfile, parseMarketingProfile, parseOutreachSender } from './marketing-profile';
 import { recordOutreachContext } from './lead-outreach-context';
 import { GET, PUT } from '../app/api/outreach/profile/route';
 import { PATCH } from '../app/api/outreach/route';
 import { getSupabaseServerClient } from './supabase-server';
-import { requireApiSession } from './api-auth';
+import { getApiSession, requireApiSession } from './api-auth';
+import { isRecord } from './workspace-validation';
+import { appendAgencySignature, PERSONAL_SIGNATURE, SYSTEM_SIGNATURE } from './agency-signature';
 
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
-vi.mock('./api-auth', () => ({ requireApiSession: vi.fn() }));
+vi.mock('./api-auth', () => ({ requireApiSession: vi.fn(), getApiSession: vi.fn() }));
 
 const leadId = '168413e9-a6a4-4dff-a8bf-8f8df83dace6';
 const clientId = '168413e9-a6a4-4dff-a8bf-8f8df83dace7';
@@ -24,8 +26,11 @@ const profile = {
 const lead = { full_name: 'Leo', marketing_profile: profile, outreach_sender: DEFAULT_OUTREACH_SENDER };
 const body = `Hi Leo,
 
-You mentioned commercial auto and keeping the quote process simple. Before we can work on that request, could you reply with the VIN for the vehicle you want us to review? That will help us focus on the right vehicle without asking you to repeat information you have already shared. We can keep the next step over email as requested.
+Your commercial auto review has a clear constraint: keep the quote process simple. You asked to handle the next step by email, so I will keep the request to that one detail rather than ask you to repeat information already on file.
 
+Could you reply with the VIN for the vehicle you want reviewed? Once I have it, I will confirm what is still needed before we discuss options. If you meant a different vehicle, tell me which one to focus on.
+
+${'-- '}
 Chance
 Shield Assurance`;
 const validDraft = { subject: 'Your commercial auto request', body, cited_signals: ['Stated insurance interests: Commercial auto'] };
@@ -35,6 +40,9 @@ afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(requireApiSession).mockResolvedValue(null);
+  vi.mocked(getApiSession).mockResolvedValue({
+    user: { id: leadId, aud: 'authenticated', created_at: '2026-11-01T00:00:00Z', app_metadata: {}, user_metadata: {} }, error: null,
+  });
 });
 
 describe('contact and sender validation', () => {
@@ -53,6 +61,13 @@ describe('contact and sender validation', () => {
     expect(parseOutreachSender(DEFAULT_OUTREACH_SENDER)).toEqual(DEFAULT_OUTREACH_SENDER);
     expect(() => parseOutreachSender({ ...DEFAULT_OUTREACH_SENDER, name: '' })).toThrow('required');
     expect(() => parseOutreachSender({ ...DEFAULT_OUTREACH_SENDER, signature: null })).toThrow('signature');
+  });
+  it('preserves authored producer signatures across immediate and scheduled delivery', () => {
+    expect(appendAgencySignature(body)).toBe(`${body}\nhttps://www.shield-assurance.com`);
+    const differentProducer = body.replace('Chance\nShield Assurance', 'Taylor\nShield Assurance');
+    expect(appendAgencySignature(differentProducer)).toBe(`${differentProducer}\nhttps://www.shield-assurance.com`);
+    expect(appendAgencySignature('Manually written unsigned email')).toContain(PERSONAL_SIGNATURE);
+    expect(appendAgencySignature(body, 'system')).toContain(SYSTEM_SIGNATURE);
   });
   it('grounds stated needs and the latest conversation without treating preferences as consent', () => {
     const grounding = buildGrounding({ ...lead, recent_conversation: [{
@@ -87,6 +102,49 @@ describe('deterministic quality checks', () => {
     expect(outreachQualityIssues({ subject: 'New', body: `Hi Leo,\nSame opening.\n${words(35)}` },
       [{ subject: 'Old', body: 'Hello Leo,\nSame opening.\nOld content.' }])).toContain('Use a different opening from previous emails.');
   });
+  it('rejects generic copy and citations that are not actually used in the email', () => {
+    const sloppy = {
+      subject: 'Insurance options',
+      body: 'Hello Rosella,\n\nThank you for reaching out regarding UNIVERSITY PLUMBING LLC. Given your focus in the construction industry, I can assist you with tailored coverage that suits your business needs. Please let me know if there are specific coverages you are interested in or if you would like to discuss your options further. Looking forward to your response.',
+    };
+    const issues = outreachQualityIssues(sloppy, [], { min: 35, max: 140 }, {
+      email: true, specificSignals: ['Stated insurance interests: Commercial auto'],
+      citedSignals: ['Stated insurance interests: Commercial auto'],
+    });
+    expect(issues).toContain('Remove generic sales copy. Open with the actual request or a specific profile detail, then explain the relevant next step.');
+    expect(issues).toContain('Structure the email as a greeting, a short relevant explanation, and a separate next-step paragraph.');
+    expect(issues).toContain('Use at least one specific profile detail in the email body, and cite that same detail. A name or broad industry alone is not specific.');
+  });
+  it('accepts a brief introduction followed by the cited detail, but not a buried detail', () => {
+    const signal = 'Source-backed business detail: A fleet record lists 11 power units (reported 2026-11-05).';
+    const context = { email: true, coldFirstTouch: true, specificSignals: [signal], citedSignals: [signal] };
+    const grounded = {
+      subject: 'A question about your fleet',
+      body: `Hi Leo,\n\nI noticed the fleet record lists 11 power units. I can make the review easier to prepare.\n\nWould a short vehicle and driver checklist be useful?`,
+    };
+    const introductionFirst = {
+      ...grounded,
+      body: `Hi Leo,\n\nI'm Chance with Shield Assurance. I noticed your fleet record lists 11 power units.\n\nWould a short vehicle and driver checklist be useful?`,
+    };
+    const inlineGreeting = { ...grounded, body: `Hi Leo, it's Chance with Shield Assurance. I noticed your fleet record lists 11 power units.\n\nWould a checklist be useful?` };
+    const buried = { ...grounded, body: `Hi Leo,\n\nI'm Chance with Shield Assurance. I'd like to introduce myself. Your fleet record lists 11 power units.\n\nWould a checklist be useful?` };
+    expect(outreachQualityIssues(grounded, [], { min: 20, max: 120 }, context)).not.toContain(
+      'For a cold first touch, mention a specific cited business detail near the beginning, after a brief introduction if needed.',
+    );
+    expect(outreachQualityIssues(introductionFirst, [], { min: 20, max: 120 }, context)).not.toContain(
+      'For a cold first touch, mention a specific cited business detail near the beginning, after a brief introduction if needed.',
+    );
+    expect(outreachQualityIssues(inlineGreeting, [], { min: 10, max: 120 }, context)).not.toContain(
+      'For a cold first touch, mention a specific cited business detail near the beginning, after a brief introduction if needed.',
+    );
+    expect(outreachQualityIssues(buried, [], { min: 20, max: 120 }, context)).toContain(
+      'For a cold first touch, mention a specific cited business detail near the beginning, after a brief introduction if needed.',
+    );
+  });
+  it.each(['Before I send a general insurance pitch', 'I can skip anything that is not useful', 'No documents or meeting are needed to reply'])('rejects unnecessary sales phrasing: %s', (phrase) => {
+    const issues = outreachQualityIssues({ subject: 'A question', body: `Hi Leo,\n\n${phrase}.\n\nWould a checklist help?` });
+    expect(issues).toContain('Remove generic sales copy. Open with the actual request or a specific profile detail, then explain the relevant next step.');
+  });
 });
 
 describe('AI generation contract (mocked provider only)', () => {
@@ -108,6 +166,16 @@ describe('AI generation contract (mocked provider only)', () => {
     expect(requests[0].messages[0].content).toContain('supplied signature verbatim');
     expect(requests[0].messages[1].content).toContain('Request VIN by email');
   });
+  it('rewrites edited drafts with instructions but keeps factual grounding and sender checks', async () => {
+    responses = [{ ...validDraft, cited_signals: ['"Stated insurance interests: Commercial auto"'] }];
+    expect(await rewriteOutreach(lead, { subject: 'Edited subject', body: 'My edited draft' }, 'Make it warmer', 2)).toEqual(validDraft);
+    expect(requests[0].messages[1].content).toContain('My edited draft');
+    expect(requests[0].messages[1].content).toContain('Make it warmer');
+    expect(requests[0].messages[1].content).toContain('Stated insurance interests: Commercial auto');
+    expect(requests[0].messages[0].content).toContain('sequence stage (2)');
+    responses = [{ ...validDraft, cited_signals: ['"Invented fact"'] }, { ...validDraft, cited_signals: ['"Invented fact"'] }];
+    await expect(rewriteOutreach(lead, validDraft, 'Add a guarantee', 2)).rejects.toMatchObject({ status: 422 });
+  });
   it('repairs invalid types and rejects invented citations without returning success-shaped output', async () => {
     responses = [{ ...validDraft, body: { text: body } }, validDraft];
     expect(await draftOutreach(lead)).toEqual(validDraft);
@@ -115,13 +183,50 @@ describe('AI generation contract (mocked provider only)', () => {
     expect(requests[1].messages[1].content).toContain('did not pass quality checks');
     responses = [{ ...validDraft, cited_signals: ['Invented fleet of 900 trucks'] }, validDraft];
     expect(await draftOutreach(lead)).toEqual(validDraft);
-    expect(requests[3].messages[1].content).toContain('exact excerpts');
+    expect(requests[3].messages[1].content).toContain('Copy each citation exactly from a contiguous excerpt');
   });
-  it('surfaces persistent quality failure and checks the actual signature', async () => {
-    responses = [{ ...validDraft, body: body.replace('Chance\nShield Assurance', 'Someone else') }, { subject: 's', body: 'short', cited_signals: [] }];
+  it('resolves grounding IDs to original facts without requiring the model to copy their text', async () => {
+    responses = [{ subject: validDraft.subject, body: validDraft.body, cited_signal_ids: ['G2', 'G2'] }];
+    const result = await draftOutreach(lead);
+    expect(result).toEqual(validDraft);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].messages[0].content).toContain('cited_signal_ids');
+    expect(requests[0].messages[1].content).toContain(JSON.stringify({ id: 'G2', excerpt: 'Stated insurance interests: Commercial auto' }));
+  });
+  it('repairs an invented grounding ID and never substitutes an unrelated citation', async () => {
+    responses = [
+      { subject: validDraft.subject, body: validDraft.body, cited_signal_ids: ['G999999'] },
+      { subject: validDraft.subject, body: validDraft.body, cited_signal_ids: ['G2'] },
+    ];
+    expect(await draftOutreach(lead)).toEqual(validDraft);
+    expect(requests).toHaveLength(2);
+    expect(requests[1].messages[1].content).toContain('only IDs from the Grounding data JSON references');
+  });
+  it('rejects unknown IDs even when the response also supplies a valid legacy citation', async () => {
+    const invalid = { ...validDraft, cited_signal_ids: ['G999999'] };
+    responses = [invalid, invalid];
+    await expect(rewriteOutreach(lead, validDraft, 'Use a warmer tone', 1)).rejects.toMatchObject({ status: 422 });
+    expect(requests).toHaveLength(2);
+  });
+  it('resolves grounding IDs for SMS and sequence drafts with the same public citation shape', async () => {
+    responses = [{ subject: 'Your auto review', body: 'Could you email the VIN for the commercial auto review?', cited_signal_ids: ['G2'] }];
+    expect(await draftOutreach({ ...lead, channel: 'sms' })).toEqual({
+      subject: 'Your auto review', body: 'Could you email the VIN for the commercial auto review?',
+      cited_signals: validDraft.cited_signals,
+    });
+    responses = [{ subject: validDraft.subject, body: validDraft.body, cited_signal_ids: ['G2'] }];
+    expect(await draftSequenceStep(lead, 1, 3, [])).toEqual(validDraft);
+  });
+  it('attaches the exact saved signature instead of relying on the model to reproduce it', async () => {
+    responses = [{ ...validDraft, body: body.replace('Chance\nShield Assurance', 'Someone else') }];
+    expect(await draftOutreach(lead)).toEqual(validDraft);
+    expect(requests).toHaveLength(1);
+  });
+  it('surfaces persistent quality failure without padding a short message', async () => {
+    responses = [{ ...validDraft, body: 'Too short.' }, { subject: 's', body: 'short', cited_signals: [] }];
     await expect(draftOutreach(lead)).rejects.toMatchObject({ status: 422 });
     expect(requests).toHaveLength(2);
-    expect(requests[1].messages[1].content).toContain('signature');
+    expect(requests[1].messages[1].content).toContain('Do not add filler');
   });
   it('avoids sequence repetition and follows the preferred next step instead of always asking for calls', async () => {
     const prior = [{ subject: validDraft.subject, body: 'A prior opening.' }];
@@ -133,7 +238,7 @@ describe('AI generation contract (mocked provider only)', () => {
     expect(requests[1].messages[1].content).toContain('different subject');
   });
   it('keeps final messages within the narrower final-step word range', async () => {
-    const finalBody = `Hi Leo,\nYou mentioned commercial auto and preferred email. I will stop this outreach sequence here. If reviewing that vehicle is still useful, you can reply with the VIN whenever you are ready and we can discuss the next step by email.\n\nChance\nShield Assurance`;
+    const finalBody = `Hi Leo,\n\nYou mentioned commercial auto and preferred email. I will stop this sequence here rather than keep sending reminders.\n\nIf reviewing the vehicle is still useful, reply with the VIN whenever you are ready. I will confirm the next step by email.\n\n-- \nChance\nShield Assurance`;
     responses = [{ ...validDraft, body: finalBody }];
     expect(await draftSequenceStep(lead, 3, 3, [])).toMatchObject({ body: finalBody });
     expect(requests[0].messages[0].content).toContain('FINAL email');
@@ -143,8 +248,19 @@ describe('AI generation contract (mocked provider only)', () => {
     expect(await draftOutreach({ ...lead, channel: 'sms' })).not.toBeNull();
     expect(requests[0].messages[0].content).toContain('10-60 words');
     vi.stubEnv('OPENAI_API_KEY', '');
-    expect(await draftOutreach(lead)).toBeNull();
+    await expect(draftOutreach(lead)).rejects.toMatchObject({ status: 503 });
     expect(requests).toHaveLength(1);
+  });
+  it('honors the saved cold-first-touch purpose without padding a concise fact-led email', async () => {
+    const signal = 'A fleet record lists 11 power units.';
+    const coldBody = `Hi Leo,\n\nI'm Chance with Shield Assurance. I noticed your fleet record lists 11 power units.\n\nWould a short vehicle and driver checklist be useful?\n\n-- \nChance\nShield Assurance`;
+    const coldDraft = { subject: 'Your 11-unit fleet review', body: coldBody, cited_signals: [`Source-backed business detail: ${signal}`] };
+    responses = [{ ...coldDraft, body: coldBody.replace('I noticed your fleet record', 'I wanted to say hello. I noticed your fleet record') }, coldDraft];
+    const result = await draftOutreach({ ...lead, marketing_profile: { ...profile, template: 'cold_prospecting' }, prospecting_signals: [signal] });
+    expect(result?.body).toBe(coldBody);
+    expect(requests).toHaveLength(2);
+    expect(requests[0].messages[0].content).toContain('briefly introduce the agent and agency');
+    expect(requests[1].messages[1].content).toContain('mention a specific cited business detail near the beginning');
   });
 });
 
@@ -161,6 +277,12 @@ describe('profile, settings and canonical context persistence APIs', () => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
       const call: Call = { url, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null };
       calls.push(call);
+      if (url.pathname.endsWith('/agency_members')) return json({ user_id: leadId, role: 'owner', active: true });
+      if (url.pathname.endsWith('/rpc/save_agency_outreach_settings')) {
+        const update = call.body?.p_update;
+        if (isRecord(update)) sender = update.sender_profile ?? sender;
+        return json(null);
+      }
       if (url.pathname.endsWith('/leads')) {
         return url.searchParams.has('account_id') ? json([{ id: leadId }]) : json({ id: leadId, full_name: 'Leo', account_id: linked ? clientId : null });
       }
@@ -204,7 +326,7 @@ describe('profile, settings and canonical context persistence APIs', () => {
     expect(context.recent_conversation[0].body).toBe('VIN already supplied');
     expect(calls.find((call) => call.url.pathname.endsWith('/canonical_communications'))?.url.searchParams.get('conversation_key')).toBe(`eq.client:${clientId}`);
     failContext = true;
-    await expect(recordOutreachContext(supabase, { type: 'client', id: clientId })).rejects.toThrow('context unavailable');
+    await expect(recordOutreachContext(supabase, { type: 'client', id: clientId })).rejects.toThrow('Something went wrong');
   });
   it('makes a linked lead profile available from the account before an account profile exists', async () => {
     const supabase = getSupabaseServerClient();
@@ -226,5 +348,7 @@ describe('profile, settings and canonical context persistence APIs', () => {
     expect(sender).toEqual(updated);
     expect((await PATCH(settingsRequest({ send_window_start: 20, send_window_end: 8 }))).status).toBe(400);
     expect((await PATCH(settingsRequest({ daily_send_cap: 201 }))).status).toBe(400);
+    expect((await PATCH(settingsRequest({ timezone: 'Mars/Phobos' }))).status).toBe(400);
+    expect((await PATCH(settingsRequest({ timezone: 'America/Los_Angeles' }))).status).toBe(200);
   });
 });

@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
-import { requireApiSession } from '../../../lib/api-auth';
+import { apiActorName, getApiSession, requireApiSession } from '../../../lib/api-auth';
+import { operationErrorStatus } from '../../../lib/policy-identity';
 import { loadAccountLifecycles } from '../../../lib/account-lifecycle';
-import { workspaceApiError } from '../../../lib/workspace-api';
+import { workspaceApiError, friendlyErrorMessage } from '../../../lib/workspace-api';
+import { prepareDriverAssets, validateAccountIntakeDetails } from '../../../lib/agent-lead-intake';
+import { isRecord, isUuid, validateAsset, type ValidatedAsset } from '../../../lib/workspace-validation';
+import { WorkspaceError } from '../../../lib/record-scope';
+import { databaseError } from '../../../lib/workspace-api';
+import { accountRecordScope } from '../../../lib/team-request-access';
+
+const RESTRICTED_ACCOUNT_EDIT_FIELDS = new Set(['id', 'full_name', 'phone', 'email', 'address', 'source', 'account_type', 'since_date']);
+const BASIC_ACCOUNT_FIELDS = 'id,full_name,phone,email,address,source,account_type,since_date';
 
 interface NewClientPayload {
+  intake_details?: unknown;
   id?: string;
   full_name?: string;
   phone?: string;
@@ -46,7 +56,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const actionableCount = request.nextUrl.searchParams.get('actionableCount') === 'true';
@@ -54,7 +64,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (actionableCount) {
     const { data, error } = await supabase.rpc('get_actionable_clients_count');
     if (error) {
-      return NextResponse.json({ message: error.message }, { status: 500 });
+      return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
     }
 
     return NextResponse.json({ count: typeof data === 'number' ? data : 0 }, { status: 200 });
@@ -70,7 +80,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const { data, error } = queryResult;
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   try {
@@ -83,12 +93,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json()) as NewClientPayload;
@@ -96,6 +106,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!payload.full_name || payload.full_name.trim().length === 0) {
     return NextResponse.json({ message: 'full_name is required.' }, { status: 400 });
   }
+
+  let intakeDetails: ReturnType<typeof validateAccountIntakeDetails> | undefined;
+  let assets: ValidatedAsset[] = [];
+  try {
+    if (payload.intake_details !== undefined) {
+      intakeDetails = validateAccountIntakeDetails(payload.intake_details);
+      assets = prepareDriverAssets(intakeDetails.drivers).map((asset) => {
+        const result = validateAsset({ ...asset, source: 'client_reported' });
+        if (typeof result === 'string') throw new WorkspaceError(result, 400);
+        return result;
+      });
+    }
+  } catch (error) { return workspaceApiError(error, 'clients/intake'); }
 
   const insertResult = await supabase
     .from('clients')
@@ -113,6 +136,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         email_consent: payload.email_consent ?? false,
         sms_consent: payload.sms_consent ?? false,
         preferred_channel: payload.preferred_channel?.trim() || 'email',
+        ...(intakeDetails ? { intake_details: intakeDetails } : {}),
       },
     ])
     .select('*')
@@ -121,24 +145,48 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const { data, error } = insertResult;
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
+  }
+
+  if (assets.length) {
+    try {
+      const saved = await supabase.from('client_assets').insert(assets.map((asset) => ({
+        client_id: data.id, lead_id: null, title: asset.title, asset_type: asset.asset_type, created_by: apiActorName(session.user),
+        metadata: { version: 1, details: asset.details, source: asset.source, reported_at: new Date().toISOString() },
+      })));
+      if (saved.error) throw databaseError(saved.error);
+    } catch (failure) {
+      const cleanup = await supabase.from('clients').delete().eq('id', data.id);
+      if (cleanup.error) {
+        console.error('[clients/intake/rollback]', cleanup.error);
+        return NextResponse.json({ id: data.id, message: 'The account could not be completed or fully removed. Open this account before retrying; do not create a duplicate.' }, { status: 500 });
+      }
+      return workspaceApiError(failure, 'clients/intake/assets');
+    }
   }
 
   return NextResponse.json(data, { status: 201 });
 }
 
 export async function PATCH(request: NextRequest): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
+  const scope = accountRecordScope(session.teamAccess, 'accounts.edit');
+  if (!scope) return NextResponse.json({ message: 'You do not have access to edit accounts.' }, { status: 403 });
+  const restricted = session.teamAccess?.mode === 'restricted';
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
-  const payload = (await request.json()) as NewClientPayload;
-  if (!payload.id) {
-    return NextResponse.json({ message: 'id is required.' }, { status: 400 });
+  let payload: unknown;
+  try { payload = await request.json(); } catch { return NextResponse.json({ message: 'Invalid account update.' }, { status: 400 }); }
+  if (!isRecord(payload) || !isUuid(payload.id)) {
+    return NextResponse.json({ message: 'A valid account id is required.' }, { status: 400 });
+  }
+  if (restricted && Object.keys(payload).some((field) => !RESTRICTED_ACCOUNT_EDIT_FIELDS.has(field))) {
+    return NextResponse.json({ message: 'This update includes fields outside your account editing access.' }, { status: 403 });
   }
 
   const updates: Record<string, string | boolean | null> = {};
@@ -155,7 +203,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   if (typeof payload.sms_consent === 'boolean') updates.sms_consent = payload.sms_consent;
   if (typeof payload.preferred_channel === 'string') updates.preferred_channel = payload.preferred_channel.trim();
   if (Object.prototype.hasOwnProperty.call(payload, 'policy_effective_at')) {
-    const policyEffectiveAt = normalizeIsoDate(payload.policy_effective_at);
+    const policyEffectiveAt = normalizeIsoDate(typeof payload.policy_effective_at === 'string' ? payload.policy_effective_at : null);
     if (payload.policy_effective_at !== null && !policyEffectiveAt) {
       return NextResponse.json({ message: 'Invalid policy_effective_at value.' }, { status: 400 });
     }
@@ -163,7 +211,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     updates.policy_effective_at = policyEffectiveAt;
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'last_viewed_at')) {
-    const viewedAt = normalizeIsoDate(payload.last_viewed_at);
+    const viewedAt = normalizeIsoDate(typeof payload.last_viewed_at === 'string' ? payload.last_viewed_at : null);
     if (payload.last_viewed_at !== null && !viewedAt) {
       return NextResponse.json({ message: 'Invalid last_viewed_at value.' }, { status: 400 });
     }
@@ -171,7 +219,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     updates.last_viewed_at = viewedAt;
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'last_activity_at')) {
-    const activityAt = normalizeIsoDate(payload.last_activity_at);
+    const activityAt = normalizeIsoDate(typeof payload.last_activity_at === 'string' ? payload.last_activity_at : null);
     if (payload.last_activity_at !== null && !activityAt) {
       return NextResponse.json({ message: 'Invalid last_activity_at value.' }, { status: 400 });
     }
@@ -183,13 +231,16 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'No update fields were provided.' }, { status: 400 });
   }
 
-  const updateResult = await supabase.from('clients').update(updates).eq('id', payload.id).select('*').single();
+  const query = supabase.from('clients').update(updates).eq('id', payload.id);
+  if (scope === 'assigned') query.eq('agent_user_id', session.user.id);
+  const updateResult = await query.select(restricted ? BASIC_ACCOUNT_FIELDS : '*').maybeSingle();
   const { data, error } = updateResult;
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
-  return NextResponse.json(data, { status: 200 });
+  if (!data) return NextResponse.json({ message: 'Account not found.' }, { status: 404 });
+  return NextResponse.json(data, { headers: { 'Cache-Control': 'private, no-store' } });
 }
 
 export async function DELETE(request: NextRequest): Promise<NextResponse> {
@@ -198,7 +249,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json()) as { id?: string };
@@ -208,7 +259,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
 
   const { error } = await supabase.from('clients').delete().eq('id', payload.id);
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: operationErrorStatus(error.code) });
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });

@@ -67,6 +67,7 @@ model KnowledgeDocument {
   topicTags    String[]                @default([])
   summary      String?
   rawText      String?
+  sourcePublishedAt DateTime? @db.Date
   status       DocumentStatus          @default(PENDING)
   errorMessage String?
   insights     DocumentInsight[]
@@ -476,6 +477,18 @@ model UserProgress {
   @@index([learnerKey])
   @@index([lessonId])
   @@map("learning_user_progress")
+}
+
+model LearningAssessmentAttempt {
+  id            String   @id @default(uuid())
+  learnerKey    String
+  moduleNumber  Int
+  score         Int
+  questionCount Int
+  createdAt     DateTime @default(now())
+
+  @@index([learnerKey, moduleNumber, createdAt])
+  @@map("learning_assessment_attempts")
 }
 
 model LearningCourseSnapshot {

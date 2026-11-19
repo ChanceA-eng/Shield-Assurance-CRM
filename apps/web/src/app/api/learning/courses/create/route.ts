@@ -40,7 +40,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ course }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to create course.' },
+      { message: error instanceof Error ? error.message : 'Course could not be created. Please try again.' },
       { status: 500 },
     );
   }

@@ -9,7 +9,7 @@ async function handle(request: NextRequest, write: boolean): Promise<NextRespons
   const authError = await requireApiSession(request);
   if (authError) return authError;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const type = request.nextUrl.searchParams.get('record_type');
     const id = request.nextUrl.searchParams.get('record_id') ?? '';

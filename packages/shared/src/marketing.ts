@@ -5,6 +5,7 @@ export const OUTREACH_TEMPLATES = {
   renewal_review: { label: 'Renewal review', purpose: 'Offer a review around a recorded renewal date and stated priorities. If the date is unknown, ask for it; do not invent urgency.' },
   cross_sell: { label: 'Relevant coverage conversation', purpose: 'Discuss one recorded insurance interest or asset as a question, not an assumed coverage gap. No unsupported savings or bundle claims.' },
   reactivation: { label: 'Reconnect with a dormant lead', purpose: 'Reconnect respectfully around a recorded need. Ask whether it is still relevant; do not presume the person still wants a quote.' },
+  cold_prospecting: { label: 'Cold prospect - first touch', purpose: 'Briefly introduce the agent, mention one current, source-backed business detail, and ask a simple relevant question or offer something specific. If no reliable detail is available, ask a useful question without inventing a hook.' },
 } as const;
 
 export type OutreachTemplate = keyof typeof OUTREACH_TEMPLATES;

@@ -1,7 +1,11 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { apiActorName, getApiSession } from '../../../../../lib/api-auth';
+import { operationErrorStatus } from '../../../../../lib/policy-identity';
+import { isRecord } from '../../../../../lib/workspace-validation';
+import { validateReviewedIntakeFields } from '../../../../../lib/policy-document-intake';
+import { accountDocumentReadScope } from '../../../../../lib/team-request-access';
 import {
   CLIENT_FILE_COLUMNS,
   classifyClientFile,
@@ -13,6 +17,7 @@ import {
   type ClientFileRecord,
 } from '../../../../../lib/account-documents';
 
+import { friendlyErrorMessage } from '../../../../../lib/workspace-api';
 interface RouteContext {
   params: Promise<{ clientId: string }>;
 }
@@ -26,6 +31,7 @@ interface LinkPayload {
   file_url?: string;
   file_type?: string;
   notes?: string;
+  intake_review?: unknown;
 }
 
 function text(value: unknown, max = 255): string {
@@ -53,22 +59,32 @@ async function loadFile(supabase: SupabaseClient, clientId: string, id: string):
 export async function GET(request: NextRequest, context: RouteContext): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
+  const scope = accountDocumentReadScope(session.teamAccess);
+  if (!scope) return NextResponse.json({ message: 'You do not have access to account documents.' }, { status: 403 });
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const { clientId } = await context.params;
   if (!isUuid(clientId)) return NextResponse.json({ message: 'A valid account id is required.' }, { status: 400 });
 
-  const { data, error } = await supabase
+  const pageValue = request.nextUrl.searchParams.get('page');
+  const page = Number(pageValue ?? 0);
+  if (!Number.isSafeInteger(page) || page < 0) return NextResponse.json({ message: 'Invalid document page.' }, { status: 400 });
+  const size = pageValue === null ? 200 : 100;
+  const query = supabase
     .from('client_files')
-    .select(CLIENT_FILE_COLUMNS)
-    .eq('client_id', clientId)
+    .select(scope === 'assigned' ? `${CLIENT_FILE_COLUMNS},account:clients!client_files_client_id_fkey!inner()` : CLIENT_FILE_COLUMNS)
+    .eq('client_id', clientId);
+  if (scope === 'assigned') query.eq('account.agent_user_id', session.user.id);
+  const { data, error } = await query
     .order('uploaded_at', { ascending: false })
-    .limit(200);
-  if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+    .order('id')
+    .range(page * size, page * size + size - 1)
+    .returns<ClientFileRecord[]>();
+  if (error) return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
 
-  return NextResponse.json(((data ?? []) as ClientFileRecord[]).map(toClientFileView), { status: 200 });
+  return NextResponse.json((data ?? []).map(toClientFileView), { status: 200, headers: { 'Cache-Control': 'private, no-store' } });
 }
 
 /**
@@ -80,7 +96,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const { clientId } = await context.params;
   if (!isUuid(clientId)) return NextResponse.json({ message: 'A valid account id is required.' }, { status: 400 });
@@ -111,7 +127,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     .select(CLIENT_FILE_COLUMNS)
     .single<ClientFileRecord>();
 
-  if (error || !data) return NextResponse.json({ message: error?.message ?? 'The link could not be saved.' }, { status: 500 });
+  if (error || !data) return NextResponse.json({ message: friendlyErrorMessage(error) ?? 'The link could not be saved.' }, { status: 500 });
   return NextResponse.json(toClientFileView(data), { status: 201 });
 }
 
@@ -120,7 +136,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const { clientId } = await context.params;
   const payload = await readJson<LinkPayload>(request);
@@ -155,6 +171,18 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     else delete metadata.notes;
     updates.metadata = metadata;
   }
+  if (payload.intake_review !== undefined) {
+    if (kind !== 'stored') return NextResponse.json({ message: 'Reviewed intake requires a privately stored source document.' }, { status: 400 });
+    try {
+      updates.metadata = {
+        ...(existing.record.metadata ?? {}), ...(isRecord(updates.metadata) ? updates.metadata : {}),
+        intake_review: validateReviewedIntakeFields(payload.intake_review),
+        intake_reviewed_at: new Date().toISOString(), intake_reviewed_by: session.user.id,
+      };
+    } catch (failure) {
+      return NextResponse.json({ message: failure instanceof Error ? failure.message : 'Invalid reviewed fields.' }, { status: 400 });
+    }
+  }
   if (Object.keys(updates).length === 0) return NextResponse.json({ message: 'Nothing to update.' }, { status: 400 });
 
   const { data, error } = await supabase
@@ -164,7 +192,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     .eq('client_id', clientId)
     .select(CLIENT_FILE_COLUMNS)
     .single<ClientFileRecord>();
-  if (error || !data) return NextResponse.json({ message: error?.message ?? 'The document could not be updated.' }, { status: 500 });
+  if (error || !data) return NextResponse.json({ message: friendlyErrorMessage(error) ?? 'The document could not be updated.' }, { status: 500 });
 
   return NextResponse.json(toClientFileView(data), { status: 200 });
 }
@@ -174,7 +202,7 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const { clientId } = await context.params;
   const payload = await readJson<{ id?: string }>(request);
@@ -185,23 +213,21 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   if (existing.error) return NextResponse.json({ message: existing.error }, { status: 500 });
   if (!existing.record) return NextResponse.json({ message: 'Document not found on this account.' }, { status: 404 });
 
-  // Remove the bytes first so a deleted record never leaves an orphaned private file behind.
-  const location = storedLocation(existing.record);
+  const claimed = await supabase.rpc('claim_document_deletion', { p_account_id: clientId, p_file_id: fileId });
+  if (claimed.error) return NextResponse.json({ message: friendlyErrorMessage(claimed.error) }, { status: operationErrorStatus(claimed.error.code) });
+  const document: unknown = claimed.data;
+  if (!isRecord(document) || document.id !== fileId || document.client_id !== clientId) {
+    return NextResponse.json({ message: 'Document deletion could not be reserved. No stored file was removed.' }, { status: 500 });
+  }
+  const location = storedLocation({ metadata: isRecord(document.metadata) ? document.metadata : null });
   if (location) {
     const removed = await removeStoredObject(supabase, location);
-    if (!removed.ok) return NextResponse.json({ message: `${removed.message} The document was kept.` }, { status: removed.status });
+    if (!removed.ok) return NextResponse.json({ message: `${removed.message} The document is reserved for deletion; retry Remove to finish.` }, { status: removed.status });
   }
 
   const { error } = await supabase.from('client_files').delete().eq('id', fileId).eq('client_id', clientId);
   if (error) {
-    if (location) {
-      await supabase
-        .from('client_files')
-        .update({ status: 'storage_removed', metadata: { ...(existing.record.metadata ?? {}), storage_removed_at: new Date().toISOString() } })
-        .eq('id', fileId)
-        .eq('client_id', clientId);
-    }
-    return NextResponse.json({ message: `The stored file was removed, but the document record could not be deleted: ${error.message}` }, { status: 500 });
+    return NextResponse.json({ message: `Document record deletion failed${location ? ' after removing the stored file' : ''}. Retry Remove to finish: ${error.message}` }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });

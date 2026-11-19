@@ -22,7 +22,7 @@ export function DeliveryState({ status, busy, onFinish }: {
       <p className="text-xs text-cui-muted">
         {accepted
           ? 'Provider acceptance only; recipient delivery is not confirmed.'
-          : 'Do not resend. Refresh first; if still unresolved, ask an administrator to reconcile this attempt with Gmail/SendGrid logs using the attempt ID and time.'}
+          : 'Do not resend. Refresh first; if still unresolved, ask an administrator to check the email provider’s history using the attempt ID and time.'}
       </p>
       {status === 'accepted_by_provider' ? (
         <button type="button" disabled={busy} onClick={onFinish}

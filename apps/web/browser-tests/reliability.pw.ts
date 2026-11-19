@@ -19,7 +19,7 @@ test('snooze failure retains custom time and succeeds after a deliberate retry',
   const task = data.tasks[0];
   await page.getByRole('combobox', { name: `Snooze ${task.subject}`, exact: true }).selectOption('custom');
   const value = `${new Date().getUTCFullYear() + 1}-12-01T14:15`;
-  const picker = page.getByLabel('Snooze until (Arizona time)', { exact: true });
+  const picker = page.getByLabel('Snooze until (agency time)', { exact: true });
   await picker.fill(value);
   data.failTaskSave = true;
   await page.getByRole('button', { name: 'Save snooze', exact: true }).click();
@@ -37,7 +37,7 @@ test('calendar deep links open past events and list completion can be reopened',
   const dialog = page.getByRole('dialog', { name: 'Edit Event', exact: true });
   await expect(dialog.getByLabel('Event title', { exact: true })).toHaveValue('Annual coverage review');
   await expect(dialog.getByLabel('Date', { exact: true })).toHaveValue('2025-01-07');
-  await expect(dialog.getByLabel('Time (Arizona)', { exact: true })).toHaveValue('14:15');
+  await expect(dialog.getByLabel('Time (America/Phoenix)', { exact: true })).toHaveValue('14:15');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.getByRole('link', { name: 'List view', exact: true }).click();
   await page.getByRole('button', { name: 'Complete', exact: true }).click();
@@ -52,7 +52,7 @@ test('calendar save failure keeps a named account appointment draft', async ({ p
   await page.getByRole('button', { name: '+ New Event', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'New Event', exact: true });
   await dialog.getByLabel('Event title', { exact: true }).fill('Review trucks');
-  await dialog.getByLabel('Time (Arizona)', { exact: true }).fill('14:15');
+  await dialog.getByLabel('Time (America/Phoenix)', { exact: true }).fill('14:15');
   await dialog.getByLabel('Link to', { exact: true }).selectOption('lead');
   await dialog.getByLabel('Related record', { exact: true }).selectOption(leadId);
   data.failEventSave = true;

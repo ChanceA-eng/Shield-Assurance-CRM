@@ -14,8 +14,7 @@ export function messageStatusLabel(message: MessageLike): string {
     return metadata.recorded_manually ? 'Received · recorded manually' : 'Received';
   }
   if (metadata.delivery_status === 'accepted_by_provider') {
-    const provider = typeof metadata.provider === 'string' ? metadata.provider : 'provider';
-    return `Accepted by ${provider === 'gmail' ? 'Gmail' : provider === 'sendgrid' ? 'SendGrid' : provider}`;
+    return 'Outgoing';
   }
   if (message.channel === 'sms') return 'Logged only · not sent';
   if (message.automation_type === 'outreach_sequence') return 'Sequence email';

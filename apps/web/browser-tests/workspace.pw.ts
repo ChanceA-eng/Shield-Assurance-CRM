@@ -1,5 +1,83 @@
 import { test, expect, leadId } from './workspace-fixtures';
 
+test('lead editing opens a popup, retains failed edits and saves without duplicate header controls', async ({ page, data }) => {
+  const updates: Array<Record<string, unknown>> = [];
+  let saved: Record<string, unknown> | null = null;
+  await page.route(/\/api\/leads(?:\?.*)?$/, async (route) => {
+    if (route.request().method() !== 'PATCH') {
+      if (saved && route.request().method() === 'GET') return route.fulfill({ json: [saved] });
+      return route.fallback();
+    }
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    updates.push(body);
+    if (updates.length === 1) return route.fulfill({ status: 503, json: { message: 'Changes were not saved. Try again.' } });
+    saved = { ...data.lead, ...body };
+    return route.fulfill({ json: saved });
+  });
+  await page.route(`**/api/leads/${leadId}`, (route) => route.fulfill({ json: { ...(saved ?? data.lead), intake_event_ids: [] } }));
+  await page.goto(`/leads?lead=${leadId}`);
+  const profile = page.getByRole('complementary', { name: 'Lead profile' });
+  const header = profile.locator('[data-lead-profile-header]');
+  await expect(header.locator('input')).toHaveCount(0);
+  await expect(header.getByRole('button', { name: /^Add / })).toHaveCount(0);
+  const edit = header.getByRole('button', { name: 'Edit', exact: true });
+  await edit.click();
+  const dialog = page.getByRole('dialog', { name: 'Edit lead', exact: true });
+  await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue(data.lead.full_name);
+  await dialog.getByLabel('Name', { exact: true }).fill('Discard this change');
+  page.once('dialog', (confirmation) => { expect(confirmation.message()).toMatch(/unsaved changes/i); void confirmation.accept(); });
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(edit).toBeFocused();
+  expect(updates).toHaveLength(0);
+  await edit.click();
+  await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue(data.lead.full_name);
+  await dialog.getByLabel('Name', { exact: true }).fill('Reviewed lead');
+  await dialog.getByLabel('Phone', { exact: true }).fill('+15205550123');
+  await dialog.getByLabel('Email', { exact: true }).fill('reviewed@example.invalid');
+  await dialog.getByLabel('Address', { exact: true }).fill('456 Updated Street');
+  await dialog.getByLabel('Estimated premium ($)', { exact: true }).fill('1234.56');
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('Changes were not saved. Try again.');
+  await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('Reviewed lead');
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(profile.getByRole('heading', { name: 'Reviewed lead', exact: true })).toBeVisible();
+  expect(updates[1]).toEqual(updates[0]);
+  expect(updates[1]).toMatchObject({ id: leadId, full_name: 'Reviewed lead', estimated_premium: '1234.56',
+    phone: '+15205550123', email: 'reviewed@example.invalid', address: '456 Updated Street' });
+  await page.reload();
+  await expect(profile.getByRole('heading', { name: 'Reviewed lead', exact: true })).toBeVisible();
+  await profile.getByRole('button', { name: 'Conversation', exact: true }).click();
+  await edit.click();
+  await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('Reviewed lead');
+  await expect(dialog.getByLabel('Estimated premium ($)', { exact: true })).toHaveValue('1234.56');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(edit).toBeFocused();
+});
+
+test('lead profile remains scrollable and composer controls are not covered by Rashi', async ({ page }) => {
+  await page.goto(`/leads?lead=${leadId}`);
+  const profile = page.getByRole('complementary', { name: 'Lead profile' });
+  for (const viewport of [{ width: 489, height: 426 }, { width: 390, height: 844 }, { width: 1280, height: 720 }]) {
+    await page.setViewportSize(viewport);
+    await profile.getByRole('button', { name: 'Conversation', exact: true }).click();
+    const draft = profile.getByRole('button', { name: 'Send', exact: true });
+    await draft.scrollIntoViewIfNeeded();
+    expect(await draft.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= window.innerHeight
+        && element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+    })).toBe(true);
+    expect(await profile.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await profile.getByRole('button', { name: 'Overview', exact: true }).click();
+    await profile.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    expect(await profile.evaluate((element) =>
+      Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop) < 2)).toBe(true);
+  }
+});
+
 test('banners retain every unworked arrival in newest-first order and acknowledge only the opened request', async ({ page, data }) => {
   data.addArrivals(26);
   await page.goto('/');
@@ -13,18 +91,54 @@ test('banners retain every unworked arrival in newest-first order and acknowledg
   await expect(queue.getByRole('link', { name: 'Open profile', exact: true })).toHaveCount(25);
   data.addArrivals(26);
   await page.goto(`/leads?lead=${leadId}`);
-  await expect(page.getByRole('button', { name: 'Add note', exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit', exact: true }).first()).toBeVisible();
   await expect(queue.getByRole('link', { name: 'Open profile', exact: true })).toHaveCount(25);
   expect(data.arrivals.every((arrival) => arrival.id !== leadId)).toBe(true);
 });
 
+test('a brief queue refresh failure stays out of the banner and recovers when connected', async ({ page }) => {
+  let attempts = 0;
+  await page.route('**/api/leads/attention', async (route) => {
+    attempts += 1;
+    if (attempts === 1) return route.abort('failed');
+    return route.fulfill({ json: { leads: [], total: 0 } });
+  });
+  await page.goto('/');
+  await expect.poll(() => attempts).toBe(1);
+  await expect(page.getByRole('region', { name: 'Unreviewed website requests' })).toHaveCount(0);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect.poll(() => attempts).toBe(2);
+  await expect(page.getByRole('region', { name: 'Unreviewed website requests' })).toHaveCount(0);
+});
+
+test('persistent queue failures show one useful retry while keeping loaded requests', async ({ page, data }) => {
+  data.addArrivals(1);
+  await page.goto('/');
+  const queue = page.getByRole('region', { name: 'Unreviewed website requests' });
+  await expect(queue.getByRole('link', { name: 'Open profile', exact: true })).toHaveCount(1);
+  await page.route('**/api/leads/attention', (route) => route.abort('failed'));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await Promise.all([
+      page.waitForEvent('console', { predicate: (message) => message.type() === 'error' && message.text().includes('[website-requests/refresh]') }),
+      page.evaluate(() => window.dispatchEvent(new Event('online'))),
+    ]);
+  }
+  await expect(queue.getByRole('alert')).toHaveText('New requests could not refresh.Retry');
+  await expect(queue.getByRole('link', { name: 'Open profile', exact: true })).toHaveCount(1);
+  await expect(queue).not.toContainText(/Failed to fetch|last loaded queue|migration/);
+  await page.unroute('**/api/leads/attention');
+  await queue.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(queue.getByRole('alert')).toHaveCount(0);
+});
+
 test('notes and dated named reminders survive a failed response, complete and reopen across profile and global Tasks', async ({ page, data }) => {
   await page.goto(`/leads?lead=${leadId}`);
+  await page.getByRole('button', { name: 'Notes', exact: true }).click();
   await page.getByRole('button', { name: 'Add note', exact: true }).first().click();
   await page.getByRole('textbox', { name: 'Note', exact: true }).fill('Client reported three trucks. Request all VINs before quoting.');
   await page.getByLabel('Also create a reminder', { exact: true }).check();
   await page.getByLabel('Action to take', { exact: true }).fill('Request all VINs');
-  await page.getByLabel('Date and time - Arizona (UTC-7)', { exact: true }).fill('2026-11-02T09:30');
+  await page.getByLabel('Date and time - America/Phoenix', { exact: true }).fill('2026-11-02T09:30');
   data.failNoteAfterCommit = true;
   await page.getByRole('button', { name: 'Save note & reminder', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Temporary response failure' })).toBeVisible();
@@ -55,10 +169,12 @@ test('notes and dated named reminders survive a failed response, complete and re
 
 test('multiple assets retain per-type drafts and archive/restore without changing coverage', async ({ page, data }) => {
   await page.goto(`/leads?lead=${leadId}`);
+  await page.getByRole('button', { name: 'Assets', exact: true }).click();
   await page.getByRole('button', { name: 'Add asset', exact: true }).first().click();
   await page.getByLabel('Name / label', { exact: true }).fill('Truck 1');
+  await page.getByRole('checkbox', { name: 'Manual vehicle entry' }).check();
   await page.getByLabel('Make', { exact: true }).fill('Ford');
-  await page.getByLabel('Year', { exact: true }).fill('2022');
+  await page.getByRole('combobox', { name: 'Year', exact: true }).selectOption('2022');
   await page.getByRole('combobox', { name: 'Asset type', exact: true }).selectOption('property');
   await page.getByLabel('Property address', { exact: true }).fill('123 Test Street');
   await page.getByRole('combobox', { name: 'Asset type', exact: true }).selectOption('vehicle');
@@ -80,15 +196,16 @@ test('multiple assets retain per-type drafts and archive/restore without changin
   await page.getByRole('button', { name: 'Current', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Truck 1', exact: true })).toBeVisible();
   expect(data.assets.every((asset) => !asset.archived_at)).toBe(true);
-  await expect(page.getByText(/Inventory is not an insured schedule/)).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Assets & drivers' })).toBeVisible();
   await page.reload();
-  await page.getByRole('button', { name: /^Leo Example/ }).click();
+  await expect(page.getByRole('complementary', { name: 'Lead profile' })).toBeVisible();
   await page.getByRole('button', { name: 'Assets', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Truck 2', exact: true })).toBeVisible();
 });
 
 test('explicit account linking preserves saved-work IDs and client refreshes do not discard another tab draft', async ({ page, data }) => {
   await page.goto(`/leads?lead=${leadId}`);
+  await page.getByRole('button', { name: 'Notes', exact: true }).click();
   await page.getByRole('button', { name: 'Add note', exact: true }).first().click();
   await page.getByRole('textbox', { name: 'Note', exact: true }).fill('Call notes to carry forward to the account.');
   await page.getByRole('button', { name: 'Save note', exact: true }).click();
@@ -145,10 +262,10 @@ test('dedicated account directory supports search, filters, pagination and a foc
   await page.getByRole('button', { name: 'Toggle navigation', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Communication', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Client Conversation', exact: true })).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'Client conversation', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   await page.getByRole('button', { name: 'Assets & People', exact: true }).click();
-  await expect(page.getByText(/Inventory is not an insured schedule/)).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Assets & drivers' })).toBeVisible();
   expect(data.requests.some((request) => request.includes('/api/ai/'))).toBe(false);
 });
 
@@ -165,15 +282,87 @@ test('new lead intake warns about existing records, prefills drivers, and opens 
   await dialog.getByLabel('Email', { exact: true }).fill('maria@example.invalid');
   await dialog.getByRole('combobox', { name: 'Lead source *', exact: true }).selectOption('referral');
   await dialog.getByRole('button', { name: 'Auto', exact: true }).click();
-  await expect(dialog.getByLabel('Driver 1 name *', { exact: true })).toHaveValue('Maria Lopez');
+  await expect(dialog.getByLabel('Driver 1 name', { exact: true })).toHaveValue('Maria Lopez');
+  await dialog.getByRole('checkbox', { name: 'Manual vehicle entry' }).check();
   await dialog.getByLabel('Make', { exact: true }).fill('Toyota');
-  await dialog.getByRole('button', { name: 'Create personal lead', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Save as Lead', exact: true }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Add note', exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit', exact: true }).first()).toBeVisible();
   const intake = data.intakeBodies[0]?.intake as Record<string, unknown> | undefined;
   expect(intake).toMatchObject({ kind: 'personal', source: 'referral', coverages: ['auto'] });
   expect(intake?.drivers).toEqual([expect.objectContaining({ name: 'Maria Lopez', relationship: 'Self' })]);
   expect(intake?.vehicles).toEqual([expect.objectContaining({ make: 'Toyota' })]);
+});
+
+test('VIN Enter only decodes, unfinished intake survives, and explicit lead save retains optional details', async ({ page, data }) => {
+  await page.route('**/api/vehicles?vin=*', (route) => route.fulfill({ json: { details: { vin: '1HGCM82633A004352', year: '2003', make: 'HONDA', model: 'Accord' } } }));
+  await page.goto('/leads');
+  await page.getByRole('button', { name: '+ New Lead', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'New Lead' });
+  await dialog.getByLabel('First name *', { exact: true }).fill('Safe');
+  await dialog.getByLabel('Last name *', { exact: true }).fill('Intake');
+  await dialog.getByLabel('Phone *', { exact: true }).fill('5205550199');
+  await dialog.getByRole('button', { name: 'Auto', exact: true }).click();
+  await dialog.getByLabel('VIN', { exact: true }).fill('1HGCM82633A004352');
+  await dialog.getByLabel('VIN', { exact: true }).press('Enter');
+  await expect(dialog.getByText('Vehicle decoded. Review the details before saving.', { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('Make', { exact: true })).toHaveValue('HONDA');
+  await expect(dialog.getByLabel('First name *', { exact: true })).toHaveValue('Safe');
+  expect(data.intakeBodies).toHaveLength(0);
+  await expect(dialog.getByRole('searchbox')).toHaveCount(0);
+  await expect(dialog.getByRole('combobox', { name: 'Occupation', exact: true })).toBeDisabled();
+  await dialog.getByRole('combobox', { name: 'Industry', exact: true }).selectOption('29');
+  await dialog.getByRole('combobox', { name: 'Occupation', exact: true }).selectOption('29-1141.00');
+  await dialog.getByLabel('Employer', { exact: true }).press('Enter');
+  expect(data.intakeBodies).toHaveLength(0);
+  const driver = dialog.getByRole('group', { name: 'Driver 1', exact: true });
+  await driver.getByLabel('Driver 1 address', { exact: true }).fill('456 Current Street');
+  await driver.getByLabel('Driver 1 years at current address', { exact: true }).fill('1');
+  await driver.getByRole('button', { name: 'Add previous address', exact: true }).click();
+  const previous = driver.getByRole('group', { name: 'Driver 1 previous address 1', exact: true });
+  await previous.getByLabel('Address', { exact: true }).fill('123 Previous Street');
+  await previous.getByLabel('Years at address', { exact: true }).fill('2');
+  const address = await driver.getByLabel('Driver 1 address', { exact: true }).boundingBox();
+  const tenure = await driver.getByLabel('Driver 1 years at current address', { exact: true }).boundingBox();
+  expect(tenure!.y).toBeGreaterThan(address!.y);
+  await expect(dialog.getByRole('group', { name: 'Optional applicant information' }).getByLabel(/years at current address/i)).toHaveCount(0);
+  await expect(dialog.getByText(/O\*NET|USDOL|CC BY/)).toHaveCount(0);
+  await dialog.getByLabel('Driver 1 license number', { exact: true }).fill('QA-DL-12345');
+  await dialog.getByLabel('Driver 1 license issue date', { exact: true }).fill('2020-01-01');
+  await dialog.getByLabel('Driver 1 license expiration date', { exact: true }).fill('2030-01-01');
+  await dialog.getByLabel('Requested coverage effective date', { exact: true }).fill('2027-01-01');
+  await dialog.getByRole('button', { name: 'Save as Lead', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeHidden();
+  expect(data.intakeBodies).toHaveLength(1);
+  expect(data.intakeBodies[0]).toMatchObject({ destination: 'lead', intake: {
+    additional_details: { occupation: 'Registered Nurses', occupation_code: '29-1141.00', occupation_industry: '29', requested_effective: '2027-01-01' },
+    drivers: [expect.objectContaining({ license_number: 'QA-DL-12345', license_expires: '2030-01-01', address: '456 Current Street',
+      years_at_address: '1', previous_addresses: [expect.objectContaining({ address: '123 Previous Street', years_at_address: '2' })] })],
+    vehicles: [expect.objectContaining({ make: 'HONDA', model: 'Accord' })],
+  } });
+});
+
+test('explicit account destination retains manual occupation and opens the account without a lead save', async ({ page, data }) => {
+  await page.route('**/api/leads/intake', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    data.intakeBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    return route.fulfill({ status: 201, json: { id: data.account.id, destination: 'account' } });
+  });
+  await page.goto('/leads');
+  await page.getByRole('button', { name: '+ New Lead', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'New Lead' });
+  await dialog.getByLabel('First name *', { exact: true }).fill('Account');
+  await dialog.getByLabel('Last name *', { exact: true }).fill('Intake');
+  await dialog.getByLabel('Phone *', { exact: true }).fill('5205550198');
+  await dialog.getByRole('button', { name: 'Life', exact: true }).click();
+  await dialog.getByRole('combobox', { name: 'Industry', exact: true }).selectOption('other');
+  await dialog.getByRole('combobox', { name: 'Occupation', exact: true }).selectOption('other');
+  await dialog.getByLabel('Other occupation', { exact: true }).fill('Specialist profession');
+  await dialog.getByRole('button', { name: 'Save as Account', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/clients/${data.account.id}`));
+  expect(data.intakeBodies).toHaveLength(1);
+  expect(data.intakeBodies[0]).toMatchObject({ destination: 'account', intake: { additional_details: { occupation: 'Specialist profession', occupation_code: '' } } });
 });
 
 test('unread client messages raise a red badge and tasks snooze to a picked Arizona date and time', async ({ page, data }) => {
@@ -182,7 +371,7 @@ test('unread client messages raise a red badge and tasks snooze to a picked Ariz
   await expect(page.getByLabel('2 unread messages', { exact: true }).first()).toBeVisible();
   const seeded = data.tasks[0];
   await page.getByRole('combobox', { name: `Snooze ${seeded.subject}`, exact: true }).selectOption('custom');
-  const picker = page.getByLabel('Snooze until (Arizona time)', { exact: true });
+  const picker = page.getByLabel('Snooze until (agency time)', { exact: true });
   await expect(picker).toBeVisible();
   const year = new Date().getUTCFullYear() + 1;
   await picker.fill(`${year}-12-01T14:15`);

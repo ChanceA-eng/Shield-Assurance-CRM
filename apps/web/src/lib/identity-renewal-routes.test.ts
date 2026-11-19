@@ -2,18 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest } from 'next/server';
 import { getSupabaseServerClient } from './supabase-server';
-import { requireApiSession } from './api-auth';
-import { POST as issue, PATCH as change } from '../app/api/policies/route';
+import { getApiSession, requireApiSession } from './api-auth';
+import { POST as issue, PATCH as change, DELETE as deletePolicy } from '../app/api/policies/route';
+import { DELETE as deleteAccount } from '../app/api/clients/route';
 import { POST as merge } from '../app/api/leads/merge/route';
 import { GET as eligibleLeads } from '../app/api/policies/identity/route';
 import { GET as prefill } from '../app/api/policies/prefill/route';
 import { runRenewalRadar } from './renewal-automation';
 import { policyIdentity, policyFields } from './policy-identity';
+import { BUILT_IN_AUTOMATION_DEFAULTS, DEFAULT_OUTREACH_SENDER } from '@crm/shared';
 
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
-vi.mock('./api-auth', () => ({ requireApiSession: vi.fn() }));
+vi.mock('./api-auth', () => ({ requireApiSession: vi.fn(), getApiSession: vi.fn(), apiActorName: () => 'QA operator' }));
 vi.mock('./automation', () => ({ writeNotification: vi.fn(), writeCommunicationLog: vi.fn() }));
-vi.mock('./messaging', () => ({ sendEmail: vi.fn() }));
 
 const account = '039d0052-4587-4bb9-9f0b-d5b92407f58c';
 const lead = '168413e9-a6a4-4dff-a8bf-8f8df83dace6';
@@ -21,6 +22,7 @@ const policy = {
   id: lead, client_id: account, account_id: account, insured_name: 'Shared name', carrier: 'Carrier',
   line_of_business: 'Auto', premium: 1000, policy_number: 'A1', effective_date: '2026-01-01',
   renewal_date: '2026-11-20', expiration_date: '2026-11-20', status: 'issued', carrier_confirmed: true,
+  confirmation: { confirmed_on: '2026-01-01', reference: 'Carrier portal QA', file_id: null, attested: true },
 };
 const calls: Array<{ path: string; body: Record<string, unknown> | null; url: URL }> = [];
 let respond: (path: string, body: Record<string, unknown> | null, url: URL) => Response;
@@ -38,6 +40,11 @@ function client() {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null;
       calls.push({ path: url.pathname, body, url });
+      if (url.pathname.endsWith('/outreach_settings')) return json({
+        configuration_revision: 1, automation_configuration: BUILT_IN_AUTOMATION_DEFAULTS,
+        approval_mode: true, daily_send_cap: 20, send_window_start: 8, send_window_end: 17,
+        sender_profile: DEFAULT_OUTREACH_SENDER, opt_out_footer: 'Test footer',
+      });
       return respond(url.pathname, body, url);
     } },
   });
@@ -45,10 +52,11 @@ function client() {
 beforeEach(() => {
   calls.length = 0;
   vi.mocked(requireApiSession).mockResolvedValue(null);
+  vi.mocked(getApiSession).mockResolvedValue({ user: { id: account, aud: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01' }, error: null, teamAccess: { mode: 'legacy', policyAdmin: true } });
   vi.mocked(getSupabaseServerClient).mockReturnValue(client());
   respond = (path) => {
-    if (path.endsWith('/issue_policy_with_assets_atomic')) return json({ policy, created: false });
-    if (path.endsWith('/update_policy_atomic')) return json({ policy });
+    if (path.endsWith('/record_policy_placement_atomic')) return json({ policy, created: false });
+    if (path.endsWith('/update_policy_record_atomic')) return json({ policy });
     if (path.endsWith('/reconcile_legacy_renewal_tasks')) return json(0);
     if (path.endsWith('/policies')) return json([]);
     return json({ message: `Unexpected path ${path}` }, 500);
@@ -56,11 +64,29 @@ beforeEach(() => {
 });
 
 describe('policy identity and placement', () => {
+  it('rejects direct policy mutations for non-admin legacy sessions before reading or writing a policy', async () => {
+    vi.mocked(getApiSession).mockResolvedValue({ user: { id: account, aud: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01' }, error: null, teamAccess: { mode: 'legacy', policyAdmin: false } });
+    expect((await issue(request(policy))).status).toBe(403);
+    expect((await change(request(policy, '/api/policies', 'PATCH'))).status).toBe(403);
+    expect((await deletePolicy(request({ id: lead }, '/api/policies', 'DELETE'))).status).toBe(403);
+    expect(calls).toHaveLength(0);
+  });
+  it('prevents ordinary deletion of a policy with carrier confirmation', async () => {
+    respond = (path) => path.endsWith('/policy_confirmation_evidence') ? json({ policy_id: lead }) : json([]);
+    expect((await deletePolicy(request({ id: lead }, '/api/policies', 'DELETE'))).status).toBe(409);
+    expect(calls).toHaveLength(1);
+  });
+  it('surfaces database retention conflicts when deleting an account', async () => {
+    respond = () => json({ code: '23514', message: 'Policy history must be retained.' }, 409);
+    const response = await deleteAccount(request({ id: account }, '/api/clients', 'DELETE'));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ message: 'Policy history must be retained.' });
+  });
   it('passes explicit insured asset selections to the atomic issuance boundary', async () => {
     const assetId = 'c3db2f75-a682-4d14-8c76-693b4f123456';
     const result = await issue(request({ ...policy, insured_asset_ids: [assetId] }));
     expect(result.status).toBe(201);
-    expect(calls[0].path).toContain('/issue_policy_with_assets_atomic');
+    expect(calls[0].path).toContain('/record_policy_placement_atomic');
     expect(calls[0].body).toMatchObject({ p_account_id: account, p_asset_ids: [assetId] });
   });
   it.each([[['invalid']], [[lead, lead]], [Array.from({ length: 101 }, () => lead)]])('rejects invalid or repeated insured assets before issuance', async (assetIds) => {
@@ -69,11 +95,11 @@ describe('policy identity and placement', () => {
     expect(calls).toHaveLength(0);
   });
   it('routes selected quote issuance through the atomic linkage RPC and does not accept malformed quote versions', async () => {
-    respond = (path) => path.endsWith('/issue_policy_with_assets_atomic') ? json({ policy, created: false })
+    respond = (path) => path.endsWith('/record_policy_placement_atomic') ? json({ policy, created: false })
       : path.endsWith('/policies') ? json([]) : json(0);
     const response = await issue(request({ ...policy, quote_id: lead, quote_version: '2026-11-02T21:00:00Z' }));
     expect(response.status).toBe(201);
-    expect(calls[0].path).toContain('issue_policy_with_assets_atomic');
+    expect(calls[0].path).toContain('record_policy_placement_atomic');
     expect(calls[0].body).toMatchObject({ p_quote_id: lead, p_quote_version: '2026-11-02T21:00:00Z', p_asset_ids: [] });
     calls.length = 0;
     expect((await issue(request({ ...policy, quote_id: lead, quote_version: 'invalid' }))).status).toBe(400);
@@ -185,7 +211,7 @@ describe('policy identity and placement', () => {
     const res = await issue(request({ ...policy, lead_id: lead, request_id: account }));
     expect(res.status).toBe(201);
     expect(calls[0].body).toMatchObject({ p_request_id: account, p_account_id: account, p_lead_id: lead });
-    expect(calls.every((call) => call.path.includes('/rpc/') || call.path.endsWith('/policies'))).toBe(true);
+    expect(calls.every((call) => call.path.includes('/rpc/') || call.path.endsWith('/policies') || call.path.endsWith('/outreach_settings'))).toBe(true);
     expect(calls.some((call) => call.path.endsWith('/clients') || call.path.endsWith('/leads'))).toBe(false);
   });
   it('does not complete any lead when no lead was explicitly supplied', async () => {
@@ -196,10 +222,10 @@ describe('policy identity and placement', () => {
     expect(policyFields({ insured_name: ' Other name ', renewal_date: '2027-01-01' }))
       .toEqual({ insured_name: 'Other name', renewal_date: '2027-01-01', expiration_date: '2027-01-01' });
     expect((await change(request({ id: lead, insured_name: 'Other name' }, '/api/policies', 'PATCH'))).status).toBe(200);
-    expect(calls[0].body).toEqual({ p_id: lead, p_updates: { insured_name: 'Other name' } });
+    expect(calls[0].body).toEqual({ p_id: lead, p_updates: { insured_name: 'Other name' }, p_actor: 'QA operator' });
   });
   it('reports a saved policy with explicit retry warning if radar persistence fails', async () => {
-    respond = (path) => path.endsWith('/issue_policy_with_assets_atomic') ? json({ policy, created: false })
+    respond = (path) => path.endsWith('/record_policy_placement_atomic') ? json({ policy, created: false })
       : json({ message: 'Migration unavailable', code: 'PGRST202' }, 404);
     const res = await issue(request(policy));
     expect(res.status).toBe(201);
@@ -261,5 +287,13 @@ describe('database-backed renewal radar', () => {
       : json(0);
     await runRenewalRadar(client(), new Date('2026-11-10T17:00:00Z'));
     expect(calls.filter((call) => call.path.endsWith('/policies'))).toHaveLength(2);
+  });
+  it('retains background continuation after skipped policies, with one bounded page per pulse', async () => {
+    respond = (path) => path.endsWith('/policies')
+      ? json(Array.from({ length: 25 }, () => ({ ...policy, client_id: null, account_id: null }))) : json(0);
+    const result = await runRenewalRadar(client(), new Date('2026-11-10T17:00:00Z'), undefined, { limit: 25, after: account });
+    expect(result.next_cursor).toBe(policy.id);
+    expect(calls.filter((call) => call.path.endsWith('/policies'))).toHaveLength(1);
+    expect(calls.some((call) => call.path.endsWith('/persist_renewal_radar'))).toBe(false);
   });
 });

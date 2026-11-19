@@ -9,7 +9,8 @@ EzLynx parity is retired as a design goal. The product direction is a CoreUI-sty
 
 ## Visual system
 
-- Palette lives in `apps/web/tailwind.config.ts` under the `cui` namespace: primary `#20a8d8`, success `#4dbd74`, warning `#ffc107`, danger `#f86c6b`, dark sidebar `#2f353a`, body background `#e4e5e6`.
+- Palette lives in `apps/web/tailwind.config.ts` under the `cui` namespace: signature cyan `primary` (`#20a8d8`), contrast-safe action cyan `primary-strong` (`#087ca1`), success `#4dbd74`, warning `#ffc107`, danger `#f86c6b`, navy sidebar `#0f172a`, body `#edf2f7`, and white `panel`.
+- Reuse `crm-button`, `crm-button-primary`, `crm-button-danger`, `crm-input`, `crm-tabs`, and `crm-tab` from `globals.css`; active tabs use `aria-selected`, `aria-pressed`, or `aria-current`. Do not hard-code alternate palettes in CRM pages.
 - Do not install `@coreui/react` or Bootstrap CSS; recreate the look with Tailwind utilities and the shared components below.
 
 ## App shell
@@ -22,6 +23,7 @@ EzLynx parity is retired as a design goal. The product direction is a CoreUI-sty
 
 - Wrap standard pages in `src/components/crm/SectionLayout.tsx` (page title header + padded content). It must never render its own sidebar.
 - Use `src/components/ui/Card.tsx` (Card/CardHeader/CardBody) for content panels and `src/components/ui/StatWidget.tsx` for colored KPI widgets.
+- Secure Intake is a profile popup (`IntakeRequestDialog`), not a sidebar destination. Legacy `/questionnaires` links redirect to the relevant profile with `intake=1`.
 - Dashboards and widgets must be wired to real API data (for example `/api/metrics/home`, `/api/recent`, `/api/tasks`, `/api/renewals`). Never ship hardcoded placeholder metrics or fake activity entries.
 - Charts use `recharts` with the `cui` palette.
 

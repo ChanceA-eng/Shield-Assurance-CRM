@@ -1,5 +1,7 @@
 import type { AssetDetails, AssetKind } from '@crm/shared';
 import { isRecord } from './workspace-validation';
+import { applicantSections, driverFields, validateApplicantDetails, validateDriverAddress, validateLicenseDetails, type ApplicantDetails, type IntakeDriver } from './applicant-details';
+import { WorkspaceError } from './record-scope';
 
 export type IntakeKind = 'personal' | 'commercial';
 
@@ -262,7 +264,7 @@ export const INDUSTRY_GROUPS: Record<string, IndustryGroup> = {
   },
 };
 
-export interface DriverInput { name: string; dob: string; relationship: string; license_state: string }
+export interface DriverInput extends IntakeDriver {}
 export interface VehicleInput { year: string; make: string; model: string; vin: string; use: string; ownership: string; vehicle_type: string }
 export interface PropertyInput { address: string; use: string; year_built: string; roof: string; construction: string; has_pool: string; dog_breed: string }
 
@@ -299,6 +301,7 @@ export interface PersonalIntake {
   vehicles: VehicleInput[];
   properties: PropertyInput[];
   notes: string;
+  additional_details?: ApplicantDetails;
 }
 
 export interface CommercialIntake {
@@ -325,6 +328,7 @@ export interface CommercialIntake {
   industry_answers: Record<string, string>;
   vehicles: VehicleInput[];
   notes: string;
+  additional_details?: ApplicantDetails;
 }
 
 export type AgentIntake = PersonalIntake | CommercialIntake;
@@ -480,19 +484,27 @@ function vehicles(value: unknown, commercial: boolean): VehicleInput[] {
   });
 }
 
-function validatePersonal(record: Record<string, unknown>, source: string): PersonalIntake {
-  const intakeContact = contact(record.contact);
-  const coverages = coverageList(record.coverages, PERSONAL_COVERAGES);
-  const drivers = list(record.drivers, 'Drivers', 20).map((driver, index) => {
+function validateDrivers(value: unknown): DriverInput[] {
+  return list(value, 'Drivers', 20).map((driver, index) => {
     const label = `Driver ${index + 1}`;
     const value: DriverInput = {
       name: str(driver, 'name', `${label} name`, { required: true, max: 120 }),
       dob: isoDate(str(driver, 'dob', `${label} date of birth`), `${label} date of birth`, { past: true }),
       relationship: oneOf(str(driver, 'relationship', `${label} relationship`), DRIVER_RELATIONSHIPS, `${label} relationship`),
+      ...validateLicenseDetails(driver),
+      ...validateDriverAddress(driver),
       license_state: oneOf(str(driver, 'license_state', `${label} license state`).toUpperCase(), US_STATES, `${label} license state`),
     };
+    if (value.dob && value.license_issued && value.license_issued < value.dob) throw new IntakeError(`${label} license issue date must not precede their birth date.`);
     return value;
   });
+}
+
+function validatePersonal(record: Record<string, unknown>, source: string): PersonalIntake {
+  const intakeContact = contact(record.contact);
+  const additionalDetails = validateApplicantDetails(record.additional_details);
+  const coverages = coverageList(record.coverages, PERSONAL_COVERAGES);
+  const drivers = validateDrivers(record.drivers);
   const properties = list(record.properties, 'Properties', 20).map((property, index) => {
     const label = `Property ${index + 1}`;
     const yearBuilt = str(property, 'year_built', `${label} year built`, { max: 4 });
@@ -514,9 +526,9 @@ function validatePersonal(record: Record<string, unknown>, source: string): Pers
     kind: 'personal',
     source,
     contact: intakeContact,
-    dob: isoDate(str(record, 'dob', 'Date of birth'), 'Date of birth', { past: true }),
-    marital_status: oneOf(str(record, 'marital_status', 'Marital status'), MARITAL_STATUSES, 'Marital status'),
-    occupation: str(record, 'occupation', 'Occupation', { max: 120 }),
+    dob: additionalDetails.dob || isoDate(str(record, 'dob', 'Date of birth'), 'Date of birth', { past: true }),
+    marital_status: additionalDetails.marital_status || oneOf(str(record, 'marital_status', 'Marital status'), MARITAL_STATUSES, 'Marital status'),
+    occupation: additionalDetails.occupation || str(record, 'occupation', 'Occupation', { max: 200 }),
     coverages,
     current: current(record.current),
     prior_limits: oneOf(str(record, 'prior_limits', 'Prior liability limits'), PRIOR_LIMITS, 'Prior liability limits'),
@@ -525,6 +537,7 @@ function validatePersonal(record: Record<string, unknown>, source: string): Pers
     vehicles: vehicles(record.vehicles, false),
     properties,
     notes: str(record, 'notes', 'Call notes', { max: MAX_NOTES }),
+    additional_details: additionalDetails,
   };
 }
 
@@ -580,6 +593,7 @@ function validateCommercial(record: Record<string, unknown>, source: string): Co
     industry_answers: industryAnswers,
     vehicles: vehicles(record.vehicles, true),
     notes: str(record, 'notes', 'Call notes', { max: MAX_NOTES }),
+    additional_details: validateApplicantDetails(record.additional_details),
   };
 }
 
@@ -592,7 +606,7 @@ export function validateAgentIntake(value: unknown): AgentIntake | string {
     if (value.kind === 'commercial') return validateCommercial(value, source);
     throw new IntakeError('Choose personal or commercial lines.');
   } catch (error) {
-    if (error instanceof IntakeError) return error.message;
+    if (error instanceof IntakeError || error instanceof WorkspaceError && error.status === 400) return error.message;
     throw error;
   }
 }
@@ -660,7 +674,7 @@ export function intakeSections(intake: AgentIntake): IntakeSection[] {
     });
     intake.drivers.forEach((driver, index) => sections.push({
       title: `Driver ${index + 1}: ${driver.name}`,
-      fields: fields([['Relationship', driver.relationship], ['Date of birth', driver.dob], ['License state', driver.license_state]]),
+      fields: driverFields(driver),
     }));
     sections.push(...vehicleSections(intake.vehicles));
     intake.properties.forEach((property, index) => sections.push({
@@ -693,7 +707,33 @@ export function intakeSections(intake: AgentIntake): IntakeSection[] {
     if (answers.length) sections.push({ title: `${group.label} Questions`, fields: fields(answers) });
     sections.push(...vehicleSections(intake.vehicles));
   }
+  if (intake.additional_details) sections.push(...applicantSections(intake.additional_details).map((section) => ({
+    ...section, fields: section.fields.filter((field) => intake.kind !== 'personal' || !['Date of birth', 'Marital status', 'Occupation'].includes(field.label)),
+  })));
   return sections.filter((section) => section.fields.length > 0 || section.title.includes(':'));
+}
+
+export function validateAccountIntakeDetails(value: unknown): {
+  version: 1; applicant: ApplicantDetails; drivers: DriverInput[]; sections: IntakeSection[];
+} {
+  if (!isRecord(value)) throw new WorkspaceError('Account intake details must be an object.', 400);
+  const record = value;
+  const applicant = validateApplicantDetails(record.applicant);
+  let drivers: DriverInput[];
+  try { drivers = validateDrivers(record.drivers); }
+  catch (error) {
+    if (error instanceof IntakeError) throw new WorkspaceError(error.message, 400);
+    throw error;
+  }
+  return { version: 1, applicant, drivers, sections: [...applicantSections(applicant),
+    ...drivers.map((driver, index) => ({ title: `Driver ${index + 1}: ${driver.name}`, fields: driverFields(driver) }))] };
+}
+
+export function prepareDriverAssets(drivers: DriverInput[]): PreparedAsset[] {
+  return drivers.map(({ name, previous_addresses, ...details }) => ({
+    title: name, asset_type: 'driver',
+    details: Object.fromEntries(Object.entries(details).filter(([, value]) => value)),
+  }));
 }
 
 export function prepareLead(intake: AgentIntake, actor: string, now = new Date()): PreparedLead {
@@ -714,15 +754,7 @@ export function prepareLead(intake: AgentIntake, actor: string, now = new Date()
   let employees: string | null = null;
   let revenue: string | null = null;
   if (intake.kind === 'personal') {
-    for (const driver of intake.drivers) {
-      assets.push({
-        title: driver.name,
-        asset_type: 'driver',
-        details: Object.fromEntries(Object.entries({
-          relationship: driver.relationship, license_state: driver.license_state, notes: driver.dob ? `Date of birth: ${driver.dob}` : '',
-        }).filter(([, value]) => value)) as AssetDetails,
-      });
-    }
+    assets.push(...prepareDriverAssets(intake.drivers));
     for (const property of intake.properties) {
       const notes = [property.year_built && `Year built: ${property.year_built}`, property.has_pool && `Pool: ${yesNo(property.has_pool)}`, property.dog_breed && `Dog breed: ${property.dog_breed}`]
         .filter(Boolean).join('\n');
@@ -734,6 +766,7 @@ export function prepareLead(intake: AgentIntake, actor: string, now = new Date()
         }).filter(([, value]) => value)) as AssetDetails,
       });
     }
+
   } else {
     business = intake.business.dba ? `${intake.business.legal_name} (DBA ${intake.business.dba})` : intake.business.legal_name;
     industry = intake.business.business_type;
@@ -816,7 +849,7 @@ export function readIntakeSections(payload: Record<string, unknown> | null | und
     if (!isRecord(section) || typeof section.title !== 'string' || !Array.isArray(section.fields)) return [];
     const sectionFields = section.fields.flatMap((field): IntakeField[] =>
       isRecord(field) && typeof field.label === 'string' && typeof field.value === 'string' ? [{ label: field.label, value: field.value }] : []);
-    return [{ title: section.title, fields: sectionFields }];
+    return [{ title: section.title.replace(' (not issued coverage)', ''), fields: sectionFields }];
   });
   return {
     kind: typeof intake.kind === 'string' ? intake.kind : 'personal',

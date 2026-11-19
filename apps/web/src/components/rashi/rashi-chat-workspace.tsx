@@ -23,6 +23,7 @@ interface RashiDocument {
   title: string;
   sourceType: string;
   sourceUrl: string | null;
+  sourcePublishedAt: string | null;
   carrierName: string | null;
   stateContext: string | null;
   policyType: string | null;
@@ -37,6 +38,8 @@ interface QueryCitation {
   documentTitle: string;
   sourceUrl: string | null;
   sourceType: string;
+  libraryUpdatedAt: string;
+  sourcePublishedAt: string | null;
   insightIndex: number;
   score: number;
   carrierName: string | null;
@@ -154,6 +157,10 @@ function formatDate(value: string): string {
   return new Date(value).toLocaleString();
 }
 
+function formatSourceDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(value));
+}
+
 function getEmbeddedSourceUrl(sourceUrl: string): string {
   const normalized = sourceUrl.trim();
   const youtubeWatch = normalized.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{6,})/);
@@ -214,8 +221,8 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
     ]);
 
     if (!documentsResponse.ok) {
-      const payload = (await documentsResponse.json().catch(() => ({ message: 'Failed to load Rashi documents.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to load Rashi documents.');
+      const payload = (await documentsResponse.json().catch(() => ({ message: 'Rashi documents could not be loaded. Refresh the page to try again.' }))) as { message?: string };
+      setError(payload.message ?? 'Rashi documents could not be loaded. Refresh the page to try again.');
       setLoading(false);
       return;
     }
@@ -326,10 +333,10 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
 
   return (
     <div className="space-y-4">
-      <section className="rounded-2xl border border-[#c8ced3] bg-[radial-gradient(circle_at_top_left,_rgba(1,118,211,0.18),_transparent_42%),linear-gradient(135deg,_#ffffff,_#edf4fb)] p-5 shadow-sm">
+      <section className="rounded-2xl border border-cui-border bg-[radial-gradient(circle_at_top_left,_rgba(1,118,211,0.18),_transparent_42%),linear-gradient(135deg,_#ffffff,_#edf4fb)] p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-3xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#167495]">Conversational Rashi</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cui-primary-strong">Conversational Rashi</p>
             <h2 className="mt-2 text-3xl font-bold tracking-tight text-[#081a30]">{title}</h2>
             <p className="mt-2 text-sm leading-6 text-[#334155]">{description}</p>
           </div>
@@ -350,12 +357,12 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
         </div>
       </section>
 
-      <section className="rounded-2xl border border-[#c8ced3] bg-white p-3 shadow-sm">
+      <section className="rounded-2xl border border-cui-border bg-white p-3 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setSelectedTopic('')}
-            className={`rounded-full px-3 py-1.5 text-xs font-semibold ${selectedTopic === '' ? 'bg-[#23282c] text-white' : 'bg-[#eef3f8] text-[#23282c]'}`}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold ${selectedTopic === '' ? 'bg-cui-text text-white' : 'bg-[#eef3f8] text-cui-text'}`}
           >
             All Topics
           </button>
@@ -364,23 +371,23 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
               key={topic}
               type="button"
               onClick={() => setSelectedTopic(topic)}
-              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${selectedTopic === topic ? 'bg-[#20a8d8] text-white' : 'bg-[#eef3f8] text-[#23282c]'}`}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${selectedTopic === topic ? 'bg-cui-primary-strong text-white' : 'bg-[#eef3f8] text-cui-text'}`}
             >
               {topic}
             </button>
           ))}
-          <Link href={'/rashi/knowledge' as Route} className="ml-auto rounded-full border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f8f9fa]">
+          <Link href={'/rashi/knowledge' as Route} className="ml-auto rounded-full border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-text hover:bg-cui-light">
             Open Knowledge Manager
           </Link>
         </div>
       </section>
 
       <section className="grid min-h-[72vh] gap-4 xl:grid-cols-2">
-        <div className="flex min-h-[72vh] flex-col overflow-hidden rounded-2xl border border-[#c8ced3] bg-white shadow-sm">
+        <div className="flex min-h-[72vh] flex-col overflow-hidden rounded-2xl border border-cui-border bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-100 p-4">
             <div>
               <p className="text-lg font-semibold text-[#081a30]">Rashi Underwriting Chat</p>
-              <p className="mt-1 text-xs text-[#73818f]">Rashi answers from your indexed knowledge base. Follow-up questions retain full context.</p>
+              <p className="mt-1 text-xs text-cui-muted">Rashi answers from your indexed knowledge base. Follow-up questions retain full context.</p>
             </div>
             <button
               type="button"
@@ -394,11 +401,11 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto bg-[#f8f9fa] p-4">
+          <div className="flex-1 overflow-y-auto bg-cui-light p-4">
             <div className="space-y-3">
               {messages.map((message, index) => (
                 <div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[86%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'bg-[#23282c] text-white' : 'border border-[#d8e6f6] bg-white text-[#223041]'}`}>
+                  <div className={`max-w-[86%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'bg-cui-text text-white' : 'border border-[#d8e6f6] bg-white text-[#223041]'}`}>
                     {message.role === 'assistant' ? (
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
@@ -407,12 +414,12 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                           ul: ({ children }) => <ul className="my-1.5 list-disc space-y-1 pl-5">{children}</ul>,
                           ol: ({ children }) => <ol className="my-1.5 list-decimal space-y-1 pl-5">{children}</ol>,
                           li: ({ children }) => <li>{renderNodeWithHighlights(children, `li-${index}`)}</li>,
-                          strong: ({ children }) => <strong className="font-semibold text-[#23282c]">{renderNodeWithHighlights(children, `strong-${index}`)}</strong>,
+                          strong: ({ children }) => <strong className="font-semibold text-cui-text">{renderNodeWithHighlights(children, `strong-${index}`)}</strong>,
                           h1: ({ children }) => <h3 className="mb-1 mt-2 text-base font-semibold text-[#081a30]">{renderNodeWithHighlights(children, `h1-${index}`)}</h3>,
                           h2: ({ children }) => <h3 className="mb-1 mt-2 text-base font-semibold text-[#081a30]">{renderNodeWithHighlights(children, `h2-${index}`)}</h3>,
                           h3: ({ children }) => <h4 className="mb-1 mt-2 text-sm font-semibold text-[#081a30]">{renderNodeWithHighlights(children, `h3-${index}`)}</h4>,
                           blockquote: ({ children }) => <blockquote className="my-2 border-l-2 border-slate-300 pl-3 text-[#334155]">{renderNodeWithHighlights(children, `quote-${index}`)}</blockquote>,
-                          code: ({ children }) => <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs text-slate-700">{children}</code>,
+                          code: ({ children }) => <code className="rounded-lg bg-slate-100 px-1 py-0.5 font-mono text-xs text-slate-700">{children}</code>,
                           a: ({ href, children }) => {
                             if (href?.startsWith('citation:')) {
                               const citationNumber = Number(href.split(':')[1]);
@@ -421,7 +428,7 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                                 : undefined;
 
                               if (!citation || !Number.isFinite(citationNumber) || citationNumber < 1) {
-                                return <span className="rounded bg-slate-100 px-1 py-0.5 text-xs text-slate-600">[{children}]</span>;
+                                return <span className="rounded-lg bg-slate-100 px-1 py-0.5 text-xs text-slate-600">[{children}]</span>;
                               }
 
                               return (
@@ -430,7 +437,7 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                                   onClick={(event) => {
                                     handleCitationOpen(event, citation);
                                   }}
-                                  className="mx-0.5 inline-flex items-center rounded border border-[#b8d6f6] bg-[#eaf4ff] px-1.5 py-0.5 text-xs font-bold text-[#167495] hover:bg-[#dceeff]"
+                                  className="mx-0.5 inline-flex items-center rounded-lg border border-[#b8d6f6] bg-[#eaf4ff] px-1.5 py-0.5 text-xs font-bold text-cui-primary-strong hover:bg-[#dceeff]"
                                   title={`Open source: ${citation.documentTitle}`}
                                 >
                                   [{citationNumber}]
@@ -439,7 +446,7 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                             }
 
                             return (
-                              <a href={href} target="_blank" rel="noreferrer" className="text-[#167495] underline decoration-[#167495]/40 underline-offset-2 hover:text-[#1b8eb7]">
+                              <a href={href} target="_blank" rel="noreferrer" className="text-cui-primary-strong underline decoration-[#167495]/40 underline-offset-2 hover:text-cui-primary-hover">
                                 {children}
                               </a>
                             );
@@ -461,7 +468,7 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                             onClick={(event) => {
                               handleCitationOpen(event, citation);
                             }}
-                            className="rounded-full border border-[#c9ddf4] bg-[#eef6ff] px-2.5 py-1 font-semibold text-[#167495] hover:bg-[#e0efff] disabled:cursor-not-allowed disabled:opacity-50"
+                            className="rounded-full border border-[#c9ddf4] bg-[#eef6ff] px-2.5 py-1 font-semibold text-cui-primary-strong hover:bg-[#e0efff] disabled:cursor-not-allowed disabled:opacity-50"
                             title={citation.sourceUrl ? citation.documentTitle : `${citation.documentTitle} has no source asset URL`}
                           >
                             [{citationIndex + 1}] {citation.documentTitle}
@@ -469,12 +476,24 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                         ))}
                       </div>
                     ) : null}
+                    {message.role === 'assistant' && message.citations?.length ? (
+                      <ul className="mt-2 space-y-1 text-[10px] text-cui-muted">
+                        {message.citations.slice(0, 4).map((citation) => (
+                          <li key={`${citation.documentId}-${citation.insightIndex}`}>
+                            {citation.sourcePublishedAt
+                              ? `Reported publication date ${formatSourceDate(citation.sourcePublishedAt)}`
+                              : 'Source publication date not recorded'}
+                            {' · '}Library record updated {formatDate(citation.libraryUpdatedAt)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 </div>
               ))}
               {sending ? (
                 <div className="flex justify-start">
-                  <div className="rounded-2xl border border-[#d8e6f6] bg-white px-5 py-3 text-sm text-[#73818f]">
+                  <div className="rounded-2xl border border-[#d8e6f6] bg-white px-5 py-3 text-sm text-cui-muted">
                     <span className="inline-flex gap-1">
                       <span className="animate-bounce" style={{ animationDelay: '0ms' }}>●</span>
                       <span className="animate-bounce" style={{ animationDelay: '150ms' }}>●</span>
@@ -493,22 +512,22 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder="Ask about appetite, exclusions, eligibility, forms, or state requirements..."
-              className="min-h-12 flex-1 rounded-xl border border-[#c8ced3] bg-[#f8f9fa] px-4 py-3 text-sm text-[#081a30] outline-none transition focus:border-[#20a8d8]"
+              className="min-h-12 flex-1 rounded-xl border border-cui-border bg-cui-light px-4 py-3 text-sm text-[#081a30] outline-none transition focus:border-cui-primary-strong"
             />
             <button
               type="submit"
               disabled={sending}
-              className="rounded-xl bg-[#20a8d8] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#1b8eb7] disabled:cursor-not-allowed disabled:bg-[#8eb9df]"
+              className="rounded-xl bg-cui-primary-strong px-5 py-3 text-sm font-semibold text-white transition hover:bg-cui-primary-hover disabled:cursor-not-allowed disabled:bg-[#8eb9df]"
             >
               {sending ? 'Thinking...' : 'Ask Rashi'}
             </button>
           </form>
         </div>
 
-        <div className="flex min-h-[72vh] flex-col overflow-hidden rounded-2xl border border-[#c8ced3] bg-white shadow-sm">
+        <div className="flex min-h-[72vh] flex-col overflow-hidden rounded-2xl border border-cui-border bg-white shadow-sm">
           <div className="border-b border-slate-100 p-4">
             <p className="text-lg font-semibold text-[#081a30]">Source Viewer</p>
-            <p className="mt-1 text-xs text-[#73818f]">{activeSourceTitle}</p>
+            <p className="mt-1 text-xs text-cui-muted">{activeSourceTitle}</p>
           </div>
 
           <div className="flex-1 bg-slate-50 p-3">
@@ -519,19 +538,19 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                 title={activeSourceTitle}
               />
             ) : (
-              <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[#cbd5e1] bg-white p-6 text-center text-sm text-[#73818f]">
+              <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[#cbd5e1] bg-white p-6 text-center text-sm text-cui-muted">
                 Select a citation or document source to view the underlying asset.
               </div>
             )}
           </div>
 
           <div className="border-t border-slate-100 p-3">
-            <p className="px-1 text-xs font-semibold uppercase tracking-[0.12em] text-[#73818f]">Recent Uploads</p>
+            <p className="px-1 text-xs font-semibold uppercase tracking-[0.12em] text-cui-muted">Recent Uploads</p>
             <div className="mt-2 max-h-40 space-y-2 overflow-y-auto">
               {loading ? (
-                <p className="px-1 text-xs text-[#73818f]">Loading sources...</p>
+                <p className="px-1 text-xs text-cui-muted">Loading sources...</p>
               ) : documents.length === 0 ? (
-                <p className="px-1 text-xs text-[#73818f]">No documents in this scope.</p>
+                <p className="px-1 text-xs text-cui-muted">No documents in this scope.</p>
               ) : (
                 documents.slice(0, 10).map((document) => (
                   <button
@@ -547,11 +566,11 @@ export default function RashiChatWorkspace({ title, description, scope }: RashiC
                       setActiveSourceUrl(sourceUrl);
                       setActiveSourceTitle(document.title);
                     }}
-                    className="w-full rounded-lg border border-[#e2e8f0] bg-[#ffffff] px-3 py-2 text-left text-xs text-[#334155] transition hover:border-[#20a8d8] disabled:cursor-not-allowed disabled:opacity-55"
+                    className="w-full rounded-lg border border-[#e2e8f0] bg-cui-panel px-3 py-2 text-left text-xs text-[#334155] transition hover:border-cui-primary-strong disabled:cursor-not-allowed disabled:opacity-55"
                     title={document.sourceUrl ? document.title : `${document.title} has no source asset URL`}
                   >
                     <p className="font-semibold text-[#081a30]">{document.title}</p>
-                    <p className="mt-1 text-[#73818f]">{document.sourceType} · {document.status} · {formatDate(document.updatedAt)}</p>
+                    <p className="mt-1 text-cui-muted">{document.sourceType} · {document.status} · {formatDate(document.updatedAt)}</p>
                   </button>
                 ))
               )}

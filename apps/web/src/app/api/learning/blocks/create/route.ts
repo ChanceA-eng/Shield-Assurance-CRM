@@ -53,7 +53,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ block }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to create lesson block.' },
+      { message: error instanceof Error ? error.message : 'Lesson block could not be created. Please try again.' },
       { status: 500 },
     );
   }

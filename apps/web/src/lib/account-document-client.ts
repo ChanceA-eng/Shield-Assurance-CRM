@@ -1,4 +1,5 @@
 ﻿/** Browser-side account document upload/download. Every step's failure is surfaced; nothing is recorded until bytes are stored. */
+import { validateReviewedIntakeFields, type ReviewedIntakeFields, type LocalIntakeDocument } from './policy-document-intake';
 
 export interface AccountDocumentView {
   id: string;
@@ -14,12 +15,13 @@ export interface AccountDocumentView {
   uploaded_by: string | null;
   uploaded_at: string | null;
   notes: string | null;
+  intake_review?: ReviewedIntakeFields;
 }
 
 export type ClientResult<T> = ({ ok: true } & T) | { ok: false; message: string };
 
 interface UploadTicketResponse {
-  upload: { storage_path: string; signed_url: string; token: string; content_type: string };
+  upload: { storage_path: string; signed_url: string; token: string; content_type: string; confirmation?: string };
   file: { file_name: string; content_type: string; file_size: number };
 }
 
@@ -28,7 +30,7 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
   return payload.message ?? `${fallback} (${response.status})`;
 }
 
-function putToSignedUrl(url: string, file: Blob, fileName: string, contentType: string, onProgress?: (fraction: number) => void): Promise<ClientResult<object>> {
+export function putToSignedUrl(url: string, file: Blob, fileName: string, contentType: string, onProgress?: (fraction: number) => void): Promise<ClientResult<object>> {
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url);
@@ -69,7 +71,7 @@ const pendingConfirmations = new WeakMap<File, { clientId: string; ticket: Uploa
 export async function uploadAccountDocument(
   clientId: string,
   file: File,
-  options: { notes?: string; onProgress?: (fraction: number) => void } = {},
+  options: { notes?: string; onProgress?: (fraction: number) => void; reviewedFields?: ReviewedIntakeFields } = {},
 ): Promise<ClientResult<{ document: AccountDocumentView }>> {
   const base = `/api/clients/${encodeURIComponent(clientId)}/files`;
   try {
@@ -94,14 +96,16 @@ export async function uploadAccountDocument(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         storage_path: ticket.upload.storage_path,
+        confirmation: ticket.upload.confirmation,
         file_name: ticket.file.file_name,
         content_type: ticket.file.content_type,
         file_size: ticket.file.file_size,
         notes: options.notes,
+        intake_review: options.reviewedFields,
       }),
     });
     if (!completeResponse.ok) {
-      if (completeResponse.status === 409) pendingConfirmations.delete(file);
+      if (completeResponse.status === 409 || completeResponse.status === 403) pendingConfirmations.delete(file);
       return { ok: false, message: await errorMessage(completeResponse, 'The upload could not be confirmed') };
     }
     const document = (await completeResponse.json()) as AccountDocumentView;
@@ -110,6 +114,32 @@ export async function uploadAccountDocument(
   } catch (error) {
     return { ok: false, message: error instanceof Error ? `Upload failed: ${error.message}` : 'Upload failed.' };
   }
+}
+
+export async function saveReviewedIntakeDocuments(
+  clientId: string, documents: LocalIntakeDocument[], fields: ReviewedIntakeFields, uploaded: Map<string, string>,
+): Promise<string | null> {
+  const reviewedFields = validateReviewedIntakeFields(fields);
+  let evidenceId: string | null = null;
+  for (const document of documents) {
+    const key = `${clientId}:${document.id}`;
+    let id = uploaded.get(key);
+    if (!id) {
+      const result = await uploadAccountDocument(clientId, document.file, {
+        notes: 'Reviewed policy intake source. Private; not published to Rashi.', reviewedFields,
+      });
+      if (!result.ok) throw new Error(result.message);
+      id = result.document.id;
+      uploaded.set(key, id);
+    }
+    const response = await fetch(`/api/clients/${encodeURIComponent(clientId)}/files`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, intake_review: reviewedFields }),
+    });
+    if (!response.ok) throw new Error(await errorMessage(response, 'Reviewed document details could not be saved'));
+    if (!evidenceId && document.kind !== 'id_card') evidenceId = id;
+  }
+  return evidenceId;
 }
 
 /** Fetches the private file through the authenticated route so failures show an error instead of a broken tab. */

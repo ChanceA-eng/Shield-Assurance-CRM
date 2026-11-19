@@ -9,7 +9,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (authError) return authError;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   try {
     return NextResponse.json(await loadUnreadMessageSummary(supabase), { status: 200 });

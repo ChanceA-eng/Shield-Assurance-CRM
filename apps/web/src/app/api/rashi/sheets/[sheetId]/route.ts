@@ -96,7 +96,7 @@ export async function GET(_request: NextRequest, context: RouteContext): Promise
     return NextResponse.json(serializeSheet(sheet), { status: 200 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to load Rashi sheet.' },
+      { message: error instanceof Error ? error.message : 'Rashi sheet could not be loaded. Refresh the page to try again.' },
       { status: 500 },
     );
   }
@@ -148,7 +148,7 @@ export async function PUT(request: NextRequest, context: RouteContext): Promise<
     return NextResponse.json(serializeSheet(updated), { status: 200 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to save Rashi sheet.' },
+      { message: error instanceof Error ? error.message : 'Rashi sheet could not be saved. Please try again.' },
       { status: 500 },
     );
   }

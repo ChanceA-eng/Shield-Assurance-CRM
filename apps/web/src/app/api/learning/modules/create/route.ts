@@ -30,7 +30,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ module }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to create module.' },
+      { message: error instanceof Error ? error.message : 'Module could not be created. Please try again.' },
       { status: 500 },
     );
   }

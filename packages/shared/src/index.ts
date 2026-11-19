@@ -1,5 +1,26 @@
-export * from './account-workspace';
-export * from './marketing';
+export * from './account-workspace.js';
+export * from './email-presentation.js';
+export * from './email-design.js';
+export * from './email-document.js';
+export * from './marketing.js';
+export * from './sales-templates.js';
+export * from './social-marketing.js';
+export * from './social-media.js';
+export * from './social-reviews.js';
+export * from './social-engine.js';
+export * from './social-connections.js';
+export * from './gmail.js';
+export * from './automation-settings.js';
+export * from './workflow-rules.js';
+export * from './intelligence.js';
+export * from './discovery.js';
+export * from './business-research.js';
+export * from './dossier.js';
+export * from './carrier-appetite.js';
+export * from './opportunities.js';
+export * from './opportunity-operations.js';
+export * from './legacy-automation.js';
+export * from './team-access.js';
 
 export type DealStage = 'LEAD' | 'QUOTING' | 'PRESENTED' | 'BOUND' | 'LOST';
 

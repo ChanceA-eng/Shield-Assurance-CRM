@@ -33,7 +33,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ quiz });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to update quiz.' },
+      { message: error instanceof Error ? error.message : 'Quiz could not be updated. Please try again.' },
       { status: 500 },
     );
   }

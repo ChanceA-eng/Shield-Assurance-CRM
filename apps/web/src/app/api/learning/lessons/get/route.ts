@@ -60,7 +60,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to load lesson.' },
+      { message: error instanceof Error ? error.message : 'Lesson could not be loaded. Refresh the page to try again.' },
       { status: 500 },
     );
   }

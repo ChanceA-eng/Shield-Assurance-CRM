@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
-import { requireApiSession } from '../../../../../lib/api-auth';
+import { getApiSession } from '../../../../../lib/api-auth';
 import {
   fmcsaConfigured,
   fmcsaGetCarrier,
@@ -10,6 +10,7 @@ import {
   stateFromAddress,
 } from '../../../../../lib/enrichment';
 
+import { databaseError, friendlyErrorMessage, workspaceApiError } from '../../../../../lib/workspace-api';
 interface RouteContext {
   params: Promise<{ id: string }>;
 }
@@ -26,12 +27,12 @@ interface EnrichPayload {
  * match is ambiguous; the caller confirms with dot_number.
  */
 export async function POST(request: NextRequest, context: RouteContext): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const { id } = await context.params;
@@ -46,20 +47,17 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     .select('id,full_name,address,form_payload')
     .eq('id', leadId)
     .maybeSingle();
-  if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+  if (error) return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   if (!lead) return NextResponse.json({ message: 'Lead not found.' }, { status: 404 });
 
   const state = stateFromAddress(lead.address);
-  const formPayload = (lead.form_payload ?? {}) as Record<string, unknown>;
-  const profile = (formPayload.profile ?? {}) as Record<string, unknown>;
-  const enrichment = (profile.enrichment ?? {}) as Record<string, unknown>;
-
-  const save = async (): Promise<void> => {
-    const update = await supabase
-      .from('leads')
-      .update({ form_payload: { ...formPayload, profile: { ...profile, enrichment } } })
-      .eq('id', leadId);
-    if (update.error) throw new Error(update.error.message);
+  const save = async (record: Awaited<ReturnType<typeof fmcsaGetCarrier>> | Awaited<ReturnType<typeof oshaInspectionsByName>>, matchMethod: 'name_search' | 'agent_selected_dot'): Promise<void> => {
+    const update = await supabase.rpc('record_intelligence_enrichment', {
+      p_lead: leadId, p_actor: session.user.id, p_source: source, p_record: { ...record, match_method: matchMethod },
+      p_expected: { full_name: lead.full_name, address: lead.address }, p_match_method: matchMethod,
+    });
+    if (update.error) throw databaseError(update.error);
+    if (update.data !== true) throw new Error('Source observation could not be verified.');
   };
 
   try {
@@ -76,8 +74,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
 
       if (payload.dot_number) {
         const record = await fmcsaGetCarrier(payload.dot_number);
-        enrichment.fmcsa = record;
-        await save();
+        await save(record, 'agent_selected_dot');
         return NextResponse.json({ saved: true, fmcsa: record }, { status: 200 });
       }
 
@@ -87,8 +84,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
       }
       if (candidates.length === 1) {
         const record = await fmcsaGetCarrier(candidates[0].dot_number);
-        enrichment.fmcsa = record;
-        await save();
+        await save(record, 'name_search');
         return NextResponse.json({ saved: true, fmcsa: record }, { status: 200 });
       }
       return NextResponse.json({ saved: false, candidates }, { status: 200 });
@@ -106,11 +102,9 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     }
 
     const record = await oshaInspectionsByName(lead.full_name, state);
-    enrichment.osha = record;
-    await save();
+    await save(record, 'name_search');
     return NextResponse.json({ saved: true, osha: record }, { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Enrichment failed.';
-    return NextResponse.json({ message }, { status: 502 });
+    return workspaceApiError(err, 'intelligence/enrichment');
   }
 }

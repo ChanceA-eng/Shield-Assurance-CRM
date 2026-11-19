@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '../../../lib/api-auth';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 
+import { friendlyErrorMessage } from '../../../lib/workspace-api';
 interface BillingRecordPayload {
   id?: string;
   policy_id?: string;
@@ -27,7 +28,7 @@ function normalizeAmount(value: number | string | undefined): number | null {
 
 async function resolveAccountId(policyId: string): Promise<{ accountId: string | null; error: string | null }> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return { accountId: null, error: 'Supabase is not configured.' };
+  if (!supabase) return { accountId: null, error: 'The CRM database is not connected. Contact your administrator.' };
 
   const { data, error } = await supabase.from('policies').select('account_id,client_id').eq('id', policyId).maybeSingle();
   if (error) return { accountId: null, error: error.message };
@@ -40,7 +41,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const accountId = normalizeText(request.nextUrl.searchParams.get('account_id'));
@@ -59,7 +60,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const { data, error } = await query;
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data ?? [], { status: 200 });
@@ -71,7 +72,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json().catch(() => ({}))) as BillingRecordPayload;
@@ -112,7 +113,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     .single();
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data, { status: 201 });
@@ -124,7 +125,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json().catch(() => ({}))) as BillingRecordPayload;
@@ -155,7 +156,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     .single();
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data, { status: 200 });
@@ -167,7 +168,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json().catch(() => ({}))) as { id?: string };
@@ -178,7 +179,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
 
   const { error } = await supabase.from('billing_records').delete().eq('id', id);
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });

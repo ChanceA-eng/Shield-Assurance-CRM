@@ -19,6 +19,7 @@ import { LearningBlockType, LearningContentType } from '@prisma/client';
 import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import SectionLayout from '../../../../../../components/crm/SectionLayout';
+import { postLearningMutation } from '../../../../../../lib/learning/api';
 import {
   createDefaultLessonExperience,
   parseLessonExperience,
@@ -172,25 +173,25 @@ function SortableLessonItem({ lesson }: { lesson: LessonItem }): JSX.Element {
   const style = { transform: CSS.Transform.toString(transform), transition };
 
   return (
-    <article ref={setNodeRef} style={style} className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+    <article ref={setNodeRef} style={style} className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <button
             type="button"
             {...attributes}
             {...listeners}
-            className="cursor-grab rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
+            className="cursor-grab rounded-lg border border-cui-border px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
           >
             Drag
           </button>
           <div>
-            <h4 className="text-sm font-semibold text-[#23282c]">{lesson.title}</h4>
+            <h4 className="text-sm font-semibold text-cui-text">{lesson.title}</h4>
             <p className="text-xs text-[#514f4d]">
               Type: {lesson.contentType.toLowerCase()} | Quizzes: {lesson.quizzes.length} | Blocks: {lesson.blocks.length}
             </p>
           </div>
         </div>
-        <a href={`/learning/lesson/${lesson.id}?lessonId=${lesson.id}`} className="text-xs font-semibold text-[#167495] hover:text-[#0c4e8a]">
+        <a href={`/learning/lesson/${lesson.id}?lessonId=${lesson.id}`} className="text-xs font-semibold text-cui-primary-strong hover:text-[#0c4e8a]">
           Open Lesson
         </a>
       </div>
@@ -209,7 +210,7 @@ function SortableBlockItem({ blockId, children }: { blockId: string; children: J
           type="button"
           {...attributes}
           {...listeners}
-          className="cursor-grab rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
+          className="cursor-grab rounded-lg border border-cui-border px-2 py-1 text-[10px] font-semibold text-[#514f4d]"
         >
           Drag Block
         </button>
@@ -222,12 +223,12 @@ function SortableBlockItem({ blockId, children }: { blockId: string; children: J
 function EditorToolbar({ onApply }: { onApply: (snippet: string) => void }): JSX.Element {
   return (
     <div className="mb-1 flex flex-wrap gap-1">
-      <button type="button" onClick={() => onApply('## Heading')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">H2</button>
-      <button type="button" onClick={() => onApply('**bold**')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Bold</button>
-      <button type="button" onClick={() => onApply('- bullet item')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Bullet</button>
-      <button type="button" onClick={() => onApply('> key point')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Quote</button>
-      <button type="button" onClick={() => onApply('`term`')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Inline Code</button>
-      <button type="button" onClick={() => onApply('```\ncode\n```')} className="rounded border border-[#c8ced3] px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Code Block</button>
+      <button type="button" onClick={() => onApply('## Heading')} className="rounded-lg border border-cui-border px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">H2</button>
+      <button type="button" onClick={() => onApply('**bold**')} className="rounded-lg border border-cui-border px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Bold</button>
+      <button type="button" onClick={() => onApply('- bullet item')} className="rounded-lg border border-cui-border px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Bullet</button>
+      <button type="button" onClick={() => onApply('> key point')} className="rounded-lg border border-cui-border px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Quote</button>
+      <button type="button" onClick={() => onApply('`term`')} className="rounded-lg border border-cui-border px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Inline Code</button>
+      <button type="button" onClick={() => onApply('```\ncode\n```')} className="rounded-lg border border-cui-border px-2 py-0.5 text-[10px] font-semibold text-[#514f4d]">Code Block</button>
     </div>
   );
 }
@@ -263,6 +264,8 @@ export default function ModuleEditorPage(): JSX.Element {
   const [lessonStructureDrafts, setLessonStructureDrafts] = useState<Record<string, LessonStructureDraft>>({});
   const [quizDrafts, setQuizDrafts] = useState<Record<string, QuizDraft>>({});
   const [blockDrafts, setBlockDrafts] = useState<Record<string, BlockDraft>>({});
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [mutationNotice, setMutationNotice] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor));
 
@@ -276,28 +279,33 @@ export default function ModuleEditorPage(): JSX.Element {
     return `${value}\n${snippet}`;
   }
 
-  async function loadModule(): Promise<void> {
+  async function loadModule(preserveDrafts = false): Promise<void> {
     const response = await fetch('/api/learning/courses/list');
+    if (!response.ok) {
+      const payload = (await response.json()) as { message?: string };
+      throw new Error(payload.message ?? 'Course module could not be loaded. Refresh and retry.');
+    }
     const payload = (await response.json()) as { courses?: CourseItem[] };
     const courses = payload.courses ?? [];
     const match = courses.flatMap((course) => course.modules).find((item) => item.id === moduleId) ?? null;
+    if (!match) throw new Error('This module no longer exists. Return to the course editor and refresh.');
     setModule(match);
 
-    if (!match) return;
-
-    setLessonDrafts(Object.fromEntries(match.lessons.map((lesson) => [lesson.id, {
+    setLessonDrafts((current) => Object.fromEntries(match.lessons.map((lesson) => [lesson.id, preserveDrafts && current[lesson.id] ? current[lesson.id] : {
       title: lesson.title,
       contentType: lesson.contentType,
       contentUrl: lesson.contentUrl ?? '',
       body: lesson.body ?? '',
     }])));
 
-    setLessonStructureDrafts(Object.fromEntries(match.lessons.map((lesson) => {
+    setLessonStructureDrafts((current) => Object.fromEntries(match.lessons.map((lesson) => {
+      if (preserveDrafts && current[lesson.id]) return [lesson.id, current[lesson.id]];
       const parsed = parseLessonExperience(lesson.body, lesson.title) ?? createDefaultLessonExperience(lesson.title);
       return [lesson.id, toStructureDraft(parsed)];
     })));
 
-    setQuizDrafts(Object.fromEntries(match.lessons.flatMap((lesson) => lesson.quizzes.map((quiz) => {
+    setQuizDrafts((current) => Object.fromEntries(match.lessons.flatMap((lesson) => lesson.quizzes.map((quiz) => {
+      if (preserveDrafts && current[quiz.id]) return [quiz.id, current[quiz.id]];
       const options = normalizeQuizOptions(quiz.options);
       return [quiz.id, {
         question: quiz.question,
@@ -309,7 +317,8 @@ export default function ModuleEditorPage(): JSX.Element {
       }];
     }))));
 
-    setBlockDrafts(Object.fromEntries(match.lessons.flatMap((lesson) => lesson.blocks.map((block) => {
+    setBlockDrafts((current) => Object.fromEntries(match.lessons.flatMap((lesson) => lesson.blocks.map((block) => {
+      if (preserveDrafts && current[block.id]) return [block.id, current[block.id]];
       const content = asContentObject(block.content);
       return [block.id, {
         title: block.title ?? '',
@@ -326,39 +335,42 @@ export default function ModuleEditorPage(): JSX.Element {
 
   useEffect(() => {
     if (moduleId) {
-      void loadModule();
+      void loadModule().catch((failure: unknown) => setMutationError(failure instanceof Error ? failure.message : 'Module could not be loaded.'));
     }
   }, [moduleId]);
+
+  async function runMutation(operation: () => Promise<void>, successMessage: string): Promise<void> {
+    setMutationError(null);
+    setMutationNotice(null);
+    try {
+      await operation();
+      setMutationNotice(successMessage);
+    } catch (failure) {
+      setMutationError(failure instanceof Error ? failure.message : 'The course change could not be saved. Your edits are still available.');
+    }
+  }
 
   async function addLesson(): Promise<void> {
     if (!lessonTitle.trim()) return;
 
-    await fetch('/api/learning/lessons/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        moduleId,
-        title: lessonTitle,
-        contentType,
-        contentUrl: contentType === LearningContentType.TEXT || contentType === LearningContentType.INTERACTIVE ? null : contentUrl,
-        body: contentType === LearningContentType.TEXT || contentType === LearningContentType.INTERACTIVE ? body : null,
-      }),
-    });
+    await postLearningMutation('/api/learning/lessons/create', {
+      moduleId,
+      title: lessonTitle,
+      contentType,
+      contentUrl: contentType === LearningContentType.TEXT || contentType === LearningContentType.INTERACTIVE ? null : contentUrl,
+      body: contentType === LearningContentType.TEXT || contentType === LearningContentType.INTERACTIVE ? body : null,
+    }, 'Lesson could not be created.');
 
     setLessonTitle('');
     setContentUrl('');
     setBody('');
-    await loadModule();
+    await loadModule(true);
   }
 
   async function duplicateLesson(lessonId: string): Promise<void> {
-    await fetch('/api/learning/lessons/duplicate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lessonId }),
-    });
+    await postLearningMutation('/api/learning/lessons/duplicate', { lessonId }, 'Lesson could not be duplicated.');
 
-    await loadModule();
+    await loadModule(true);
   }
 
   async function saveLesson(lessonId: string): Promise<void> {
@@ -370,28 +382,20 @@ export default function ModuleEditorPage(): JSX.Element {
       ? serializeLessonExperience(fromStructureDraft(draft.title.trim(), structureDraft))
       : draft.body;
 
-    await fetch('/api/learning/lessons/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: lessonId,
-        title: draft.title.trim(),
-        contentType: draft.contentType,
-        contentUrl: draft.contentType === LearningContentType.TEXT || draft.contentType === LearningContentType.INTERACTIVE ? null : draft.contentUrl,
-        body: draft.contentType === LearningContentType.TEXT || draft.contentType === LearningContentType.INTERACTIVE ? structuredBody : null,
-      }),
-    });
+    await postLearningMutation('/api/learning/lessons/update', {
+      id: lessonId,
+      title: draft.title.trim(),
+      contentType: draft.contentType,
+      contentUrl: draft.contentType === LearningContentType.TEXT || draft.contentType === LearningContentType.INTERACTIVE ? null : draft.contentUrl,
+      body: draft.contentType === LearningContentType.TEXT || draft.contentType === LearningContentType.INTERACTIVE ? structuredBody : null,
+    }, 'Lesson could not be saved.');
 
-    await loadModule();
+    await loadModule(true);
   }
 
   async function removeLesson(lessonId: string): Promise<void> {
-    await fetch('/api/learning/lessons/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: lessonId }),
-    });
-    await loadModule();
+    await postLearningMutation('/api/learning/lessons/delete', { id: lessonId }, 'Lesson could not be deleted.');
+    await loadModule(true);
   }
 
   async function addQuiz(): Promise<void> {
@@ -403,16 +407,12 @@ export default function ModuleEditorPage(): JSX.Element {
       return;
     }
 
-    await fetch('/api/learning/quizzes/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        lessonId: quizLessonId,
-        question: quizQuestion,
-        options,
-        answer: quizAnswer,
-      }),
-    });
+    await postLearningMutation('/api/learning/quizzes/create', {
+      lessonId: quizLessonId,
+      question: quizQuestion,
+      options,
+      answer: quizAnswer,
+    }, 'Knowledge check could not be created.');
 
     setQuizQuestion('');
     setQuizOptions([
@@ -422,7 +422,7 @@ export default function ModuleEditorPage(): JSX.Element {
       { text: '', explanation: '' },
     ]);
     setQuizAnswer(0);
-    await loadModule();
+    await loadModule(true);
   }
 
   async function saveQuiz(quizId: string): Promise<void> {
@@ -437,28 +437,20 @@ export default function ModuleEditorPage(): JSX.Element {
       return;
     }
 
-    await fetch('/api/learning/quizzes/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: quizId,
-        question: draft.question,
-        options,
-        answer: draft.answer,
-      }),
-    });
+    await postLearningMutation('/api/learning/quizzes/update', {
+      id: quizId,
+      question: draft.question,
+      options,
+      answer: draft.answer,
+    }, 'Knowledge check could not be saved.');
 
-    await loadModule();
+    await loadModule(true);
   }
 
   async function removeQuiz(quizId: string): Promise<void> {
-    await fetch('/api/learning/quizzes/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: quizId }),
-    });
+    await postLearningMutation('/api/learning/quizzes/delete', { id: quizId }, 'Knowledge check could not be deleted.');
 
-    await loadModule();
+    await loadModule(true);
   }
 
   function applyTemplate(template: 'UNDERWRITING_SCENARIO' | 'CODE_DRILL' | 'PDF_BRIEF'): void {
@@ -491,61 +483,45 @@ export default function ModuleEditorPage(): JSX.Element {
     if (blockBody.trim()) content.body = blockBody.trim();
     if (blockUrl.trim()) content.url = blockUrl.trim();
 
-    await fetch('/api/learning/blocks/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lessonId: blockLessonId, type: blockType, title: blockTitle, content }),
-    });
+    await postLearningMutation('/api/learning/blocks/create', {
+      lessonId: blockLessonId, type: blockType, title: blockTitle, content,
+    }, 'Learning block could not be created.');
 
     setBlockTitle('');
     setBlockBody('');
     setBlockUrl('');
-    await loadModule();
+    await loadModule(true);
   }
 
   async function saveBlock(blockId: string): Promise<void> {
     const draft = blockDrafts[blockId];
     if (!draft) return;
 
-    await fetch('/api/learning/blocks/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: blockId,
-        title: draft.title,
-        type: draft.type,
-        order: draft.order,
-        content: { body: draft.body, url: draft.url },
-      }),
-    });
+    await postLearningMutation('/api/learning/blocks/update', {
+      id: blockId,
+      title: draft.title,
+      type: draft.type,
+      order: draft.order,
+      content: { body: draft.body, url: draft.url },
+    }, 'Learning block could not be saved.');
 
-    await loadModule();
+    await loadModule(true);
   }
 
   async function removeBlock(blockId: string): Promise<void> {
-    await fetch('/api/learning/blocks/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: blockId }),
-    });
+    await postLearningMutation('/api/learning/blocks/delete', { id: blockId }, 'Learning block could not be deleted.');
 
-    await loadModule();
+    await loadModule(true);
   }
 
   async function persistLessonOrder(lessons: LessonItem[]): Promise<void> {
-    await Promise.all(lessons.map((lesson, index) => fetch('/api/learning/lessons/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: lesson.id, order: index }),
-    })));
+    await Promise.all(lessons.map((lesson, index) =>
+      postLearningMutation('/api/learning/lessons/update', { id: lesson.id, order: index }, 'Lesson order could not be saved.')));
   }
 
   async function persistBlockOrder(lessonId: string, blocks: LessonBlockItem[]): Promise<void> {
-    await Promise.all(blocks.map((block, index) => fetch('/api/learning/blocks/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: block.id, order: index }),
-    })));
+    await Promise.all(blocks.map((block, index) =>
+      postLearningMutation('/api/learning/blocks/update', { id: block.id, order: index }, 'Learning block order could not be saved.')));
 
     setBlockDrafts((current) => {
       const next = { ...current };
@@ -558,7 +534,6 @@ export default function ModuleEditorPage(): JSX.Element {
       return next;
     });
 
-    await loadModule();
   }
 
   function onLessonDragEnd(event: DragEndEvent): void {
@@ -573,7 +548,14 @@ export default function ModuleEditorPage(): JSX.Element {
 
     const nextLessons = arrayMove(module.lessons, oldIndex, newIndex).map((lesson, index) => ({ ...lesson, order: index }));
     setModule({ ...module, lessons: nextLessons });
-    void persistLessonOrder(nextLessons);
+    void runMutation(async () => {
+      try {
+        await persistLessonOrder(nextLessons);
+      } catch (failure) {
+        setModule(module);
+        throw failure;
+      }
+    }, 'Lesson order saved.');
   }
 
   function onBlockDragEnd(lessonId: string, event: DragEndEvent): void {
@@ -597,31 +579,40 @@ export default function ModuleEditorPage(): JSX.Element {
     };
 
     setModule(nextModule);
-    void persistBlockOrder(lessonId, nextBlocks);
+    void runMutation(async () => {
+      try {
+        await persistBlockOrder(lessonId, nextBlocks);
+      } catch (failure) {
+        setModule(module);
+        throw failure;
+      }
+    }, 'Learning block order saved.');
   }
 
   return (
     <SectionLayout title="Module Studio">
+      {mutationError ? <p role="alert" className="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{mutationError}</p> : null}
+      {mutationNotice ? <p role="status" className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">{mutationNotice}</p> : null}
       {!module ? <p className="text-sm text-[#514f4d]">Loading module...</p> : null}
 
       {module ? (
         <div className="space-y-4">
-          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+          <section className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <a href={`/learning/course-builder/${courseId}`} className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Course Editor</a>
-              <a href="/learning/course-builder" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Studio Courses</a>
-              <a href="/learning" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Learning Center</a>
-              <a href="/" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Exit Studio</a>
+              <a href={`/learning/course-builder/${courseId}`} className="rounded-md border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-text hover:bg-cui-light">Back to Course Editor</a>
+              <a href="/learning/course-builder" className="rounded-md border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-text hover:bg-cui-light">Back to Studio Courses</a>
+              <a href="/learning" className="rounded-md border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-text hover:bg-cui-light">Back to Learning Center</a>
+              <a href="/" className="rounded-md border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-text hover:bg-cui-light">Exit Studio</a>
             </div>
           </section>
 
-          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
-            <h2 className="text-lg font-bold text-[#23282c]">{module.title}</h2>
+          <section className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
+            <h2 className="text-lg font-bold text-cui-text">{module.title}</h2>
             <p className="mt-1 text-xs text-[#514f4d]">Create and edit lessons, knowledge checks, and interactive blocks.</p>
 
             <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-              <input className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2" placeholder="Lesson title" value={lessonTitle} onChange={(event) => setLessonTitle(event.target.value)} />
-              <select className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={contentType} onChange={(event) => {
+              <input className="rounded-md border border-cui-border px-3 py-2 text-sm md:col-span-2" placeholder="Lesson title" value={lessonTitle} onChange={(event) => setLessonTitle(event.target.value)} />
+              <select className="rounded-md border border-cui-border px-3 py-2 text-sm" value={contentType} onChange={(event) => {
                 const value = event.target.value;
                 if (value === LearningContentType.TEXT || value === LearningContentType.INTERACTIVE || value === LearningContentType.VIDEO || value === LearningContentType.PDF) {
                   setContentType(value);
@@ -632,35 +623,35 @@ export default function ModuleEditorPage(): JSX.Element {
                 <option value={LearningContentType.VIDEO}>Video</option>
                 <option value={LearningContentType.PDF}>PDF</option>
               </select>
-              <button type="button" onClick={() => { void addLesson(); }} className="rounded-md bg-[#23282c] px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]">+ Add Lesson</button>
+              <button type="button" onClick={() => { void runMutation(addLesson, 'Lesson created.'); }} className="rounded-md bg-cui-text px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]">+ Add Lesson</button>
             </div>
 
             {(contentType === LearningContentType.VIDEO || contentType === LearningContentType.PDF) ? (
-              <input className="mt-2 w-full rounded-md border border-[#c8ced3] px-3 py-2 text-sm" placeholder="Media URL" value={contentUrl} onChange={(event) => setContentUrl(event.target.value)} />
+              <input className="mt-2 w-full rounded-md border border-cui-border px-3 py-2 text-sm" placeholder="Media URL" value={contentUrl} onChange={(event) => setContentUrl(event.target.value)} />
             ) : null}
 
             {(contentType === LearningContentType.TEXT || contentType === LearningContentType.INTERACTIVE) ? (
               <>
                 <EditorToolbar onApply={(snippet) => setBody((current) => appendSnippet(current, snippet))} />
-                <textarea className="h-28 w-full rounded-md border border-[#c8ced3] px-3 py-2 text-sm" placeholder="Lesson body" value={body} onChange={(event) => setBody(event.target.value)} />
+                <textarea className="h-28 w-full rounded-md border border-cui-border px-3 py-2 text-sm" placeholder="Lesson body" value={body} onChange={(event) => setBody(event.target.value)} />
               </>
             ) : null}
           </section>
 
-          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
-            <h3 className="text-sm font-semibold text-[#23282c]">Quiz Builder (with answer explanations)</h3>
+          <section className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
+            <h3 className="text-sm font-semibold text-cui-text">Quiz Builder (with answer explanations)</h3>
             <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-              <select className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={quizLessonId} onChange={(event) => setQuizLessonId(event.target.value)}>
+              <select className="rounded-md border border-cui-border px-3 py-2 text-sm" value={quizLessonId} onChange={(event) => setQuizLessonId(event.target.value)}>
                 <option value="">Select lesson</option>
                 {sortedLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.title}</option>)}
               </select>
-              <input className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={quizQuestion} onChange={(event) => setQuizQuestion(event.target.value)} placeholder="Question" />
+              <input className="rounded-md border border-cui-border px-3 py-2 text-sm" value={quizQuestion} onChange={(event) => setQuizQuestion(event.target.value)} placeholder="Question" />
             </div>
             <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
               {quizOptions.map((option, index) => (
-                <div key={`new-opt-${index}`} className="rounded border border-[#e4e5e6] p-2">
+                <div key={`new-opt-${index}`} className="rounded-lg border border-cui-body p-2">
                   <input
-                    className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                    className="w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                     value={option.text}
                     onChange={(event) => {
                       setQuizOptions((current) => {
@@ -672,7 +663,7 @@ export default function ModuleEditorPage(): JSX.Element {
                     placeholder={`Option ${index + 1}`}
                   />
                   <input
-                    className="mt-1 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                    className="mt-1 w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                     value={option.explanation ?? ''}
                     onChange={(event) => {
                       setQuizOptions((current) => {
@@ -688,27 +679,27 @@ export default function ModuleEditorPage(): JSX.Element {
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <label className="text-xs text-[#514f4d]" htmlFor="answer-index">Correct option index:</label>
-              <input id="answer-index" type="number" min={0} max={3} value={quizAnswer} onChange={(event) => setQuizAnswer(Number(event.target.value) || 0)} className="w-20 rounded-md border border-[#c8ced3] px-2 py-1 text-sm" />
-              <button type="button" onClick={() => { void addQuiz(); }} className="rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]">+ Add Quiz</button>
+              <input id="answer-index" type="number" min={0} max={3} value={quizAnswer} onChange={(event) => setQuizAnswer(Number(event.target.value) || 0)} className="w-20 rounded-md border border-cui-border px-2 py-1 text-sm" />
+              <button type="button" onClick={() => { void runMutation(addQuiz, 'Knowledge check created.'); }} className="rounded-md border border-cui-primary-strong px-3 py-1 text-xs font-semibold text-cui-primary-strong hover:bg-[#eef5ff]">+ Add Quiz</button>
             </div>
           </section>
 
-          <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+          <section className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-[#23282c]">Interactive Block Builder</h3>
+              <h3 className="text-sm font-semibold text-cui-text">Interactive Block Builder</h3>
               <div className="flex flex-wrap gap-1">
-                <button type="button" className="rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('UNDERWRITING_SCENARIO')}>Template: Scenario</button>
-                <button type="button" className="rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('CODE_DRILL')}>Template: Code Drill</button>
-                <button type="button" className="rounded border border-[#c8ced3] px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('PDF_BRIEF')}>Template: PDF Brief</button>
+                <button type="button" className="rounded-lg border border-cui-border px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('UNDERWRITING_SCENARIO')}>Template: Scenario</button>
+                <button type="button" className="rounded-lg border border-cui-border px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('CODE_DRILL')}>Template: Code Drill</button>
+                <button type="button" className="rounded-lg border border-cui-border px-2 py-1 text-[10px] font-semibold text-[#514f4d]" onClick={() => applyTemplate('PDF_BRIEF')}>Template: PDF Brief</button>
               </div>
             </div>
 
             <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-              <select className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={blockLessonId} onChange={(event) => setBlockLessonId(event.target.value)}>
+              <select className="rounded-md border border-cui-border px-3 py-2 text-sm" value={blockLessonId} onChange={(event) => setBlockLessonId(event.target.value)}>
                 <option value="">Select lesson</option>
                 {sortedLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.title}</option>)}
               </select>
-              <select className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm" value={blockType} onChange={(event) => {
+              <select className="rounded-md border border-cui-border px-3 py-2 text-sm" value={blockType} onChange={(event) => {
                 const value = event.target.value;
                 if (
                   value === LearningBlockType.TEXT || value === LearningBlockType.CODE || value === LearningBlockType.EXERCISE || value === LearningBlockType.SIMULATION || value === LearningBlockType.VIDEO || value === LearningBlockType.PDF || value === LearningBlockType.QUIZ
@@ -722,12 +713,12 @@ export default function ModuleEditorPage(): JSX.Element {
                 <option value={LearningBlockType.PDF}>PDF</option>
                 <option value={LearningBlockType.QUIZ}>Quiz Prompt</option>
               </select>
-              <input className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2" value={blockTitle} onChange={(event) => setBlockTitle(event.target.value)} placeholder="Block title" />
+              <input className="rounded-md border border-cui-border px-3 py-2 text-sm md:col-span-2" value={blockTitle} onChange={(event) => setBlockTitle(event.target.value)} placeholder="Block title" />
               <EditorToolbar onApply={(snippet) => setBlockBody((current) => appendSnippet(current, snippet))} />
-              <textarea className="h-28 rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2" value={blockBody} onChange={(event) => setBlockBody(event.target.value)} placeholder="Block body / instructions" />
-              <input className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2" value={blockUrl} onChange={(event) => setBlockUrl(event.target.value)} placeholder="Optional media URL" />
+              <textarea className="h-28 rounded-md border border-cui-border px-3 py-2 text-sm md:col-span-2" value={blockBody} onChange={(event) => setBlockBody(event.target.value)} placeholder="Block body / instructions" />
+              <input className="rounded-md border border-cui-border px-3 py-2 text-sm md:col-span-2" value={blockUrl} onChange={(event) => setBlockUrl(event.target.value)} placeholder="Optional media URL" />
             </div>
-            <button type="button" onClick={() => { void addBlock(); }} className="mt-3 rounded-md border border-[#167495] px-3 py-1 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff]">+ Add Block</button>
+            <button type="button" onClick={() => { void runMutation(addBlock, 'Learning block created.'); }} className="mt-3 rounded-md border border-cui-primary-strong px-3 py-1 text-xs font-semibold text-cui-primary-strong hover:bg-[#eef5ff]">+ Add Block</button>
           </section>
 
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onLessonDragEnd}>
@@ -747,31 +738,31 @@ export default function ModuleEditorPage(): JSX.Element {
                     <div key={lesson.id} className="space-y-2">
                       <SortableLessonItem lesson={lesson} />
 
-                      <div className="rounded border border-[#e4e5e6] bg-white p-3">
+                      <div className="rounded-lg border border-cui-body bg-white p-3">
                         <div className="flex flex-wrap items-center gap-2">
-                          <input value={lessonDraft.title} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, title: event.target.value } }))} className="min-w-[16rem] flex-1 rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Lesson title" />
+                          <input value={lessonDraft.title} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, title: event.target.value } }))} className="min-w-[16rem] flex-1 rounded-lg border border-cui-border px-2 py-1 text-xs" placeholder="Lesson title" />
                           <select value={lessonDraft.contentType} onChange={(event) => {
                             const value = event.target.value;
                             if (value === LearningContentType.TEXT || value === LearningContentType.INTERACTIVE || value === LearningContentType.VIDEO || value === LearningContentType.PDF) {
                               setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, contentType: value } }));
                             }
-                          }} className="rounded border border-[#c8ced3] px-2 py-1 text-xs">
+                          }} className="rounded-lg border border-cui-border px-2 py-1 text-xs">
                             <option value={LearningContentType.TEXT}>Text</option>
                             <option value={LearningContentType.INTERACTIVE}>Interactive</option>
                             <option value={LearningContentType.VIDEO}>Video</option>
                             <option value={LearningContentType.PDF}>PDF</option>
                           </select>
-                          <button type="button" onClick={() => { void saveLesson(lesson.id); }} className="rounded border border-[#167495] px-2 py-1 text-[11px] font-semibold text-[#167495] hover:bg-[#eef5ff]">Save Lesson</button>
-                          <button type="button" onClick={() => { void duplicateLesson(lesson.id); }} className="rounded border border-[#5c667a] px-2 py-1 text-[11px] font-semibold text-[#5c667a] hover:bg-[#f5f7fb]">Duplicate Lesson</button>
-                          <button type="button" onClick={() => { void removeLesson(lesson.id); }} className="rounded border border-[#a61b1b] px-2 py-1 text-[11px] font-semibold text-[#a61b1b] hover:bg-[#fff4f4]">Delete Lesson</button>
+                          <button type="button" onClick={() => { void runMutation(() => saveLesson(lesson.id), 'Lesson saved.'); }} className="rounded-lg border border-cui-primary-strong px-2 py-1 text-[11px] font-semibold text-cui-primary-strong hover:bg-[#eef5ff]">Save Lesson</button>
+                          <button type="button" onClick={() => { void runMutation(() => duplicateLesson(lesson.id), 'Lesson duplicated.'); }} className="rounded-lg border border-[#5c667a] px-2 py-1 text-[11px] font-semibold text-[#5c667a] hover:bg-[#f5f7fb]">Duplicate Lesson</button>
+                          <button type="button" onClick={() => { void runMutation(() => removeLesson(lesson.id), 'Lesson deleted.'); }} className="rounded-lg border border-[#a61b1b] px-2 py-1 text-[11px] font-semibold text-[#a61b1b] hover:bg-[#fff4f4]">Delete Lesson</button>
                         </div>
 
                         {(lessonDraft.contentType === LearningContentType.VIDEO || lessonDraft.contentType === LearningContentType.PDF) ? (
-                          <input value={lessonDraft.contentUrl} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, contentUrl: event.target.value } }))} className="mt-2 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Lesson media URL" />
+                          <input value={lessonDraft.contentUrl} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, contentUrl: event.target.value } }))} className="mt-2 w-full rounded-lg border border-cui-border px-2 py-1 text-xs" placeholder="Lesson media URL" />
                         ) : null}
 
                         {(lessonDraft.contentType === LearningContentType.TEXT || lessonDraft.contentType === LearningContentType.INTERACTIVE) ? (
-                          <div className="mt-2 space-y-2 rounded border border-[#dbe5f2] bg-[#f8f9fa] p-3">
+                          <div className="mt-2 space-y-2 rounded-lg border border-[#dbe5f2] bg-cui-light p-3">
                             <p className="text-[11px] font-semibold uppercase tracking-wide text-[#244368]">Structured Lesson Experience Editor</p>
                             {(() => {
                               const structureDraft = lessonStructureDrafts[lesson.id] ?? toStructureDraft(createDefaultLessonExperience(lessonDraft.title));
@@ -786,7 +777,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                         ...current,
                                         [lesson.id]: { ...structureDraft, readingTimeMinutes: Number(event.target.value) || 10 },
                                       }))}
-                                      className="rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                      className="rounded-lg border border-cui-border px-2 py-1 text-xs"
                                       placeholder="Reading time (minutes)"
                                     />
                                     <select
@@ -800,7 +791,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                           }));
                                         }
                                       }}
-                                      className="rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                      className="rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     >
                                       <option value="Beginner">Beginner</option>
                                       <option value="Intermediate">Intermediate</option>
@@ -811,58 +802,58 @@ export default function ModuleEditorPage(): JSX.Element {
                                   <textarea
                                     value={structureDraft.introduction}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, introduction: event.target.value } }))}
-                                    className="h-16 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                    className="h-16 w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     placeholder="Introduction"
                                   />
 
                                   <textarea
                                     value={structureDraft.objectives}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, objectives: event.target.value } }))}
-                                    className="h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                    className="h-20 w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     placeholder="Learning objectives (one per line)"
                                   />
 
                                   <textarea
                                     value={structureDraft.lexicon}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, lexicon: event.target.value } }))}
-                                    className="h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                    className="h-20 w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     placeholder="Lexicon lines: Term: Definition"
                                   />
 
                                   <input
                                     value={structureDraft.deepDiveHeading}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, deepDiveHeading: event.target.value } }))}
-                                    className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                    className="w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     placeholder="Technical deep dive heading"
                                   />
                                   <input
                                     value={structureDraft.caseLawCitation}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, caseLawCitation: event.target.value } }))}
-                                    className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                    className="w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     placeholder="Case law citation"
                                   />
                                   <textarea
                                     value={structureDraft.coreDoctrine}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, coreDoctrine: event.target.value } }))}
-                                    className="h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                    className="h-20 w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     placeholder="Core doctrine"
                                   />
                                   <textarea
                                     value={structureDraft.scenarios}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, scenarios: event.target.value } }))}
-                                    className="h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                    className="h-20 w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     placeholder="Scenario lines: Lane Name: Description"
                                   />
                                   <input
                                     value={structureDraft.strategyName}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, strategyName: event.target.value } }))}
-                                    className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                    className="w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     placeholder="Field execution strategy name"
                                   />
                                   <textarea
                                     value={structureDraft.script}
                                     onChange={(event) => setLessonStructureDrafts((current) => ({ ...current, [lesson.id]: { ...structureDraft, script: event.target.value } }))}
-                                    className="h-24 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                    className="h-24 w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                     placeholder="Field execution script"
                                   />
                                 </div>
@@ -870,7 +861,7 @@ export default function ModuleEditorPage(): JSX.Element {
                             })()}
 
                             <EditorToolbar onApply={(snippet) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, body: appendSnippet(lessonDraft.body, snippet) } }))} />
-                            <textarea value={lessonDraft.body} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, body: event.target.value } }))} className="mt-1 h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Raw lesson body (legacy/plain text fallback)" />
+                            <textarea value={lessonDraft.body} onChange={(event) => setLessonDrafts((current) => ({ ...current, [lesson.id]: { ...lessonDraft, body: event.target.value } }))} className="mt-1 h-20 w-full rounded-lg border border-cui-border px-2 py-1 text-xs" placeholder="Raw lesson body (legacy/plain text fallback)" />
                           </div>
                         ) : null}
 
@@ -881,11 +872,11 @@ export default function ModuleEditorPage(): JSX.Element {
                               const draft = quizDrafts[quiz.id] ?? { question: quiz.question, answer: quiz.answer, options: normalizeQuizOptions(quiz.options) };
 
                               return (
-                                <div key={quiz.id} className="rounded border border-[#e4e5e6] p-2">
-                                  <input value={draft.question} onChange={(event) => setQuizDrafts((current) => ({ ...current, [quiz.id]: { ...draft, question: event.target.value } }))} className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Quiz question" />
+                                <div key={quiz.id} className="rounded-lg border border-cui-body p-2">
+                                  <input value={draft.question} onChange={(event) => setQuizDrafts((current) => ({ ...current, [quiz.id]: { ...draft, question: event.target.value } }))} className="w-full rounded-lg border border-cui-border px-2 py-1 text-xs" placeholder="Quiz question" />
                                   <div className="mt-2 grid grid-cols-1 gap-1 md:grid-cols-2">
                                     {draft.options.map((option, index) => (
-                                      <div key={`${quiz.id}-opt-${index}`} className="rounded border border-[#e4e5e6] p-1">
+                                      <div key={`${quiz.id}-opt-${index}`} className="rounded-lg border border-cui-body p-1">
                                         <input
                                           value={option.text}
                                           onChange={(event) => {
@@ -895,7 +886,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                               return { ...current, [quiz.id]: { ...draft, options: next } };
                                             });
                                           }}
-                                          className="w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                          className="w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                           placeholder={`Option ${index + 1}`}
                                         />
                                         <input
@@ -907,7 +898,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                               return { ...current, [quiz.id]: { ...draft, options: next } };
                                             });
                                           }}
-                                          className="mt-1 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs"
+                                          className="mt-1 w-full rounded-lg border border-cui-border px-2 py-1 text-xs"
                                           placeholder="Explanation"
                                         />
                                       </div>
@@ -915,9 +906,9 @@ export default function ModuleEditorPage(): JSX.Element {
                                   </div>
                                   <div className="mt-2 flex flex-wrap items-center gap-2">
                                     <label className="text-[11px] text-[#514f4d]" htmlFor={`ans-${quiz.id}`}>Correct index:</label>
-                                    <input id={`ans-${quiz.id}`} type="number" min={0} max={Math.max(draft.options.length - 1, 0)} value={draft.answer} onChange={(event) => setQuizDrafts((current) => ({ ...current, [quiz.id]: { ...draft, answer: Number(event.target.value) || 0 } }))} className="w-20 rounded border border-[#c8ced3] px-2 py-1 text-xs" />
-                                    <button type="button" onClick={() => { void saveQuiz(quiz.id); }} className="rounded border border-[#167495] px-2 py-1 text-[11px] font-semibold text-[#167495] hover:bg-[#eef5ff]">Save Quiz</button>
-                                    <button type="button" onClick={() => { void removeQuiz(quiz.id); }} className="rounded border border-[#a61b1b] px-2 py-1 text-[11px] font-semibold text-[#a61b1b] hover:bg-[#fff4f4]">Delete Quiz</button>
+                                    <input id={`ans-${quiz.id}`} type="number" min={0} max={Math.max(draft.options.length - 1, 0)} value={draft.answer} onChange={(event) => setQuizDrafts((current) => ({ ...current, [quiz.id]: { ...draft, answer: Number(event.target.value) || 0 } }))} className="w-20 rounded-lg border border-cui-border px-2 py-1 text-xs" />
+                                    <button type="button" onClick={() => { void runMutation(() => saveQuiz(quiz.id), 'Knowledge check saved.'); }} className="rounded-lg border border-cui-primary-strong px-2 py-1 text-[11px] font-semibold text-cui-primary-strong hover:bg-[#eef5ff]">Save Quiz</button>
+                                    <button type="button" onClick={() => { void runMutation(() => removeQuiz(quiz.id), 'Knowledge check deleted.'); }} className="rounded-lg border border-[#a61b1b] px-2 py-1 text-[11px] font-semibold text-[#a61b1b] hover:bg-[#fff4f4]">Delete Quiz</button>
                                   </div>
                                 </div>
                               );
@@ -942,9 +933,9 @@ export default function ModuleEditorPage(): JSX.Element {
 
                                     return (
                                       <SortableBlockItem key={block.id} blockId={block.id}>
-                                        <div className="rounded border border-[#e4e5e6] p-2">
+                                        <div className="rounded-lg border border-cui-body p-2">
                                           <div className="grid grid-cols-1 gap-1 md:grid-cols-3">
-                                            <input value={draft.title} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, title: event.target.value } }))} className="rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Block title" />
+                                            <input value={draft.title} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, title: event.target.value } }))} className="rounded-lg border border-cui-border px-2 py-1 text-xs" placeholder="Block title" />
                                             <select value={draft.type} onChange={(event) => {
                                               const value = event.target.value;
                                               if (
@@ -952,7 +943,7 @@ export default function ModuleEditorPage(): JSX.Element {
                                               ) {
                                                 setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, type: value } }));
                                               }
-                                            }} className="rounded border border-[#c8ced3] px-2 py-1 text-xs">
+                                            }} className="rounded-lg border border-cui-border px-2 py-1 text-xs">
                                               <option value={LearningBlockType.TEXT}>Text</option>
                                               <option value={LearningBlockType.CODE}>Code</option>
                                               <option value={LearningBlockType.EXERCISE}>Exercise</option>
@@ -961,13 +952,13 @@ export default function ModuleEditorPage(): JSX.Element {
                                               <option value={LearningBlockType.PDF}>PDF</option>
                                               <option value={LearningBlockType.QUIZ}>Quiz Prompt</option>
                                             </select>
-                                            <input value={draft.url} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, url: event.target.value } }))} className="rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Optional URL" />
+                                            <input value={draft.url} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, url: event.target.value } }))} className="rounded-lg border border-cui-border px-2 py-1 text-xs" placeholder="Optional URL" />
                                           </div>
                                           <EditorToolbar onApply={(snippet) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, body: appendSnippet(draft.body, snippet) } }))} />
-                                          <textarea value={draft.body} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, body: event.target.value } }))} className="mt-1 h-20 w-full rounded border border-[#c8ced3] px-2 py-1 text-xs" placeholder="Block body" />
+                                          <textarea value={draft.body} onChange={(event) => setBlockDrafts((current) => ({ ...current, [block.id]: { ...draft, body: event.target.value } }))} className="mt-1 h-20 w-full rounded-lg border border-cui-border px-2 py-1 text-xs" placeholder="Block body" />
                                           <div className="mt-1 flex flex-wrap gap-1">
-                                            <button type="button" onClick={() => { void saveBlock(block.id); }} className="rounded border border-[#167495] px-2 py-1 text-[11px] font-semibold text-[#167495] hover:bg-[#eef5ff]">Save Block</button>
-                                            <button type="button" onClick={() => { void removeBlock(block.id); }} className="rounded border border-[#a61b1b] px-2 py-1 text-[11px] font-semibold text-[#a61b1b] hover:bg-[#fff4f4]">Delete Block</button>
+                                            <button type="button" onClick={() => { void runMutation(() => saveBlock(block.id), 'Learning block saved.'); }} className="rounded-lg border border-cui-primary-strong px-2 py-1 text-[11px] font-semibold text-cui-primary-strong hover:bg-[#eef5ff]">Save Block</button>
+                                            <button type="button" onClick={() => { void runMutation(() => removeBlock(block.id), 'Learning block deleted.'); }} className="rounded-lg border border-[#a61b1b] px-2 py-1 text-[11px] font-semibold text-[#a61b1b] hover:bg-[#fff4f4]">Delete Block</button>
                                           </div>
                                         </div>
                                       </SortableBlockItem>

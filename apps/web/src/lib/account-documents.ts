@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { validateReviewedIntakeFields, type ReviewedIntakeFields } from './policy-document-intake';
 
 export const ACCOUNT_DOCUMENT_BUCKET = process.env.ACCOUNT_DOCUMENTS_BUCKET?.trim() || 'account-documents';
 export const MAX_ACCOUNT_DOCUMENT_BYTES = 25 * 1024 * 1024;
@@ -82,6 +83,7 @@ export interface ClientFileView {
   uploaded_by: string | null;
   uploaded_at: string | null;
   notes: string | null;
+  intake_review?: ReviewedIntakeFields;
 }
 
 export type Result<T> = ({ ok: true } & T) | { ok: false; status: number; message: string };
@@ -218,6 +220,7 @@ export function toClientFileView(record: ClientFileRecord): ClientFileView {
     uploaded_by: text(metadata.uploaded_by) ?? text(metadata.added_by),
     uploaded_at: record.uploaded_at ?? record.created_at,
     notes: text(metadata.notes),
+    ...(metadata.intake_review === undefined ? {} : { intake_review: validateReviewedIntakeFields(metadata.intake_review) }),
   };
 }
 

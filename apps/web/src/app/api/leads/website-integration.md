@@ -22,6 +22,14 @@ Use this endpoint from your public website form to push every submission into CR
 
 All submitted fields are preserved in `form_payload` and request metadata is captured in `form_payload._request`.
 
+## Submission identity and retries
+
+Send a stable, unique `id` or `submission_id` for each website submission. Retries and full-history exports must reuse that identity, while a genuinely new request must receive a new identity.
+
+The CRM keeps a private submission-only receipt after a lead is permanently deleted. Replaying a processed submission does not recreate the lead, restore an archived lead, reopen the request banner, or generate new intake tasks. A duplicate POST returns `{ "id": "<existing lead id>", "duplicate": true }`; after permanent deletion, `id` is `null`. Without a source ID, the CRM uses a fingerprint of the original submission excluding CRM-only profile/request metadata. Identical anonymous submissions are treated as retries; source IDs are strongly recommended to distinguish legitimate repeated requests.
+
+Archive/purge still removes or hides the customer-facing queue and related work as before. The receipt contains no submitted answers or contact details. Genuinely new submission identities retain the existing resubmission behavior, including bringing an archived lead back for its new request.
+
 ## HTML form example
 
 ```html

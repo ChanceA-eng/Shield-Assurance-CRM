@@ -4,10 +4,26 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { CRM_HELP, CRM_HELP_EVENT, isCrmHelpRequest } from '../../lib/crm-help';
 
 interface WidgetMessage {
   role: 'user' | 'assistant';
   content: string;
+  citations?: RashiCitation[];
+}
+
+interface RashiCitation {
+  documentId: string;
+  documentTitle: string;
+  sourceUrl: string | null;
+  sourceType: string;
+  libraryUpdatedAt: string;
+  sourcePublishedAt: string | null;
+  insightIndex: number;
+  carrierName: string | null;
+  stateContext: string | null;
+  policyType: string | null;
+  topic: string | null;
 }
 
 type InsightTab = 'alerts' | 'bundles';
@@ -30,6 +46,20 @@ interface AnalyzeResponsePayload {
     prospectType?: string;
   };
   message?: string;
+}
+
+function safeSourceUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatLibraryDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(value));
 }
 
 function generateSessionId(): string {
@@ -111,7 +141,7 @@ function InlineMd({ children: text }: { children: string }): JSX.Element {
       components={{
         p: ({ children: nodes }) => <>{nodes}</>,
         strong: ({ children: nodes }) => (
-          <strong className="rounded bg-blue-100 px-0.5 font-bold text-[#167495]">{nodes}</strong>
+          <strong className="rounded-lg bg-blue-100 px-0.5 font-bold text-cui-primary-strong">{nodes}</strong>
         ),
       }}
     >
@@ -138,6 +168,19 @@ export default function RashiWidget(): JSX.Element {
   const [lastAnalyzedKey, setLastAnalyzedKey] = useState<string>('');
 
   useEffect(() => {
+    const help = (event: Event): void => {
+      if (!(event instanceof CustomEvent) || !isCrmHelpRequest(event.detail)) return;
+      const request = event.detail;
+      const topic = CRM_HELP[request.topic];
+      setOpen(true);
+      setMessages((current) => [...current, { role: 'user', content: `Help with ${topic.title.toLowerCase()}.` },
+        { role: 'assistant', content: `${topic.answer}${request.detail ? `\n\nCurrent check:\n\n${request.detail}` : ''}` }]);
+    };
+    window.addEventListener(CRM_HELP_EVENT, help);
+    return () => window.removeEventListener(CRM_HELP_EVENT, help);
+  }, []);
+
+  useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
@@ -158,7 +201,7 @@ export default function RashiWidget(): JSX.Element {
       role: 'assistant',
       content: isLearningMode
         ? 'Ask about this lesson, request examples, or run a simulation prompt.'
-        : 'Ask an underwriting question to get a focused, line-by-line answer.',
+        : 'Ask about CRM tools, settings, or underwriting.',
     }),
     [isLearningMode],
   );
@@ -249,7 +292,7 @@ export default function RashiWidget(): JSX.Element {
         throw new Error('Failed to chat with Rashi.');
       }
 
-      const payload = (await response.json()) as { answer?: string; reply?: string; sessionId?: string };
+      const payload = (await response.json()) as { answer?: string; reply?: string; sessionId?: string; citations?: RashiCitation[] };
       if (!isLearningMode && payload.sessionId && payload.sessionId !== sessionId) {
         setSessionId(payload.sessionId);
       }
@@ -259,6 +302,7 @@ export default function RashiWidget(): JSX.Element {
         {
           role: 'assistant',
           content: payload.reply ?? payload.answer ?? 'I could not generate a response for that request.',
+          citations: payload.citations ?? [],
         },
       ]);
     } catch {
@@ -279,7 +323,7 @@ export default function RashiWidget(): JSX.Element {
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="fixed bottom-4 right-4 z-[80] rounded-full bg-[#23282c] px-4 py-2 text-xs font-semibold text-white shadow-lg transition hover:bg-[#133a6b]"
+        className="fixed bottom-4 right-4 z-[80] rounded-full bg-cui-text px-4 py-2 text-xs font-semibold text-white shadow-lg transition hover:bg-[#133a6b]"
       >
         {open ? 'Hide Rashi' : 'Rashi'}
       </button>
@@ -309,14 +353,14 @@ export default function RashiWidget(): JSX.Element {
           {analyzeContext && !isLearningMode ? (
             <div className="border-b border-[#eceef3] bg-[#f7f9fd] px-3 py-2">
               <div className="mb-1 flex items-center justify-between">
-                <p className="text-[11px] font-semibold text-[#23282c]">Proactive Insights: {targetLabel || analyzeContext.label}</p>
+                <p className="text-[11px] font-semibold text-cui-text">Proactive Insights: {targetLabel || analyzeContext.label}</p>
                 <button
                   type="button"
                   onClick={() => {
                     void runProactiveAnalyze(true);
                   }}
                   disabled={analyzeLoading}
-                  className="text-[10px] font-semibold text-[#167495] disabled:text-[#92a4bc]"
+                  className="text-[10px] font-semibold text-cui-primary-strong disabled:text-[#92a4bc]"
                 >
                   {analyzeLoading ? 'Scanning...' : 'Refresh'}
                 </button>
@@ -370,17 +414,43 @@ export default function RashiWidget(): JSX.Element {
                 }`}
               >
                 {message.role === 'assistant' ? (
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      p: ({ children }) => <p className="my-1">{children}</p>,
-                      ul: ({ children }) => <ul className="list-disc space-y-1 pl-4">{children}</ul>,
-                      li: ({ children }) => <li className="my-1">{children}</li>,
-                      strong: ({ children }) => <strong className="rounded bg-blue-100 px-0.5 font-bold text-[#167495]">{children}</strong>,
-                    }}
-                  >
-                    {message.content}
-                  </ReactMarkdown>
+                  <>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        p: ({ children }) => <p className="my-1">{children}</p>,
+                        ul: ({ children }) => <ul className="list-disc space-y-1 pl-4">{children}</ul>,
+                        li: ({ children }) => <li className="my-1">{children}</li>,
+                        strong: ({ children }) => <strong className="rounded-lg bg-blue-100 px-0.5 font-bold text-cui-primary-strong">{children}</strong>,
+                      }}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                    {message.citations?.length ? (
+                      <div className="mt-2 border-t border-cui-border pt-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-cui-muted">Sources</p>
+                        <ul className="mt-1 space-y-1.5">
+                          {message.citations.map((citation) => {
+                            const sourceUrl = safeSourceUrl(citation.sourceUrl);
+                            return (
+                              <li key={`${citation.documentId}-${citation.insightIndex}`} className="text-[10px] text-cui-muted">
+                                {sourceUrl ? (
+                                  <a href={sourceUrl} target="_blank" rel="noreferrer" className="font-semibold text-cui-primary underline">
+                                    {citation.documentTitle}
+                                  </a>
+                                ) : <span className="font-semibold text-cui-text">{citation.documentTitle}</span>}
+                                <span> · {citation.sourceType} · {citation.sourcePublishedAt
+                                  ? `Reported publication date ${formatLibraryDate(citation.sourcePublishedAt)}`
+                                  : 'Source publication date not recorded'}</span>
+                                <p>Library record updated {formatLibraryDate(citation.libraryUpdatedAt)}.</p>
+                                {[citation.carrierName, citation.stateContext, citation.policyType, citation.topic].filter(Boolean).join(' · ') || null}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </>
                 ) : (
                   message.content
                 )}
@@ -392,7 +462,7 @@ export default function RashiWidget(): JSX.Element {
             <div className="relative flex items-center">
               <input
                 type="text"
-                placeholder="Ask appetite, exclusions..."
+                placeholder="Ask about CRM tools or underwriting..."
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
@@ -401,7 +471,7 @@ export default function RashiWidget(): JSX.Element {
                     void submitMessage();
                   }
                 }}
-                className="w-full rounded-lg border border-[#d6dbe5] bg-[#f7f9fd] px-3 py-2 pr-12 text-xs text-[#081a30] outline-none transition focus:border-[#167495] focus:bg-white"
+                className="w-full rounded-lg border border-[#d6dbe5] bg-[#f7f9fd] px-3 py-2 pr-12 text-xs text-[#081a30] outline-none transition focus:border-cui-primary-strong focus:bg-white"
               />
               <button
                 type="button"
@@ -409,7 +479,7 @@ export default function RashiWidget(): JSX.Element {
                   void submitMessage();
                 }}
                 disabled={sending}
-                className="absolute right-2 text-xs font-bold text-[#167495] transition hover:text-[#0b4b87] disabled:cursor-not-allowed disabled:text-[#92a4bc]"
+                className="absolute right-2 text-xs font-bold text-cui-primary-strong transition hover:text-[#0b4b87] disabled:cursor-not-allowed disabled:text-[#92a4bc]"
               >
                 {sending ? '...' : 'Ask'}
               </button>

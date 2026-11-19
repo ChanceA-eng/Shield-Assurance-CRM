@@ -4,12 +4,14 @@ import React, { Suspense, useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import type { Route } from 'next';
-import { Inbox, Mail, Pause, Play, RefreshCw, Send, Settings2, UserX, X } from 'lucide-react';
+import { Inbox, Mail, Pause, Play, RefreshCw, Send, UserX, X } from 'lucide-react';
 import SectionLayout from '../../components/crm/SectionLayout';
 import { Card, CardBody, CardHeader } from '../../components/ui/Card';
 import { activityFilters, DeliveryState } from './DeliveryState';
-import type { OutreachSender } from '@crm/shared';
+import type { OutreachSender, SalesTemplateSnapshot } from '@crm/shared';
 import { outreachQualityIssues } from '../../lib/outreach-quality';
+import AgentOutreachSettings from '../../components/crm/AgentOutreachSettings';
+import EmailDesignPreview from '../../components/crm/EmailDesignPreview';
 
 interface OutreachSettings {
   approval_mode: boolean;
@@ -30,6 +32,8 @@ interface PendingItem {
   body: string;
   cited_signals: string[];
   created_at: string;
+  draft_revision: number;
+  sales_template?: SalesTemplateSnapshot | null;
 }
 
 interface EnrollmentItem {
@@ -58,6 +62,7 @@ interface RecentItem {
 
 interface OverviewPayload {
   settings: OutreachSettings;
+  agent_outreach_enabled?: boolean;
   sent_today: number;
   pending: PendingItem[];
   enrollments: EnrollmentItem[];
@@ -96,11 +101,10 @@ function OutreachContent(): JSX.Element {
   // Per-item edit drafts for pending approvals.
   const [edits, setEdits] = useState<Record<string, { subject: string; body: string }>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [rewriteId, setRewriteId] = useState<string | null>(null);
+  const [rewriteInstructions, setRewriteInstructions] = useState<Record<string, string>>({});
+  const [isRewriting, setIsRewriting] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
-
-  // Settings form
-  const [settingsDraft, setSettingsDraft] = useState<OutreachSettings | null>(null);
-  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   const load = useCallback(async (clearError = true): Promise<void> => {
     try {
@@ -109,16 +113,15 @@ function OutreachContent(): JSX.Element {
       const res = await fetch(`/api/outreach?${params}`, { cache: 'no-store' });
       if (!res.ok) {
         setData(null);
-        setError('Failed to load outreach data.');
+        setError('Outreach data could not be loaded. Refresh the page to try again.');
         return;
       }
       const payload = (await res.json()) as OverviewPayload;
       setData(payload);
-      setSettingsDraft(payload.settings);
       if (clearError) setError(null);
     } catch {
       setData(null);
-      setError('Failed to load outreach data.');
+      setError('Outreach data could not be loaded. Refresh the page to try again.');
     } finally {
       setIsLoading(false);
     }
@@ -144,7 +147,7 @@ function OutreachContent(): JSX.Element {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
-          action === 'approve_send' ? { action, subject: draft.subject, body: draft.body } : { action },
+          action === 'approve_send' ? { action, subject: draft.subject, body: draft.body, revision: item.draft_revision } : { action },
         ),
       });
       if (!res.ok) {
@@ -160,6 +163,34 @@ function OutreachContent(): JSX.Element {
       // approval button enabled without refreshing the persistent attempt state.
       await load(false);
       setBusyId(null);
+    }
+  };
+
+  const rewriteDraft = async (item: PendingItem): Promise<void> => {
+    setBusyId(item.id);
+    setIsRewriting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/outreach/outbox/${encodeURIComponent(item.id)}/rewrite`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...editFor(item), instruction: rewriteInstructions[item.id], revision: item.draft_revision }),
+      });
+      if (!response.ok) {
+        const failure = await response.json() as { message?: string };
+        throw new Error(failure.message ?? 'Rewrite failed. Your original draft was not changed.');
+      }
+      const draft = await response.json() as Pick<PendingItem, 'subject' | 'body' | 'cited_signals' | 'draft_revision'>;
+      setData((current) => current ? { ...current, pending: current.pending.map((row) => row.id === item.id ? { ...row, ...draft } : row) } : current);
+      setEdits((current) => ({ ...current, [item.id]: { subject: draft.subject, body: draft.body } }));
+      setRewriteId(null);
+      setRewriteInstructions((current) => ({ ...current, [item.id]: '' }));
+      setNotice('Rewritten draft saved for your review. Nothing was sent; approve it when ready.');
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Rewrite failed. Your original draft was not changed.');
+    } finally {
+      setBusyId(null);
+      setIsRewriting(false);
     }
   };
 
@@ -226,35 +257,6 @@ function OutreachContent(): JSX.Element {
     }
   };
 
-  const saveSettings = async (): Promise<void> => {
-    if (!settingsDraft) return;
-    setIsSavingSettings(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/outreach', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          approval_mode: settingsDraft.approval_mode,
-          daily_send_cap: settingsDraft.daily_send_cap,
-          send_window_start: settingsDraft.send_window_start,
-          send_window_end: settingsDraft.send_window_end,
-        }),
-      });
-      if (!res.ok) {
-        const payload = await res.json() as { message?: string };
-        setError(payload.message ?? 'Failed to save settings.');
-        return;
-      }
-      setNotice('Settings saved.');
-      await load();
-    } catch {
-      setError('Failed to save settings.');
-    } finally {
-      setIsSavingSettings(false);
-    }
-  };
-
   return (
     <SectionLayout title="Outreach">
       <div className="mx-auto max-w-5xl space-y-4">
@@ -262,7 +264,7 @@ function OutreachContent(): JSX.Element {
           <div className="rounded border border-cui-danger/40 bg-cui-danger/10 px-3 py-2 text-sm text-cui-danger">{error}</div>
         ) : null}
         {notice ? (
-          <div className="rounded border border-cui-success/40 bg-cui-success/10 px-3 py-2 text-sm text-green-700">{notice}</div>
+          <div role="status" className="rounded border border-cui-success/40 bg-cui-success/10 px-3 py-2 text-sm text-green-700">{notice}</div>
         ) : null}
 
         {/* Stats + engine run */}
@@ -340,11 +342,21 @@ function OutreachContent(): JSX.Element {
                         Email {item.step_number} · to {item.to_email} · drafted {prettyDateTime(item.created_at)}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setRewriteId(rewriteId === item.id ? null : item.id)}
+                        disabled={busyId !== null}
+                        aria-expanded={rewriteId === item.id}
+                        className="inline-flex items-center gap-1 rounded border border-cui-primary bg-white px-2.5 py-1 text-xs font-semibold text-cui-primary hover:bg-cui-primary/10 disabled:opacity-60"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        Rewrite with AI
+                      </button>
                       <button
                         type="button"
                         onClick={() => void actOnOutbox(item, 'reject')}
-                        disabled={busyId === item.id}
+                        disabled={busyId !== null}
                         className="inline-flex items-center gap-1 rounded border border-cui-border bg-white px-2.5 py-1 text-xs font-semibold text-cui-muted transition hover:text-cui-danger disabled:opacity-60"
                       >
                         <X className="h-3 w-3" />
@@ -353,27 +365,57 @@ function OutreachContent(): JSX.Element {
                       <button
                         type="button"
                         onClick={() => void actOnOutbox(item, 'approve_send')}
-                        disabled={busyId === item.id}
+                        disabled={busyId !== null}
                         className="inline-flex items-center gap-1 rounded bg-cui-success px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-cui-success/90 disabled:opacity-60"
                       >
                         <Send className="h-3 w-3" />
-                        {busyId === item.id ? 'Sending…' : 'Approve and send'}
+                        {busyId === item.id && !isRewriting ? 'Processing…' : 'Approve and send'}
                       </button>
                     </div>
                   </div>
                   <div className="space-y-2 p-3">
                     <input
                       type="text"
+                      aria-label={`Draft subject for ${item.lead_name}`}
+                      disabled={busyId === item.id}
                       value={draft.subject}
                       onChange={(event) => setEdits((prev) => ({ ...prev, [item.id]: { ...draft, subject: event.target.value } }))}
                       className="w-full rounded border border-cui-border px-2.5 py-1.5 text-sm font-semibold focus:border-cui-primary focus:outline-none"
                     />
                     <textarea
+                      aria-label={`Draft body for ${item.lead_name}`}
+                      disabled={busyId === item.id}
                       value={draft.body}
                       onChange={(event) => setEdits((prev) => ({ ...prev, [item.id]: { ...draft, body: event.target.value } }))}
                       rows={Math.min(12, Math.max(5, draft.body.split('\n').length + 1))}
                       className="w-full rounded border border-cui-border px-2.5 py-1.5 text-sm leading-relaxed focus:border-cui-primary focus:outline-none"
                     />
+                    {item.sales_template?.email_design ? <EmailDesignPreview body={draft.body} design={item.sales_template.email_design} /> : null}
+                    {rewriteId === item.id ? (
+                      <div className="space-y-2 rounded border border-cui-primary/30 bg-cui-primary/5 p-3">
+                        <label className="block text-xs font-semibold" htmlFor={`rewrite-${item.id}`}>Rewrite instructions</label>
+                        <textarea
+                          id={`rewrite-${item.id}`}
+                          value={rewriteInstructions[item.id] ?? ''}
+                          onChange={(event) => setRewriteInstructions((current) => ({ ...current, [item.id]: event.target.value }))}
+                          maxLength={1000}
+                          rows={3}
+                          disabled={busyId !== null}
+                          placeholder="For example: Make it warmer, focus on their renewal, and ask for a reply by email."
+                          className="w-full rounded border border-cui-border px-2.5 py-1.5 text-sm focus:border-cui-primary focus:outline-none"
+                        />
+                        <p className="text-xs text-cui-muted">Uses the draft above, your sender profile and permitted contact context. Saves a revised draft for review; does not send. Up to 1,000 characters.</p>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => void rewriteDraft(item)}
+                            disabled={busyId !== null || !(rewriteInstructions[item.id] ?? '').trim()}
+                            className="rounded bg-cui-primary px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60">
+                            {isRewriting && busyId === item.id ? 'Rewriting...' : 'Generate rewrite'}
+                          </button>
+                          <button type="button" onClick={() => setRewriteId(null)} disabled={busyId !== null}
+                            className="rounded border border-cui-border bg-white px-3 py-1.5 text-xs font-semibold disabled:opacity-60">Cancel</button>
+                        </div>
+                      </div>
+                    ) : null}
                     <p className="text-xs font-semibold text-cui-muted">Why this message? Recorded facts cited by the draft (verify before sending):</p>
                     {item.cited_signals.length > 0 ? (
                       <div className="flex flex-wrap gap-1.5">
@@ -384,7 +426,7 @@ function OutreachContent(): JSX.Element {
                         ))}
                       </div>
                     ) : null}
-                    <p className="text-xs text-cui-muted">Citations are not proof that every claim is accurate. Review the contact profile and confirm the next step. Edits are checked below; original citations do not change with your edits.</p>
+                    <p className="text-xs text-cui-muted">Review the contact profile, draft and citations before approving.</p>
                     {outreachQualityIssues(draft).length ? <ul className="list-inside list-disc rounded border border-cui-warning/40 bg-cui-warning/10 p-2 text-xs text-amber-900">
                       {outreachQualityIssues(draft).map((issue) => <li key={issue}>{issue}</li>)}
                     </ul> : <p className="text-xs text-green-700">Basic length, subject and wording checks passed. Factual review is still required.</p>}
@@ -521,94 +563,8 @@ function OutreachContent(): JSX.Element {
           </CardBody>
         </Card>
 
-        {/* Settings */}
-        <Card>
-          <CardHeader
-            actions={
-              <button
-                type="button"
-                onClick={() => void saveSettings()}
-                disabled={isSavingSettings || !settingsDraft}
-                className="rounded bg-cui-primary px-3 py-1 text-xs font-semibold text-white transition hover:bg-cui-primary/90 disabled:opacity-60"
-              >
-                {isSavingSettings ? 'Saving…' : 'Save settings'}
-              </button>
-            }
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <Settings2 className="h-4 w-4 text-cui-muted" />
-              Guardrails
-            </span>
-          </CardHeader>
-          <CardBody>
-            {settingsDraft ? <div className="mb-5 space-y-3 border-b border-cui-border pb-4">
-              <h3 className="text-sm font-bold text-cui-text">Agency sender profile</h3>
-              <p className="text-xs text-cui-muted">Shared by lead, account and sequence drafts. Changes affect future drafts only. This is writing context, not your email-provider identity. Save with the settings button above.</p>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {([
-                  ['name', 'Producer name'], ['role', 'Role'], ['agency', 'Agency'], ['service_area', 'Service area'],
-                  ['specialties', 'Specialties'], ['tone', 'Writing style'], ['signature', 'Signature'], ['approved_claims', 'Approved agency claims (no unverified promises)'],
-                ] as const).map(([key, label]) => <label key={key} className="text-xs font-semibold text-cui-muted">{label}
-                  <textarea rows={2} maxLength={1000} value={settingsDraft.sender_profile[key]}
-                    onChange={(event) => setSettingsDraft({ ...settingsDraft, sender_profile: { ...settingsDraft.sender_profile, [key]: event.target.value } })}
-                    className="mt-1 w-full rounded border border-cui-border px-2.5 py-1.5 text-sm text-cui-text" />
-                </label>)}
-              </div>
-            </div> : null}
-            {settingsDraft ? (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <label className="flex items-center gap-2 text-sm font-semibold text-cui-text">
-                  <input
-                    type="checkbox"
-                    checked={settingsDraft.approval_mode}
-                    onChange={(event) => setSettingsDraft({ ...settingsDraft, approval_mode: event.target.checked })}
-                    className="h-4 w-4 accent-cui-primary"
-                  />
-                  Require my approval before sending
-                </label>
-                <label className="text-sm">
-                  <span className="mb-1 block font-semibold text-cui-muted">Daily send cap</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={settingsDraft.daily_send_cap}
-                    onChange={(event) => setSettingsDraft({ ...settingsDraft, daily_send_cap: Number(event.target.value) || 1 })}
-                    className="w-full rounded border border-cui-border px-2.5 py-1.5 focus:border-cui-primary focus:outline-none"
-                  />
-                </label>
-                <label className="text-sm">
-                  <span className="mb-1 block font-semibold text-cui-muted">Send window start (hour, AZ)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={23}
-                    value={settingsDraft.send_window_start}
-                    onChange={(event) => setSettingsDraft({ ...settingsDraft, send_window_start: Number(event.target.value) || 0 })}
-                    className="w-full rounded border border-cui-border px-2.5 py-1.5 focus:border-cui-primary focus:outline-none"
-                  />
-                </label>
-                <label className="text-sm">
-                  <span className="mb-1 block font-semibold text-cui-muted">Send window end (hour, AZ)</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={24}
-                    value={settingsDraft.send_window_end}
-                    onChange={(event) => setSettingsDraft({ ...settingsDraft, send_window_end: Number(event.target.value) || 0 })}
-                    className="w-full rounded border border-cui-border px-2.5 py-1.5 focus:border-cui-primary focus:outline-none"
-                  />
-                </label>
-              </div>
-            ) : (
-              <p className="text-sm text-cui-muted">Loading settings…</p>
-            )}
-            <p className="mt-3 text-xs text-cui-muted">
-              Every email carries the opt-out footer, replies stop the sequence instantly, and opted-out addresses are never contacted
-              again. The automatic engine only sends inside the window; manual approvals send immediately.
-            </p>
-          </CardBody>
-        </Card>
+        {data?.agent_outreach_enabled ? <Card><CardHeader>My sequence permissions</CardHeader><CardBody><AgentOutreachSettings /></CardBody></Card> : null}
+        <Link href="/settings?tab=outreach" className="text-sm font-semibold text-cui-primary underline">Outreach settings</Link>
       </div>
     </SectionLayout>
   );

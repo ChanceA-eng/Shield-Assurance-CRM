@@ -3,6 +3,7 @@ import { createClient, type User } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from './supabase-server';
 import { getApiSession, requireApiSession } from './api-auth';
+import { endOfAgencyDay, startOfAgencyDay } from './agency-time';
 import { POST as addAsset, PATCH as changeAsset } from '../app/api/record-assets/route';
 import { POST as addNote, PATCH as changeNote } from '../app/api/interactions/route';
 import { GET as getTasks, PATCH as changeTask } from '../app/api/tasks/route';
@@ -14,6 +15,8 @@ import { GET as getDirectory } from '../app/api/clients/directory/route';
 import { GET as getQuotes } from '../app/api/quote-options/route';
 import { GET as getAccountContext } from '../app/api/clients/[clientId]/context/route';
 import { GET as getInsuredAssets } from '../app/api/policies/insured-assets/route';
+import { GET as getPolicyHistory } from '../app/api/policies/history/route';
+import { GET as getPlacementDocuments, POST as addPlacementDocument } from '../app/api/placement-documents/route';
 
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
 vi.mock('./api-auth', () => ({ getApiSession: vi.fn(), requireApiSession: vi.fn(), apiActorName: () => 'Test agent' }));
@@ -55,6 +58,51 @@ beforeEach(() => {
 });
 
 describe('Workspace route contracts', () => {
+  it('authenticates placement documents and policy history before queries', async () => {
+    const denied = NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    vi.mocked(getApiSession).mockResolvedValue({ user: null, error: denied });
+    vi.mocked(requireApiSession).mockResolvedValue(denied);
+    expect((await getPolicyHistory(request(`/api/policies/history?account_id=${leadId}&id=${itemId}`))).status).toBe(401);
+    expect((await getPlacementDocuments(request(`/api/placement-documents?account_id=${leadId}&type=policy&id=${itemId}`))).status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('preserves bigint policy history cursors and checks account ownership', async () => {
+    respond = (url) => url.pathname.endsWith('/policies') ? json({ id: itemId })
+      : json([{ id: '9007199254740993', event: 'updated' }]);
+    const response = await getPolicyHistory(request(`/api/policies/history?account_id=${leadId}&id=${itemId}&before_id=9007199254740994`));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject([{ id: '9007199254740993' }]);
+    expect(calls[0].url.searchParams.get('client_id')).toBe(`eq.${leadId}`);
+    expect(calls[1].url.searchParams.get('id')).toBe('lt.9007199254740994');
+    expect(calls[1].url.searchParams.get('select')).toContain('id::text');
+    calls.length = 0;
+    expect((await getPolicyHistory(request(`/api/policies/history?account_id=${leadId}&id=${itemId}&before_id=9223372036854775808`))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('never exposes history or document links for a policy on another account', async () => {
+    respond = () => json(null);
+    expect((await getPolicyHistory(request(`/api/policies/history?account_id=${leadId}&id=${itemId}`))).status).toBe(404);
+    expect((await getPlacementDocuments(request(`/api/placement-documents?account_id=${leadId}&type=policy&id=${itemId}`))).status).toBe(404);
+    expect(calls.every((call) => call.url.pathname.endsWith('/policies'))).toBe(true);
+  });
+
+  it('paginates document links and attaches with server operator identity', async () => {
+    respond = (url) => url.pathname.endsWith('/policies') ? json({ id: itemId }) : json([]);
+    const endpoint = `/api/placement-documents?account_id=${leadId}&type=policy&id=${itemId}`;
+    expect((await getPlacementDocuments(request(`${endpoint}&page=2`))).status).toBe(200);
+    expect(calls[1].url.searchParams.get('offset')).toBe('200');
+    expect(calls[1].url.searchParams.get('policy_id')).toBe(`eq.${itemId}`);
+    expect((await addPlacementDocument(request(endpoint, 'POST', { file_id: itemId, actor: 'Spoofed actor' }))).status).toBe(201);
+    expect(calls.at(-1)?.body).toMatchObject({ p_actor: 'Test agent', p_account_id: leadId, p_policy_id: itemId, p_quote_id: null, p_file_id: itemId });
+  });
+
+  it('surfaces document and history database failures without returning empty success', async () => {
+    respond = (url) => url.pathname.endsWith('/policies') ? json({ id: itemId }) : json({ message: 'Database unavailable' }, 500);
+    expect((await getPolicyHistory(request(`/api/policies/history?account_id=${leadId}&id=${itemId}`))).status).toBe(500);
+    expect((await getPlacementDocuments(request(`/api/placement-documents?account_id=${leadId}&type=policy&id=${itemId}`))).status).toBe(500);
+  });
   it('requires authentication before reading policy insured-asset choices', async () => {
     vi.mocked(requireApiSession).mockResolvedValue(NextResponse.json({ message: 'Unauthorized' }, { status: 401 }));
     expect((await getInsuredAssets(request(`/api/policies/insured-assets?account_id=${leadId}`))).status).toBe(401);
@@ -100,6 +148,8 @@ describe('Workspace route contracts', () => {
     const priorId = 'c3db2f75-a682-4d14-8c76-693b4f123456';
     respond = (url) => {
       if (url.pathname.endsWith('/policy_insured_assets')) return json([]);
+      if (url.pathname.endsWith('/policy_confirmation_evidence')) return json(null);
+      if (url.pathname.endsWith('/policies') && url.searchParams.has('prior_policy_id')) return json([]);
       if (url.pathname.endsWith('/policies') && url.searchParams.get('id') === `eq.${itemId}`) {
         return json({ id: itemId, client_id: leadId, prior_policy_id: priorId, policy_number: 'NEW-1' });
       }
@@ -112,9 +162,9 @@ describe('Workspace route contracts', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ record: { related_prior_term: { id: priorId, policy_number: 'OLD-1' } } });
     const policyCalls = calls.filter((call) => call.url.pathname.endsWith('/policies'));
-    expect(policyCalls).toHaveLength(2);
-    expect(policyCalls[1].url.searchParams.get('client_id')).toBe(`eq.${leadId}`);
-    expect(policyCalls[1].url.searchParams.get('id')).toBe(`eq.${priorId}`);
+    expect(policyCalls).toHaveLength(3);
+    const priorCall = policyCalls.find((call) => call.url.searchParams.get('id') === `eq.${priorId}`)!;
+    expect(priorCall.url.searchParams.get('client_id')).toBe(`eq.${leadId}`);
   });
 
   it('does not expose a prior policy from another account', async () => {
@@ -196,7 +246,7 @@ describe('Workspace route contracts', () => {
     };
     const response = await getQuotes(request(`/api/quote-options?record_type=client&record_id=${leadId}&history_quote_id=${itemId}`));
     expect(response.status).toBe(500);
-    expect(await response.json()).toMatchObject({ message: 'History temporarily unavailable' });
+    expect(await response.json()).toMatchObject({ message: 'Something went wrong. Please try again, and contact your administrator if it keeps happening.' });
   });
 
   it('requires authentication before directory access', async () => {
@@ -303,6 +353,16 @@ describe('Workspace route contracts', () => {
     expect(calls[0].method).toBe('HEAD');
   });
 
+  it('uses the agency timezone for the task due-today boundary', async () => {
+    const timezone = 'America/New_York';
+    const now = new Date();
+    respond = (url) => url.pathname.endsWith('/outreach_settings') ? json({ timezone }) : json([], 200, 7);
+    const response = await getTasks(request('/api/tasks?due=today&count=true'));
+    expect(response.status).toBe(200);
+    const taskQuery = calls.find((call) => call.url.pathname.endsWith('/active_workspace_tasks'));
+    expect(taskQuery?.url.searchParams.get('due_date')).toBe(`lt.${endOfAgencyDay(now, timezone).toISOString()}`);
+  });
+
   it('keeps edited task actions attached to the real lead name', async () => {
     respond = (url, method, body) => {
       if (url.pathname.endsWith('/leads')) return json({ id: leadId, full_name: 'Leo', account_id: null });
@@ -340,6 +400,8 @@ describe('Workspace route contracts', () => {
     expect((await response.json()).leads).toHaveLength(102);
     expect(calls).toHaveLength(2);
     expect(calls.every((call) => !call.url.searchParams.has('submitted_at'))).toBe(true);
+    expect(calls.every((call) => call.url.searchParams.get('leads.archived_at') === 'is.null')).toBe(true);
+    expect(calls.every((call) => call.url.searchParams.get('select')?.includes('leads!inner'))).toBe(true);
   });
   it('acknowledges a deduplicated set of events atomically', async () => {
     respond = () => json(1);
@@ -354,6 +416,7 @@ describe('Workspace route contracts', () => {
 describe('No-AI dashboard accuracy', () => {
   it('uses current due instants and exact briefing counts', async () => {
     respond = (url, method) => {
+      if (url.pathname.endsWith('/outreach_settings')) return json({ timezone: 'America/Phoenix' });
       if (url.pathname.endsWith('/tasks')) return json([{ id: itemId, subject: 'Leo: request VINs' }], 200, url.searchParams.getAll('due_date').length === 1 ? 9 : 12);
       return json([], 200, method === 'HEAD' ? 0 : undefined);
     };
@@ -369,11 +432,24 @@ describe('No-AI dashboard accuracy', () => {
     expect(dueInstant && Math.abs(Date.now() - new Date(dueInstant).getTime())).toBeLessThan(10000);
   });
 
+  it('queries briefing tasks using the agency local-day boundaries', async () => {
+    const timezone = 'America/New_York';
+    const now = new Date();
+    respond = (url) => url.pathname.endsWith('/outreach_settings') ? json({ timezone })
+      : url.pathname.endsWith('/tasks') ? json([], 200, 0) : json([], 200, 0);
+    const response = await getBriefing(request('/api/briefing'));
+    expect(response.status).toBe(200);
+    const todayQuery = calls.find((call) => call.url.pathname.endsWith('/tasks') && call.url.searchParams.getAll('due_date').length === 2);
+    expect(todayQuery?.url.searchParams.get('due_date')).toBe(`gte.${startOfAgencyDay(now, timezone).toISOString()}`);
+    expect(todayQuery?.url.searchParams.getAll('due_date')[1]).toBe(`lt.${endOfAgencyDay(now, timezone).toISOString()}`);
+  });
+
   it('surfaces a briefing database failure, not an all-clear summary', async () => {
-    respond = (url) => url.pathname.endsWith('/tasks') ? json({ code: 'XX000', message: 'Task query unavailable' }, 500) : json([], 200, 0);
+    respond = (url) => url.pathname.endsWith('/outreach_settings') ? json({ timezone: 'America/Phoenix' })
+      : url.pathname.endsWith('/tasks') ? json({ code: 'XX000', message: 'Task query unavailable' }, 500) : json([], 200, 0);
     const response = await getBriefing(request('/api/briefing'));
     expect(response.status).toBe(500);
-    expect((await response.json()).message).toBe('Task query unavailable');
+    expect((await response.json()).message).toBe('Something went wrong. Please try again, and contact your administrator if it keeps happening.');
   });
 
   it('timestamps completed work using the real audit event', async () => {

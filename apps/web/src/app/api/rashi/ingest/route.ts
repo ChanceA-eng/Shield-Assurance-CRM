@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { extractTextFromUpload, ingestRashiDocument } from '../../../../lib/rashi-server';
+import { extractTextFromUpload, ingestRashiDocument, parseSourcePublishedAt, RashiInputError } from '../../../../lib/rashi-server';
 import { uploadRashiSourceFile } from '../../../../lib/rashi-storage';
 
 export const runtime = 'nodejs';
@@ -12,6 +12,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     if (isMultipart) {
       const formData = await request.formData();
+      const sourcePublishedAt = String(formData.get('sourcePublishedAt') ?? '') || undefined;
+      parseSourcePublishedAt(sourcePublishedAt);
       const file = formData.get('file');
       const rawTextField = formData.get('rawText');
       const extractedText = file instanceof File ? await extractTextFromUpload(file) : '';
@@ -23,6 +25,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         title: String(formData.get('title') ?? ''),
         sourceType: String(formData.get('sourceType') ?? 'NOTE'),
         sourceUrl: providedSourceUrl ?? generatedSourceUrl,
+        sourcePublishedAt,
         rawText,
         carrierName: String(formData.get('carrierName') ?? '') || undefined,
         stateContext: String(formData.get('stateContext') ?? '') || undefined,
@@ -39,6 +42,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       rawText: body.rawText,
       sourceType: body.sourceType,
       sourceUrl: body.sourceUrl,
+      sourcePublishedAt: body.sourcePublishedAt,
       carrierName: body.carrierName,
       stateContext: body.stateContext,
       policyType: body.policyType,
@@ -49,7 +53,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   } catch (error) {
     return NextResponse.json(
       { message: error instanceof Error ? error.message : 'Failed to ingest into Rashi.' },
-      { status: 500 },
+      { status: error instanceof RashiInputError ? 400 : 500 },
     );
   }
 }

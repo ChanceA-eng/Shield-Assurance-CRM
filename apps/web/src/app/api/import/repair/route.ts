@@ -3,6 +3,7 @@ import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../lib/api-auth';
 import { buildProspects, detectVendorProfile, parseImport, type ImportRow } from '../../../../lib/lead-import';
 
+import { friendlyErrorMessage } from '../../../../lib/workspace-api';
 export const runtime = 'nodejs';
 
 interface LegacyLead {
@@ -29,7 +30,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const body = (await request.json().catch(() => ({}))) as { force?: boolean };
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     .limit(1000);
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   let repaired = 0;

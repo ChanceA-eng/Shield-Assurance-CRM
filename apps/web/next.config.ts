@@ -5,6 +5,15 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ['pdf-parse'],
   // Allow CI/local verification builds to run alongside a live dev server.
   distDir: process.env.NEXT_DIST_DIR || '.next',
+  allowedDevOrigins: ['127.0.0.1'],
+  devIndicators: false,
+  webpack(config) {
+    config.resolve.extensionAlias = {
+      ...config.resolve.extensionAlias,
+      '.js': ['.ts', '.tsx', '.js'],
+    };
+    return config;
+  },
   // Retired Applicants pages now live in Lead Pipeline intake and the Import Center.
   async redirects() {
     return [

@@ -29,7 +29,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ quiz }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to create quiz.' },
+      { message: error instanceof Error ? error.message : 'Quiz could not be created. Please try again.' },
       { status: 500 },
     );
   }

@@ -3,6 +3,7 @@ import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../lib/api-auth';
 import { isUuid } from '../../../../lib/workspace-validation';
 
+import { friendlyErrorMessage } from '../../../../lib/workspace-api';
 function normalize(value?: string | null): string {
   return (value ?? '').trim().toLowerCase();
 }
@@ -12,7 +13,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (authError) return authError;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const clientId = request.nextUrl.searchParams.get('clientId')?.trim();
@@ -35,10 +36,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .limit(150),
   ]);
 
-  if (policiesRes.error) return NextResponse.json({ message: policiesRes.error.message }, { status: 500 });
-  if (claimsRes.error) return NextResponse.json({ message: claimsRes.error.message }, { status: 500 });
-  if (tasksRes.error) return NextResponse.json({ message: tasksRes.error.message }, { status: 500 });
-  if (communicationsRes.error) return NextResponse.json({ message: communicationsRes.error.message }, { status: 500 });
+  if (policiesRes.error) return NextResponse.json({ message: friendlyErrorMessage(policiesRes.error) }, { status: 500 });
+  if (claimsRes.error) return NextResponse.json({ message: friendlyErrorMessage(claimsRes.error) }, { status: 500 });
+  if (tasksRes.error) return NextResponse.json({ message: friendlyErrorMessage(tasksRes.error) }, { status: 500 });
+  if (communicationsRes.error) return NextResponse.json({ message: friendlyErrorMessage(communicationsRes.error) }, { status: 500 });
 
   const flags: string[] = [];
 
@@ -81,7 +82,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       occurred_at: new Date().toISOString(),
     },
   ]);
-  if (activity.error) return NextResponse.json({ message: activity.error.message }, { status: 500 });
+  if (activity.error) return NextResponse.json({ message: friendlyErrorMessage(activity.error) }, { status: 500 });
 
   return NextResponse.json({ ok: true, flags }, { status: 200 });
 }

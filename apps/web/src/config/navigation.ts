@@ -46,6 +46,7 @@ export const navigationCategories: NavCategory[] = [
         items: [
           { label: 'Lead Pipeline', href: '/leads' },
           { label: 'Work Queue', href: '/leads?view=queue' },
+          { label: 'Lead Finder', href: '/leads/finder' },
           { label: 'Import Leads', href: '/leads/import' },
         ],
       },
@@ -77,8 +78,11 @@ export const navigationCategories: NavCategory[] = [
         title: 'Channels',
         items: [
           { label: 'Inbox', href: '/communication' },
+          { label: 'Reviewed Gmail Emails', href: '/communication/reviewed-email' },
           { label: 'Outreach Sequences', href: '/outreach' },
-          { label: 'Calendar & Events', href: '/scheduler' },
+          { label: 'Campaigns', href: '/outreach/campaigns' },
+          { label: 'Social Marketing', href: '/communication/social' },
+          { label: 'Calendar', href: '/scheduler' },
         ],
       },
     ],
@@ -105,6 +109,7 @@ export const navigationCategories: NavCategory[] = [
         title: 'Resources',
         items: [
           { label: 'Knowledge Center', href: '/rashi' },
+          { label: 'Carrier Appetite', href: '/rashi/carrier-appetite' },
           { label: 'Training', href: '/learning' },
         ],
       },
@@ -112,7 +117,7 @@ export const navigationCategories: NavCategory[] = [
   },
   {
     id: 'settings',
-    label: 'Release & Setup',
+    label: 'Settings',
     icon: 'Settings',
     href: '/settings',
   },

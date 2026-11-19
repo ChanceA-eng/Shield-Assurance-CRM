@@ -1,56 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
-import { requireApiSession } from '../../../lib/api-auth';
-import { parseImport, type StagedProspect } from '../../../lib/lead-import';
+import { requireApiSession, getApiSession } from '../../../lib/api-auth';
+import { parseImport } from '../../../lib/lead-import';
+import { importMatches } from '../../../lib/import-intelligence';
+import { workspaceApiError } from '../../../lib/workspace-api';
 
+import { friendlyErrorMessage } from '../../../lib/workspace-api';
 export const runtime = 'nodejs';
-
-interface ExistingRecord {
-  id: string;
-  email: string | null;
-  phone: string | null;
-}
-
-function phoneDigits(value: string | null): string {
-  return (value ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
-}
-
-async function findDuplicates(prospects: StagedProspect[]): Promise<Map<number, string>> {
-  const supabase = getSupabaseServerClient();
-  const duplicates = new Map<number, string>();
-  if (!supabase) return duplicates;
-
-  const [leadRows, clientRows] = await Promise.all([
-    supabase.from('leads').select('id,email,phone').limit(2000),
-    supabase.from('clients').select('id,email,phone').limit(2000),
-  ]);
-
-  const leadByEmail = new Map<string, string>();
-  const leadByPhone = new Map<string, string>();
-  for (const row of (leadRows.data ?? []) as ExistingRecord[]) {
-    if (row.email) leadByEmail.set(row.email.toLowerCase(), row.id);
-    const digits = phoneDigits(row.phone);
-    if (digits) leadByPhone.set(digits, row.id);
-  }
-  const clientByEmail = new Map<string, string>();
-  const clientByPhone = new Map<string, string>();
-  for (const row of (clientRows.data ?? []) as ExistingRecord[]) {
-    if (row.email) clientByEmail.set(row.email.toLowerCase(), row.id);
-    const digits = phoneDigits(row.phone);
-    if (digits) clientByPhone.set(digits, row.id);
-  }
-
-  prospects.forEach((prospect, index) => {
-    const email = prospect.email?.toLowerCase() ?? '';
-    const digits = phoneDigits(prospect.phone);
-    if (email && leadByEmail.has(email)) duplicates.set(index, `lead:${leadByEmail.get(email)}`);
-    else if (digits && leadByPhone.has(digits)) duplicates.set(index, `lead:${leadByPhone.get(digits)}`);
-    else if (email && clientByEmail.has(email)) duplicates.set(index, `client:${clientByEmail.get(email)}`);
-    else if (digits && clientByPhone.has(digits)) duplicates.set(index, `client:${clientByPhone.get(digits)}`);
-  });
-
-  return duplicates;
-}
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const authError = await requireApiSession(request);
@@ -58,7 +14,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const { data, error } = await supabase
@@ -68,19 +24,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     .limit(30);
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data ?? [], { status: 200 });
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const formData = await request.formData();
@@ -101,7 +57,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'No prospects found in the file.' }, { status: 400 });
   }
 
-  const duplicates = await findDuplicates(parsed.prospects);
+  let duplicates: Map<number, string[]>;
+  try { duplicates = await importMatches(supabase, parsed.prospects, session.user.id); }
+  catch (failure) { return workspaceApiError(failure, 'import/matches'); }
 
   const batchInsert = await supabase
     .from('import_batches')
@@ -119,7 +77,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     .single<{ id: string }>();
 
   if (batchInsert.error || !batchInsert.data) {
-    return NextResponse.json({ message: batchInsert.error?.message ?? 'Failed to create batch.' }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(batchInsert.error) ?? 'Batch could not be created. Please try again.' }, { status: 500 });
   }
 
   const batchId = batchInsert.data.id;
@@ -131,14 +89,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     address: prospect.address,
     line_of_business: prospect.line_of_business,
     disposition: duplicates.has(index) ? 'duplicate' : 'pending',
-    duplicate_of: duplicates.get(index) ?? null,
-    payload: { profile: prospect.profile, raw: prospect.raw },
+    duplicate_of: duplicates.get(index)?.[0] ?? null,
+    payload: { profile: prospect.profile, raw: prospect.raw, duplicate_matches: duplicates.get(index) ?? [] },
   }));
 
   for (let offset = 0; offset < rows.length; offset += 200) {
     const { error } = await supabase.from('import_prospects').insert(rows.slice(offset, offset + 200));
     if (error) {
-      return NextResponse.json({ message: error.message }, { status: 500 });
+      return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
     }
   }
 

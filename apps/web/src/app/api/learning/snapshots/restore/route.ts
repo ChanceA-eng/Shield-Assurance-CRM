@@ -53,69 +53,71 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const payload = (snapshot.payload ?? {}) as SnapshotPayload;
     const modules = Array.isArray(payload.modules) ? payload.modules : [];
 
-    await prisma.learningCourse.update({
-      where: { id: snapshot.courseId },
-      data: {
-        title: safeString(payload.title) || undefined,
-        description: payload.description === undefined ? undefined : payload.description,
-        level: payload.level,
-      },
-    });
-
-    await prisma.learningModule.deleteMany({ where: { courseId: snapshot.courseId } });
-
-    for (let i = 0; i < modules.length; i += 1) {
-      const modulePayload = modules[i];
-      const createdModule = await prisma.learningModule.create({
+    await prisma.$transaction(async (tx) => {
+      await tx.learningCourse.update({
+        where: { id: snapshot.courseId },
         data: {
-          courseId: snapshot.courseId,
-          title: safeString(modulePayload.title) || `Module ${i + 1}`,
-          order: typeof modulePayload.order === 'number' ? modulePayload.order : i,
+          title: safeString(payload.title) || undefined,
+          description: payload.description === undefined ? undefined : payload.description,
+          level: payload.level,
         },
       });
 
-      const lessons = Array.isArray(modulePayload.lessons) ? modulePayload.lessons : [];
-      for (let j = 0; j < lessons.length; j += 1) {
-        const lessonPayload = lessons[j];
-        const createdLesson = await prisma.learningLesson.create({
+      await tx.learningModule.deleteMany({ where: { courseId: snapshot.courseId } });
+
+      for (let i = 0; i < modules.length; i += 1) {
+        const modulePayload = modules[i];
+        const createdModule = await tx.learningModule.create({
           data: {
-            moduleId: createdModule.id,
-            title: safeString(lessonPayload.title) || `Lesson ${j + 1}`,
-            order: typeof lessonPayload.order === 'number' ? lessonPayload.order : j,
-            contentType: lessonPayload.contentType ?? LearningContentType.TEXT,
-            contentUrl: lessonPayload.contentUrl ?? null,
-            body: lessonPayload.body ?? null,
+            courseId: snapshot.courseId,
+            title: safeString(modulePayload.title) || `Module ${i + 1}`,
+            order: typeof modulePayload.order === 'number' ? modulePayload.order : i,
           },
         });
 
-        const quizzes = Array.isArray(lessonPayload.quizzes) ? lessonPayload.quizzes : [];
-        for (let q = 0; q < quizzes.length; q += 1) {
-          const quiz = quizzes[q];
-          await prisma.learningQuiz.create({
+        const lessons = Array.isArray(modulePayload.lessons) ? modulePayload.lessons : [];
+        for (let j = 0; j < lessons.length; j += 1) {
+          const lessonPayload = lessons[j];
+          const createdLesson = await tx.learningLesson.create({
             data: {
-              lessonId: createdLesson.id,
-              question: safeString(quiz.question) || `Question ${q + 1}`,
-              options: (quiz.options as Prisma.InputJsonValue) ?? [],
-              answer: typeof quiz.answer === 'number' ? quiz.answer : 0,
+              moduleId: createdModule.id,
+              title: safeString(lessonPayload.title) || `Lesson ${j + 1}`,
+              order: typeof lessonPayload.order === 'number' ? lessonPayload.order : j,
+              contentType: lessonPayload.contentType ?? LearningContentType.TEXT,
+              contentUrl: lessonPayload.contentUrl ?? null,
+              body: lessonPayload.body ?? null,
             },
           });
-        }
 
-        const blocks = Array.isArray(lessonPayload.blocks) ? lessonPayload.blocks : [];
-        for (let b = 0; b < blocks.length; b += 1) {
-          const block = blocks[b];
-          await prisma.learningLessonBlock.create({
-            data: {
-              lessonId: createdLesson.id,
-              type: block.type ?? LearningBlockType.TEXT,
-              title: block.title ?? null,
-              order: typeof block.order === 'number' ? block.order : b,
-              content: (block.content as Prisma.InputJsonValue) ?? Prisma.JsonNull,
-            },
-          });
+          const quizzes = Array.isArray(lessonPayload.quizzes) ? lessonPayload.quizzes : [];
+          for (let q = 0; q < quizzes.length; q += 1) {
+            const quiz = quizzes[q];
+            await tx.learningQuiz.create({
+              data: {
+                lessonId: createdLesson.id,
+                question: safeString(quiz.question) || `Question ${q + 1}`,
+                options: (quiz.options as Prisma.InputJsonValue) ?? [],
+                answer: typeof quiz.answer === 'number' ? quiz.answer : 0,
+              },
+            });
+          }
+
+          const blocks = Array.isArray(lessonPayload.blocks) ? lessonPayload.blocks : [];
+          for (let b = 0; b < blocks.length; b += 1) {
+            const block = blocks[b];
+            await tx.learningLessonBlock.create({
+              data: {
+                lessonId: createdLesson.id,
+                type: block.type ?? LearningBlockType.TEXT,
+                title: block.title ?? null,
+                order: typeof block.order === 'number' ? block.order : b,
+                content: (block.content as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+              },
+            });
+          }
         }
       }
-    }
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

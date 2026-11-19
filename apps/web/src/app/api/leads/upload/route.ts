@@ -6,6 +6,7 @@ import pdf from 'pdf-parse';
 import * as XLSX from 'xlsx';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 
+import { friendlyErrorMessage } from '../../../../lib/workspace-api';
 export const runtime = 'nodejs';
 
 interface LeadInsert {
@@ -310,7 +311,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const supabase = getSupabaseServerClient();
     if (!supabase) {
-      return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+      return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
     }
 
     const formData = await request.formData();
@@ -331,7 +332,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const batch = validLeads.slice(start, start + ROW_BATCH_SIZE);
       const { error } = await supabase.from('leads').insert(batch);
       if (error) {
-        return NextResponse.json({ message: error.message }, { status: 500 });
+        return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
       }
     }
 

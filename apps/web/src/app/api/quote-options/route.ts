@@ -12,7 +12,7 @@ async function handle(request: NextRequest, method: 'GET' | 'POST' | 'PATCH'): P
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const type = request.nextUrl.searchParams.get('record_type'), id = request.nextUrl.searchParams.get('record_id');
     if (!isRecordType(type) || !isUuid(id)) throw new WorkspaceError('Select a valid lead or account.', 400);

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ingestRashiDocument, listRashiDocuments } from '../../../../lib/rashi-server';
+import { ingestRashiDocument, listRashiDocuments, RashiInputError } from '../../../../lib/rashi-server';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json(safePayload, { status: 200 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to load Rashi documents.' },
+      { message: error instanceof Error ? error.message : 'Rashi documents could not be loaded. Refresh the page to try again.' },
       { status: 500 },
     );
   }
@@ -35,6 +35,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       rawText: body.rawText,
       sourceType: body.sourceType,
       sourceUrl: body.sourceUrl,
+      sourcePublishedAt: body.sourcePublishedAt,
       carrierName: body.carrierName,
       stateContext: body.stateContext,
       policyType: body.policyType,
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   } catch (error) {
     return NextResponse.json(
       { message: error instanceof Error ? error.message : 'Failed to ingest Rashi document.' },
-      { status: 500 },
+      { status: error instanceof RashiInputError ? 400 : 500 },
     );
   }
 }

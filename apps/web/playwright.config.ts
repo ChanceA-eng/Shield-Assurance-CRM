@@ -12,6 +12,7 @@ export default defineConfig({
   outputDir: process.env.CRM_TEST_OUTPUT_DIR ?? path.join(os.tmpdir(), `shield-workspace-browser-${process.pid}`),
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3000',
+    storageState: process.env.PLAYWRIGHT_STORAGE_STATE,
     channel: 'msedge',
     headless: true,
     trace: 'off',

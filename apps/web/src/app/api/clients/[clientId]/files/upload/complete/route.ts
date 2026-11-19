@@ -1,13 +1,14 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../../../lib/supabase-server';
 import { apiActorName, getApiSession } from '../../../../../../../lib/api-auth';
+import { checkAccountUploadAccess, verifyUploadConfirmation } from '../../../../../../../lib/account-upload-access';
+import { validateReviewedIntakeFields, type ReviewedIntakeFields } from '../../../../../../../lib/policy-document-intake';
 import {
   ACCOUNT_DOCUMENT_BUCKET,
   CLIENT_FILE_COLUMNS,
   documentTypeLabel,
   isDocumentPathForClient,
   isUuid,
-  removeStoredObject,
   storedLocation,
   toClientFileView,
   validateUploadRequest,
@@ -25,16 +26,18 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const { clientId } = await context.params;
   if (!isUuid(clientId)) return NextResponse.json({ message: 'A valid account id is required.' }, { status: 400 });
 
-  let payload: { storage_path?: unknown; file_name?: unknown; content_type?: unknown; file_size?: unknown; notes?: unknown };
+  let payload: { storage_path?: unknown; file_name?: unknown; content_type?: unknown; file_size?: unknown; notes?: unknown; intake_review?: unknown; confirmation?: unknown };
+  let review: ReviewedIntakeFields | undefined;
   try {
     payload = (await request.json()) as typeof payload;
-  } catch {
-    return NextResponse.json({ message: 'Invalid JSON body.' }, { status: 400 });
+    if (payload.intake_review !== undefined) review = validateReviewedIntakeFields(payload.intake_review);
+  } catch (failure) {
+    return NextResponse.json({ message: failure instanceof Error ? failure.message : 'Invalid upload review.' }, { status: 400 });
   }
 
   const validated = validateUploadRequest({ fileName: payload.file_name, contentType: payload.content_type, size: payload.file_size });
@@ -43,16 +46,18 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     return NextResponse.json({ message: 'The upload reference does not belong to this account.' }, { status: 400 });
   }
   const path = payload.storage_path;
-  const location = { bucket: ACCOUNT_DOCUMENT_BUCKET, path };
+  const restricted = session.teamAccess?.mode !== 'legacy';
+  if (restricted) {
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!key || !verifyUploadConfirmation(key, payload.confirmation, { ...validated, actor: session.user.id, path })) {
+      return NextResponse.json({ message: 'This upload cannot be confirmed. Start a new upload.' }, { status: 403 });
+    }
+    const accessDenied = await checkAccountUploadAccess(supabase, session.teamAccess, session.user.id, clientId);
+    if (accessDenied) return accessDenied;
+  }
 
   const verified = await verifyStoredObject(supabase, path, validated.size);
-  if (!verified.ok) {
-    if (verified.status === 409 && /size/i.test(verified.message)) {
-      const cleanup = await removeStoredObject(supabase, location);
-      if (!cleanup.ok) return NextResponse.json({ message: `${verified.message} ${cleanup.message}` }, { status: cleanup.status });
-    }
-    return NextResponse.json({ message: verified.message }, { status: verified.status });
-  }
+  if (!verified.ok) return NextResponse.json({ message: verified.message }, { status: verified.status });
 
   const notes = typeof payload.notes === 'string' ? payload.notes.trim().slice(0, 1000) : '';
   const { data, error } = await supabase
@@ -70,6 +75,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
         uploaded_by: apiActorName(session.user),
         original_name: validated.fileName,
         ...(notes ? { notes } : {}),
+        ...(review ? { intake_review: review, intake_reviewed_at: new Date().toISOString(), intake_reviewed_by: session.user.id } : {}),
       },
     }])
     .select(CLIENT_FILE_COLUMNS)

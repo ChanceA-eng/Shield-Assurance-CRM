@@ -23,6 +23,7 @@ import {
 } from '../../lib/lead-pipeline';
 
 export interface PipelineLead {
+  do_not_contact?: boolean;
   id: string;
   full_name: string;
   phone?: string | null;
@@ -148,7 +149,7 @@ function LeadCard({
           {lead.source || 'unknown'}
         </span>
         <div className="flex items-center gap-1.5">
-          {lead.phone ? (
+          {lead.phone && lead.do_not_contact === false ? (
             <a
               href={`tel:${lead.phone}`}
               onClick={(event) => event.stopPropagation()}
@@ -158,7 +159,7 @@ function LeadCard({
               <Phone className="h-3.5 w-3.5" />
             </a>
           ) : null}
-          {lead.email ? (
+          {lead.email && lead.do_not_contact === false ? (
             <a
               href={`mailto:${lead.email}`}
               onClick={(event) => event.stopPropagation()}

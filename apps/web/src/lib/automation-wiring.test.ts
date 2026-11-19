@@ -25,6 +25,13 @@ describe('task snooze', () => {
     expect(snoozePresetIso('nextweek', new Date('2026-11-02T17:00:00.000Z'))).toBe('2026-11-09T16:00:00.000Z');
   });
 
+  it('uses the agency timezone across DST for snooze presets and custom input', () => {
+    const now = new Date('2026-03-07T17:00:00.000Z');
+    expect(snoozePresetIso('tomorrow', now, 'America/New_York')).toBe('2026-03-08T13:00:00.000Z');
+    expect(defaultSnoozeInput(now, 'America/New_York')).toBe('2026-03-08T09:00');
+    expect(customSnoozeIso('2026-03-08T02:30', now, 'America/New_York')).toEqual({ error: 'Choose a valid date and time.' });
+  });
+
   it('validates custom times', () => {
     expect(defaultSnoozeInput(NOW)).toBe('2026-10-29T09:00');
     expect(customSnoozeIso('2026-11-03T14:30', NOW)).toEqual({ iso: '2026-11-03T21:30:00.000Z' });
@@ -41,6 +48,7 @@ describe('renewal radar helpers', () => {
 
   it('counts Arizona days and picks milestones', () => {
     expect(daysUntilRenewal('2026-11-20', NOW)).toBe(23);
+    expect(daysUntilRenewal('2026-11-20', new Date('2026-11-20T05:30:00Z'), 'America/New_York')).toBe(0);
     expect(renewalMilestone(46)).toBeNull();
     expect(renewalMilestone(45)).toBe(45);
     expect(renewalMilestone(23)).toBe(30);
@@ -61,6 +69,7 @@ describe('renewal radar helpers', () => {
   it('schedules the task 30 days out or the next business morning', () => {
     expect(renewalTaskDue('2026-12-31', NOW)).toBe('2026-12-01T16:00:00.000Z');
     expect(renewalTaskDue('2026-11-20', NOW)).toBe('2026-10-29T15:00:00.000Z');
+    expect(renewalTaskDue('2026-12-31', NOW, 30, 'America/New_York')).toBe('2026-12-01T14:00:00.000Z');
   });
 });
 

@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
-import { requireApiSession } from '../../../../lib/api-auth';
+import { getApiSession } from '../../../../lib/api-auth';
+import { requireAgencyOwner } from '../../../../lib/agency-access';
 import { processDueEnrollments } from '../../../../lib/outreach-engine';
+import { processDueProspectingEmailDrafts } from '../../../../lib/prospecting-cadence';
 import { runRenewalRadar } from '../../../../lib/renewal-automation';
 import { applyResubmission } from '../../../../lib/resubmission';
 import { scheduleIntakeTask } from '../../../../lib/intake-task';
 import { sourceSubmissionId } from '../../../../lib/website-intake';
+import { websiteSubmissionReceipts } from '../../../../lib/website-receipts';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { trackedAutomation, type AutomationRun } from '../../../../lib/automation-health';
 
+import { friendlyErrorMessage } from '../../../../lib/workspace-api';
+import { runWorkflowAutomation } from '../../../../lib/workflow-execution';
 export const runtime = 'nodejs';
 
 interface SyncLeadRecord {
@@ -126,7 +131,7 @@ function externalIdOf(payload: Record<string, unknown>): string | null {
   return sourceSubmissionId(payload);
 }
 
-async function syncWebsite(supabase: SupabaseClient): Promise<NextResponse> {
+async function syncWebsite(supabase: SupabaseClient, bounded = false): Promise<NextResponse> {
   const exportUrl = process.env.WEBSITE_LEADS_EXPORT_URL?.trim() || 'https://www.shield-assurance.com/api/export-submissions';
   const syncToken = process.env.WEBSITE_SYNC_TOKEN?.trim();
 
@@ -151,6 +156,7 @@ async function syncWebsite(supabase: SupabaseClient): Promise<NextResponse> {
       Accept: 'application/json',
     },
     cache: 'no-store',
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!webResponse.ok) {
@@ -170,27 +176,15 @@ async function syncWebsite(supabase: SupabaseClient): Promise<NextResponse> {
     );
   }
 
-  // A durable ledger recognizes direct pushes and pulls, even after many resubmissions.
-  const ingestedIds = new Set<string>();
-  for (let offset = 0; ; offset += 1000) {
-    const ledger = await supabase.from('lead_intake_events').select('source_submission_id').order('id').range(offset, offset + 999);
-    if (ledger.error) return NextResponse.json({ message: ledger.error.message }, { status: 500 });
-    for (const row of ledger.data ?? []) {
-      if (row.source_submission_id) ingestedIds.add(row.source_submission_id);
-    }
-    if ((ledger.data ?? []).length < 1000) break;
-  }
-
   // Oldest first, so when someone submitted multiple times the latest ends up current.
   const normalizedLeads = externalLeads
     .map(normalizeExternalLead)
     .sort((a, b) => (externalIdOf(a.form_payload) ?? '').localeCompare(externalIdOf(b.form_payload) ?? '', undefined, { numeric: true }));
 
-  const fresh = normalizedLeads.filter((lead) => {
-    const externalId = externalIdOf(lead.form_payload);
-    return !externalId || !ingestedIds.has(externalId);
-  });
-  const skippedExisting = normalizedLeads.length - fresh.length;
+  const receipts = await websiteSubmissionReceipts(supabase, normalizedLeads.map((lead) => lead.form_payload));
+  const unseen = normalizedLeads.filter((_, index) => !receipts.has(index));
+  const fresh = bounded ? unseen.slice(0, 20) : unseen;
+  const skippedExisting = normalizedLeads.length - unseen.length;
 
   // Match fresh submissions to existing leads by email (resubmission detection).
   const candidateEmails = Array.from(new Set(fresh.map((lead) => lead.email).filter((email): email is string => Boolean(email))));
@@ -202,7 +196,7 @@ async function syncWebsite(supabase: SupabaseClient): Promise<NextResponse> {
       .in('email', candidateEmails)
       .order('created_at', { ascending: false });
     if (matchError) {
-      return NextResponse.json({ message: matchError.message }, { status: 500 });
+      return NextResponse.json({ message: friendlyErrorMessage(matchError) }, { status: 500 });
     }
     for (const match of matches ?? []) {
       const email = asString(match.email)?.toLowerCase();
@@ -258,6 +252,7 @@ async function syncWebsite(supabase: SupabaseClient): Promise<NextResponse> {
       inserted,
       resubmissions,
       skippedExisting,
+      ...(bounded ? { deferred: unseen.length - fresh.length } : {}),
       ...(errors.length > 0 ? { errors: errors.slice(0, 5) } : {}),
     },
     { status: 200 },
@@ -266,22 +261,42 @@ async function syncWebsite(supabase: SupabaseClient): Promise<NextResponse> {
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   if (!isAuthorizedCron(request)) {
-    const error = await requireApiSession(request);
-    if (error) return error;
+    const session = await getApiSession(request);
+    if (session.error) return session.error;
+    try { await requireAgencyOwner(supabase, session.user.id); }
+    catch (error) { return NextResponse.json({ message: error instanceof Error ? error.message : 'Agency owner access is required.' }, { status: 403 }); }
   }
+  const job = request.nextUrl.searchParams.get('job');
+  const jobs = ['follow-up-routine', 'outreach', 'renewal-radar', 'website-intake', 'internal-actions', 'due-reminders', 'custom-workflows'];
+  if (job && !jobs.includes(job)) return NextResponse.json({ message: 'Choose a supported automation job.' }, { status: 400 });
+  const bounded = job !== null && request.nextUrl.searchParams.get('bounded') === 'true';
+  const cursor = async (name: string): Promise<string | null> => {
+    const previous = await supabase.from('automation_runs').select('summary').eq('job', name).eq('status', 'succeeded')
+      .order('finished_at', { ascending: false }).limit(1).maybeSingle<{ summary: Record<string, unknown> }>();
+    if (previous.error) throw new Error(`Cannot load ${name} continuation: ${previous.error.message}`);
+    const value = previous.data?.summary.next_cursor;
+    if (value === null || value === undefined) return null;
+    if (typeof value !== 'string' || !/^[0-9a-f-]{36}$/i.test(value)) throw new Error(`Invalid ${name} continuation. Investigate the previous run before retrying.`);
+    return value;
+  };
   const runs: AutomationRun[] = [];
   try {
-    runs.push(await trackedAutomation(supabase, 'follow-up-routine', async () => {
+    if (!job || job === 'follow-up-routine') runs.push(await trackedAutomation(supabase, 'follow-up-routine', async () => {
       const result = await supabase.rpc('ensure_default_followups');
       if (result.error) throw new Error(result.error.message);
       return { status: 'succeeded', summary: { created: result.data } };
     }));
-    runs.push(await trackedAutomation(supabase, 'outreach', async () => ({ status: 'succeeded', summary: await processDueEnrollments(supabase) })));
-    runs.push(await trackedAutomation(supabase, 'renewal-radar', async () => ({ status: 'succeeded', summary: await runRenewalRadar(supabase) })));
-    runs.push(await trackedAutomation(supabase, 'website-intake', async () => {
-      const response = await syncWebsite(supabase);
+    if (!job || job === 'outreach') runs.push(await trackedAutomation(supabase, 'outreach', async () => {
+      const sequences = await processDueEnrollments(supabase, bounded ? { limit: 1, after: await cursor('outreach') } : undefined);
+      const prospecting = await processDueProspectingEmailDrafts(supabase, bounded ? 1 : 30);
+      return { status: 'succeeded', summary: { ...sequences, prospecting } };
+    }));
+    if (!job || job === 'renewal-radar') runs.push(await trackedAutomation(supabase, 'renewal-radar', async () => ({ status: 'succeeded',
+      summary: await runRenewalRadar(supabase, new Date(), undefined, bounded ? { limit: 25, after: await cursor('renewal-radar') } : undefined) })));
+    if (!job || job === 'website-intake') runs.push(await trackedAutomation(supabase, 'website-intake', async () => {
+      const response = await syncWebsite(supabase, bounded);
       const result = await response.json() as Record<string, unknown>;
       if (!response.ok) throw new Error(typeof result.message === 'string' ? result.message : 'Website pull failed.');
       return {
@@ -290,11 +305,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         error: typeof result.syncSkipped === 'string' ? result.syncSkipped : Array.isArray(result.errors) ? result.errors.join('; ') : undefined,
       };
     }));
-    runs.push(await trackedAutomation(supabase, 'internal-actions', async () => {
+    if (!job || job === 'internal-actions') runs.push(await trackedAutomation(supabase, 'internal-actions', async () => {
       const result = await supabase.rpc('reconcile_internal_actions');
       if (result.error) throw new Error(result.error.message);
       return { status: 'succeeded', summary: result.data };
     }));
+    if (!job || job === 'due-reminders') runs.push(await trackedAutomation(supabase, 'due-reminders', async () => {
+      const result = await supabase.rpc('dispatch_due_reminders');
+      if (result.error) throw new Error(result.error.message);
+      return { status: 'succeeded', summary: { notified: result.data } };
+    }));
+    if (!job || job === 'custom-workflows') runs.push(await trackedAutomation(supabase, 'custom-workflows', () => runWorkflowAutomation(supabase)));
     const failures = runs.filter((run) => ['failed', 'partial', 'skipped'].includes(run.status));
     return NextResponse.json({ ok: failures.length === 0, runs, ...(failures.length ? { message: failures.map((run) => `${run.job}: ${run.error ?? run.status}`).join('; ') } : {}) }, { status: failures.length ? 207 : 200 });
   } catch (error) {

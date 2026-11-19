@@ -7,7 +7,10 @@ import type { WorkspaceAsset, WorkspaceNote, WorkspaceTask } from '@crm/shared';
 import { isRecord, isUuid } from '../src/lib/workspace-validation';
 import { namedTaskSubject } from '../src/lib/record-scope';
 import { directoryRows, type DirectoryFilter } from '../src/lib/client-directory';
-import { DEFAULT_OUTREACH_SENDER, EMPTY_MARKETING_PROFILE } from '@crm/shared';
+import { BUILT_IN_AUTOMATION_DEFAULTS, validateAutomationConfiguration, DEFAULT_OUTREACH_SENDER, EMPTY_MARKETING_PROFILE } from '@crm/shared';
+import { endOfArizonaDay } from '../src/lib/arizona-time';
+import { senderOptions } from '../src/lib/sender-options';
+import { SALES_TEMPLATES, renderSalesTemplate } from '@crm/shared';
 
 const root = path.resolve(__dirname, '..', '..', '..');
 const dotenv: { config: (options: { path: string }) => void } = require(require.resolve('dotenv', { paths: [path.join(root, 'apps', 'api')] }));
@@ -15,7 +18,7 @@ dotenv.config({ path: path.join(root, 'apps', 'web', '.env.local') });
 
 export const leadId = 'f4a2328d-48d3-4be9-9896-81e69d8ea4f6';
 const firstClientId = 'd0b0cd9e-31fb-4a1e-99ab-cd33220adca5';
-interface TestAccount { id: string; full_name: string; email: null; phone: string; address: string; source: string; created_at: string }
+interface TestAccount { id: string; full_name: string; email: string | null; email_consent?: boolean; preferred_channel?: string; phone: string; address: string; source: string; created_at: string; intake_details?: unknown }
 interface Arrival {
   intake_id: string; id: string; full_name: string; line_of_business: string; business_name: string; industry: string;
   arrived_at: string; time_basis: string; request_kind: string;
@@ -34,9 +37,25 @@ export class WorkspaceData {
   unexpected: string[] = [];
   requests: string[] = [];
   marketingProfiles = new Map<string, unknown>();
-  outreachSettings = { approval_mode: true, daily_send_cap: 20, send_window_start: 8, send_window_end: 17, opt_out_footer: 'Test footer', sender_profile: { ...DEFAULT_OUTREACH_SENDER } };
+  doNotContact = false;
+  accountProfile = { email: 'verification@example.invalid', full_name: 'Verification agent', contact_phone: '', role: 'agent', signature: '',
+    active: true, email_verified: true, can_change_email: false, email_change: null };
+  emailStatus = {
+    sender: 'sender@example.invalid', replyTo: 'reply@example.invalid', sendingEnabled: true,
+    domain: 'example.invalid', domainStatus: 'verified', replyVerifiedAt: null, replyReady: false,
+    inboundAddress: 'inbox@example.resend.app', issues: [] as string[],
+    latestTest: null as { id: string; createdAt: string; delivery: string; replyVerified: boolean } | null,
+  };
+  outreachSettings = { approval_mode: true, daily_send_cap: 20, send_window_start: 8, send_window_end: 17, timezone: 'America/Phoenix', opt_out_footer: 'Test footer', sender_profile: { ...DEFAULT_OUTREACH_SENDER } };
+  outreachRevision = 1;
+  schedulerEnabled = true;
+  automationConfiguration = structuredClone(BUILT_IN_AUTOMATION_DEFAULTS);
+  outreachPending: Array<{ id: string; lead_id: string; lead_name: string; step_number: number; to_email: string; subject: string; body: string; cited_signals: string[]; created_at: string; draft_revision: number }> = [];
+  rewriteBodies: Array<Record<string, unknown>> = [];
+  failRewrite = false;
   events: Array<{ id: string; subject: string; title: string; event_date: string; event_time: string | null; all_day: boolean; status: string; related_type: string | null; related_id: string | null; updated_at: string }> = [];
   failTaskSave = false;
+  bulkTaskBodies: Array<Record<string, unknown>> = [];
   failEventSave = false;
   intakeBodies: Array<Record<string, unknown>> = [];
   unreadMessages: { total: number; byClient: Record<string, number>; byLead: Record<string, number> } = { total: 0, byClient: {}, byLead: {} };
@@ -84,6 +103,84 @@ export class WorkspaceData {
   handle(url: URL, method: string, body: Record<string, unknown>): { status?: number; json: unknown } {
     const key = `${method} ${url.pathname}`;
     this.requests.push(key);
+    if (url.pathname === '/api/settings/email') {
+      if (method === 'POST') {
+        this.emailStatus.latestTest = { id: String(body.request_id), createdAt: new Date().toISOString(), delivery: 'Accepted by provider', replyVerified: false };
+        return { json: { message: 'Test accepted. Reply to it, then refresh status.' } };
+      }
+      return { json: this.emailStatus };
+    }
+    if (url.pathname === '/api/account') {
+      if (method === 'PATCH') {
+        this.accountProfile = { ...this.accountProfile, ...(typeof body.signature === 'string' ? { signature: body.signature }
+          : { full_name: String(body.full_name), contact_phone: String(body.contact_phone) }) };
+        return { json: { message: 'Your account was saved.' } };
+      }
+      return { json: this.accountProfile };
+    }
+    if (url.pathname === '/api/settings/account-email' && method === 'GET') return { json: { requests: [] } };
+    if (url.pathname === '/api/settings/automation/scheduler') {
+      if (method === 'PATCH') this.schedulerEnabled = body.enabled === true;
+      return { json: {
+      configured: true, jobs: [{ name: 'crm-due-reminders', active: this.schedulerEnabled, schedule: '* * * * *' }, { name: 'crm-web-heartbeat', active: this.schedulerEnabled, schedule: '*/5 * * * *' }],
+      last_heartbeat: null,
+    } }; }
+    if (url.pathname === '/api/automation/run' && method === 'GET') return { json: {
+      job: url.searchParams.get('job'), revision: this.outreachRevision, records: 0, may_use_ai: false, may_send_email: false, preview_only: true,
+    } };
+    if (url.pathname === '/api/automation/run' && method === 'POST') {
+      if (body.confirmed !== true) return { status: 400, json: { message: 'Confirm this run.' } };
+      if (body.expected_revision !== this.outreachRevision) return { status: 409, json: { message: 'Settings changed after preview. Preview this job again.' } };
+      return { json: { ok: true, run: { job: body.job, status: 'succeeded', error: null } } };
+    }
+    if (url.pathname === '/api/settings/automation') {
+      if (method === 'PATCH') {
+        if (body.expected_revision !== this.outreachRevision) return { status: 409, json: { message: 'Settings changed since you opened them. Reload before saving.' } };
+        try { this.automationConfiguration = validateAutomationConfiguration(body.configuration); }
+        catch (failure) { return { status: 400, json: { message: failure instanceof Error ? failure.message : 'Invalid settings' } }; }
+        return { json: { revision: ++this.outreachRevision } };
+      }
+      return { json: { revision: this.outreachRevision, configuration: { schema_version: 1, automation: this.automationConfiguration, outreach: this.outreachSettings }, history: [] } };
+    }
+    if (url.pathname === '/api/settings/outreach') {
+      if (method === 'PATCH') {
+        if (body.expected_revision !== this.outreachRevision) return { status: 409, json: { message: 'Settings changed since you opened them. Reload before saving.' } };
+        this.outreachSettings = { ...this.outreachSettings, ...body };
+        this.outreachRevision++;
+        return { json: { ok: true } };
+      }
+      return { json: { settings: this.outreachSettings, revision: this.outreachRevision, sender_options: senderOptions([this.outreachSettings.sender_profile]) } };
+    }
+    if (url.pathname === '/api/shell') {
+      return { json: {
+        overdueCount: this.taskRows(new URL('/api/tasks?status=overdue', url)).length,
+        dueTodayCount: this.tasks.filter((task) => task.status === 'open' && task.due_date && task.due_date < endOfArizonaDay(new Date()).toISOString()).length,
+        notifications: [], unreadCount: 0,
+        unreadMessages: this.unreadMessages,
+      } };
+    }
+    if (url.pathname === '/api/agency/assignment') return { json: null };
+    if (url.pathname === '/api/agency/time-zone') return { json: { time_zone: this.outreachSettings.timezone } };
+    if (url.pathname === '/api/gmail/threads') return { json: { enabled: false } };
+    if (url.pathname === '/api/gmail') return { json: { default_provider: 'resend', connection: null } };
+    if (url.pathname === '/api/google-calendar' && method === 'GET') return { json: { connection: null } };
+    if (url.pathname === '/api/zoom' && method === 'GET') return { json: { connection: null, configured: false } };
+    if (url.pathname === '/api/vehicles') return { json: { options: url.searchParams.has('make')
+      ? [{ id: '1863', name: 'Civic' }] : [{ id: '474', name: 'HONDA' }] } };
+    if (url.pathname === '/api/appointments') return { json: { appointments: [], facts: {} } };
+    if (/^\/api\/events\/[^/]+\/confirmation$/.test(url.pathname)) return { json: { message: 'Appointment saved and confirmation accepted by Gmail.' } };
+    if (url.pathname === '/api/sales-templates') {
+      if (method === 'GET') return { json: { templates: SALES_TEMPLATES, canManage: true,
+        facts: { contact_name: this.lead.full_name, agent_name: 'Verification agent', agency_name: 'Shield Assurance' }, recommended: ['introduction'] } };
+      if (method === 'POST') {
+        const template = SALES_TEMPLATES.find((row) => row.id === body.id);
+        if (!template || !isRecord(body.facts)) return { status: 400, json: { message: 'Choose a template and confirmed facts.' } };
+        const draft = renderSalesTemplate(template, body.channel === 'sms' ? 'sms' : 'email', body.facts);
+        return { json: { subject: draft.subject, body: draft.body, template: { id: template.id, revision: template.revision } } };
+      }
+    }
+    if (url.pathname === '/api/sales-sequences' && method === 'GET') return { json: { rows: [], actor: 'qa', appointments: [], quotes: [] } };
+    if (url.pathname === '/api/agency/sender') return { json: { enabled: false } };
     if (url.pathname === '/api/outreach/profile') {
       const profileKey = `${url.searchParams.get('record_type')}:${url.searchParams.get('record_id')}`;
       if (method === 'PUT') this.marketingProfiles.set(profileKey, body.profile);
@@ -94,7 +191,15 @@ export class WorkspaceData {
         this.outreachSettings = { ...this.outreachSettings, ...body };
         return { json: { ok: true } };
       }
-      return { json: { settings: this.outreachSettings, sent_today: 0, pending: [], enrollments: [], recent: [], opt_outs: 0 } };
+      return { json: { settings: this.outreachSettings, sent_today: 0, pending: this.outreachPending, enrollments: [], recent: [], opt_outs: 0 } };
+    }
+    if (/^\/api\/outreach\/outbox\/[^/]+\/rewrite$/.test(url.pathname) && method === 'POST') {
+      this.rewriteBodies.push(body);
+      if (this.failRewrite) return { status: 503, json: { message: 'AI rewriting is unavailable. Your original draft was not changed.' } };
+      const item = this.outreachPending.find((row) => row.id === url.pathname.split('/')[4]);
+      if (!item || item.draft_revision !== body.revision) return { status: 409, json: { message: 'This draft changed. Refresh before rewriting.' } };
+      Object.assign(item, { subject: 'Your commercial auto next step', body: 'Hi Leo,\nYou asked about commercial auto. We can keep the next step over email. Could you send the VIN for the vehicle you want us to review? This will help us focus on the correct vehicle without asking you to repeat the details you have already shared. Let me know if your priorities have changed since we last spoke.\n\n-- \nChance\nShield Assurance', cited_signals: ['Stated insurance interests: Commercial auto'], draft_revision: item.draft_revision + 1 });
+      return { json: item };
     }
     if (url.pathname === '/api/automation/health') return { json: { jobs: [
       { job: 'website-intake', latest: null, last_success_at: null },
@@ -127,6 +232,17 @@ export class WorkspaceData {
       this.unreadMessages = { total: 0, byClient: {}, byLead: {} };
       return { json: { ok: true } };
     }
+    if (url.pathname === '/api/tasks/bulk-reschedule' && method === 'PATCH') {
+      this.bulkTaskBodies.push(body);
+      if (!Array.isArray(body.tasks) || !body.tasks.length || typeof body.due_date !== 'string') return { status: 400, json: { message: 'Select tasks and a new due date.' } };
+      const selected = body.tasks.map((item: unknown) => isRecord(item) ? item : {});
+      if (selected.some((item) => !this.tasks.some((task) => task.id === item.id && task.status === 'open' && task.updated_at === item.expected_updated_at))) {
+        return { status: 409, json: { message: 'A selected task changed. No tasks were rescheduled. Refresh and reselect.' } };
+      }
+      const saved = this.tasks.filter((task) => selected.some((item) => item.id === task.id));
+      for (const task of saved) { task.due_date = body.due_date; task.updated_at = this.stamp(); }
+      return { json: { updated: saved.length, tasks: saved } };
+    }
     if (url.pathname === '/api/tasks') {
       if (method === 'GET') {
         const rows = this.taskRows(url);
@@ -150,7 +266,12 @@ export class WorkspaceData {
       return { status: 201, json: task };
     }
     if (url.pathname === '/api/events') {
-      if (method === 'GET') return { json: this.events.slice(Number(url.searchParams.get('offset') ?? '0'), Number(url.searchParams.get('offset') ?? '0') + 200) };
+      if (method === 'GET') {
+        const status = url.searchParams.get('status');
+        const rows = this.events.filter((event) => (!status || status === 'all' || event.status === status)
+          && (!url.searchParams.get('id') || event.id === url.searchParams.get('id')));
+        return { json: rows.slice(Number(url.searchParams.get('offset') ?? '0'), Number(url.searchParams.get('offset') ?? '0') + 200) };
+      }
       if (this.failEventSave) { this.failEventSave = false; return { status: 409, json: { message: 'This event changed. Refresh before retrying.' } }; }
       const existing = this.events.find((event) => event.id === body.id);
       if (existing) {
@@ -162,6 +283,7 @@ export class WorkspaceData {
         event_date: String(body.event_date), event_time: typeof body.event_time === 'string' ? body.event_time : null,
         all_day: Boolean(body.all_day), status: 'scheduled', related_type: typeof body.related_type === 'string' ? body.related_type : null,
         related_id: typeof body.related_id === 'string' ? body.related_id : null, updated_at: this.stamp(),
+        meeting_type: body.meeting_type, duration_minutes: body.duration_minutes, location: body.location,
       };
       this.events.push(event);
       return { status: 201, json: event };
@@ -230,6 +352,8 @@ export class WorkspaceData {
     if (url.pathname === `/api/leads/${leadId}/conversation` && method === 'GET') {
       return { json: { clientId: this.linked ? this.account.id : null, items: [] } };
     }
+    if (url.pathname === `/api/leads/${leadId}/scheduled-messages` && method === 'GET') return { json: [] };
+    if (url.pathname === '/api/communication/scheduled' && method === 'GET') return { json: [] };
     if (url.pathname === `/api/leads/${leadId}/workspace`) {
       if (method === 'POST') {
         if (body.create) this.account = { ...this.account, id: randomUUID(), full_name: this.lead.full_name };
@@ -256,13 +380,27 @@ export class WorkspaceData {
       return { status: 201, json: { id: leadId } };
     }
     if (url.pathname === `/api/leads/${leadId}`) return { json: { ...this.lead, intake_event_ids: this.arrivals.filter((arrival) => arrival.id === leadId).map((arrival) => arrival.intake_id) } };
-    if (url.pathname === '/api/leads') return { json: method === 'GET' ? [this.lead] : this.lead };
+    if (url.pathname === '/api/intelligence/dossier') return { json: {
+      scope_key: this.linked || url.searchParams.get('type') === 'client' ? `client:${this.account.id}` : `lead:${leadId}`,
+      record_name: this.lead.full_name, version: 0, findings: {},
+      confirmations: [], observations: [], observations_total: 0, history_total: 0, page: 0,
+    } };
+    if (url.pathname === '/api/intelligence/business-research' && method === 'GET') return { json: { business: null, linked_record: null, job: null } };
+    if (url.pathname === '/api/leads') return { json: method === 'GET' ? [{ ...this.lead, do_not_contact: this.doNotContact }] : this.lead };
     if (url.pathname === '/api/leads/stats') return { json: { active: 1, won: 0, lost: 0, inactive: 0 } };
     if (url.pathname === '/api/outreach/enroll' && method === 'GET') return { json: { enrollment: null, outbox: [] } };
+    if (url.pathname === '/api/record-contact-preference') {
+      if (method === 'PUT') this.doNotContact = body.do_not_contact === true;
+      return { json: { do_not_contact: this.doNotContact, inherited: false, reason: '' } };
+    }
+    if (url.pathname === `/api/leads/${leadId}/prospecting-cadence` && method === 'GET') {
+      return { json: { cadence: null, can_manage: false, can_cancel: false } };
+    }
     if (url.pathname === '/api/communication-log/unread-by-lead') return { json: {} };
     if (url.pathname === '/api/communication-log/delivery' || url.pathname === '/api/policies' || url.pathname === '/api/recent') return { json: [] };
     if (url.pathname === '/api/renewals') return { json: { items: [], counts: { '30': 0, '60': 0, '90': 0, overdue: 0 } } };
     if (url.pathname === '/api/metrics/home') return { json: { total_written_premium: 0, written_premium_series: [], active_leads: 1, lead_conversion_rate: 0, renewals_30_days: 0, open_claims: 0 } };
+    if (url.pathname === '/api/metrics/tasks') return { json: { on_time: 1, overdue: 0, open: 1, completed: 1, unclassified: 0 } };
     if (url.pathname === '/api/briefing') return { json: { overdue_tasks: 0, today_tasks: [], today_tasks_count: 12, unread_messages: 0, pending_approvals: 0, new_leads_24h: 1, recent_replies: [], stalled_leads: 0, active_sequences: 0, summary: 'Review the current website request.' } };
     this.unexpected.push(key);
     return { status: 501, json: { message: `Unexpected browser fixture request: ${key}` } };
@@ -281,7 +419,7 @@ export class WorkspaceData {
   }
 }
 
-export const test = base.extend<{ data: WorkspaceData }, { authCookies: Array<{ name: string; value: string }> }>({
+export const test = base.extend<{ data: WorkspaceData; settingsOwner: void }, { authCookies: Array<{ name: string; value: string }> }>({
   authCookies: [async ({}, use) => {
     if (process.env.CRM_BROWSER_QA_ALLOWED !== '1') throw new Error('Set CRM_BROWSER_QA_ALLOWED=1 to allow creating and removing a temporary browser-verification auth user.');
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -307,8 +445,39 @@ export const test = base.extend<{ data: WorkspaceData }, { authCookies: Array<{ 
       if (removed.error) throw new Error(`Unable to remove browser-verification auth user ${created.data.user.id}: ${removed.error.message}`);
     }
   }, { scope: 'worker' }],
-  context: async ({ browser, authCookies, baseURL }, use) => {
-    const context = await browser.newContext({ baseURL, viewport: { width: 1280, height: 900 }, timezoneId: 'Pacific/Honolulu' });
+  settingsOwner: async ({ authCookies }, use) => {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !anon || !key) throw new Error('The local Supabase configuration is required for owner-only Settings verification.');
+    const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+    const auth = createServerClient(url, anon, { cookies: { getAll: () => authCookies, setAll: (values) => {
+      for (const cookie of values) {
+        const previous = authCookies.findIndex((item) => item.name === cookie.name);
+        if (previous >= 0) authCookies.splice(previous, 1);
+        authCookies.push({ name: cookie.name, value: cookie.value });
+      }
+    } } });
+    const verified = await auth.auth.getUser();
+    const identity = verified.data.user;
+    if (verified.error || !identity?.email?.startsWith('crm-browser-') || !identity.email.endsWith('@example.invalid')
+      || identity.user_metadata.crm_browser_qa !== true) throw new Error('Disposable browser identity was not verified for owner-only Settings.');
+    const existing = await admin.from('agency_members').select('user_id').eq('user_id', identity.id).maybeSingle();
+    if (existing.error) throw new Error('Could not check the disposable account membership.');
+    if (existing.data) throw new Error('Disposable browser account already has an agency membership.');
+    const membership = await admin.from('agency_members').insert({
+      user_id: identity.id, email: identity.email, role: 'owner', active: true,
+    });
+    if (membership.error) throw new Error('Could not grant temporary owner access for Settings verification.');
+    try {
+      await use();
+    } finally {
+      const removed = await admin.from('agency_members').delete().eq('user_id', identity.id);
+      if (removed.error) throw new Error('Could not remove temporary owner access after Settings verification.');
+    }
+  },
+  context: async ({ browser, authCookies, baseURL, storageState }, use) => {
+    const context = await browser.newContext({ baseURL, storageState, viewport: { width: 1280, height: 900 }, timezoneId: 'Pacific/Honolulu' });
     await context.addCookies(authCookies.map((cookie) => ({ ...cookie, domain: new URL(baseURL ?? 'http://127.0.0.1:3000').hostname, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' })));
     try {
       const [smoke, intake, clients, directory] = await Promise.all([

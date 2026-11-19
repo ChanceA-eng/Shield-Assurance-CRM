@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { absoluteDateTime, isUuid, validateAsset } from './workspace-validation';
 import { namedTaskSubject, recordFilter, taskFilter } from './record-scope';
 import { websiteBusinessDetails } from './website-intake';
-import { accountLifecycle } from './account-lifecycle';
+import { accountLifecycle, accountLifecyclesForAccounts } from './account-lifecycle';
 
 describe('Workspace inputs', () => {
   it.each(['2026-02-30T10:00:00Z', '2026-10-31T24:00:00Z', '2026-10-31T10:61:00Z', '2026-10-31T10:00', '', null])('rejects invalid or timezone-free reminder time %s', (value) => {
@@ -25,6 +25,13 @@ describe('Workspace inputs', () => {
       details: { vin: '1FTFW1E50JFA12345' },
     });
     expect(typeof validateAsset({ title: 'Truck', asset_type: 'vehicle', details: { vin: 'bad-vin' }, source: 'client_reported' })).toBe('string');
+  });
+  it('preserves structured driver identifiers and rejects invalid driver dates on later asset edits', () => {
+    const driver = { title: 'Driver', asset_type: 'driver', source: 'client_reported',
+      details: { license_number: 'QA1234', license_issued: '2020-01-01', license_expires: '2030-01-01', dob: '1980-01-01' } };
+    expect(validateAsset(driver)).toMatchObject({ details: driver.details });
+    expect(validateAsset({ ...driver, details: { ...driver.details, license_expires: '2019-01-01' } })).toMatch(/must not be before/);
+    expect(validateAsset({ ...driver, details: { ...driver.details, dob: '1980-02-30' } })).toMatch(/valid/);
   });
   it('preserves valid pre-1981 identifiers', () => {
     expect(validateAsset({ title: 'Classic car', asset_type: 'vehicle', details: { year: '1970', vin: '12345ABC' }, source: 'client_reported' })).toMatchObject({
@@ -64,6 +71,19 @@ describe('Account identity and insurance lifecycle', () => {
     expect(accountLifecycle([{ status: 'issued', effective_date: '2026-11-01', expiration_date: '2027-11-01' }], now)).toBe('Client - policy scheduled');
     expect(accountLifecycle([{ status: 'active', effective_date: '2025-01-01', expiration_date: '2026-01-01' }], now)).toBe('Former client');
     expect(accountLifecycle([{ status: 'active' }], now)).toBe('Client - verify policy status');
+  });
+  it('groups policies once when resolving lifecycle for many accounts', () => {
+    expect(accountLifecyclesForAccounts(['insured', 'former', 'uninsured', 'missing'], [
+      { client_id: 'insured', status: 'active', effective_date: '2026-01-01', expiration_date: '2026-12-31' },
+      { client_id: 'former', status: 'active', effective_date: '2025-01-01', expiration_date: '2026-01-01' },
+      { client_id: 'uninsured', status: 'quoted' },
+      { client_id: null, status: 'active' },
+    ], now)).toEqual(new Map([
+      ['insured', 'Active client'],
+      ['former', 'Former client'],
+      ['uninsured', 'Prospect'],
+      ['missing', 'Prospect'],
+    ]));
   });
   it('separates actual industry from commercial/personal insurance line', () => {
     expect(websiteBusinessDetails({ metadata: { businessName: 'Example Shop', businessReview: { industry: 'retail' } } })).toEqual({

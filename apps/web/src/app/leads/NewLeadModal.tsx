@@ -1,20 +1,27 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Route } from 'next';
 import Link from 'next/link';
 import CommercialScript from './scripts/CommercialScript';
 import PersonalScript from './scripts/PersonalScript';
+import VehicleDetailsFields from '../../components/crm/VehicleDetailsFields';
+import ApplicantDetailsFields from '../../components/crm/ApplicantDetailsFields';
+import DriverIntakeFields from '../../components/crm/DriverIntakeFields';
+import { EMPTY_APPLICANT, EMPTY_DRIVER, type ApplicantDetails } from '../../lib/applicant-details';
+import { preventImplicitIntakeSubmit } from '../../lib/intake-keyboard';
+import { useUnsavedChanges } from '../../context/WorkspaceNavigationContext';
 import {
-  CARRIERS, COMMERCIAL_COVERAGES, COMMERCIAL_VEHICLE_TYPES, CONSTRUCTION_TYPES, CONTACT_METHODS, CONTACT_TITLES, DRIVER_RELATIONSHIPS,
-  ENTITY_TYPES, INDUSTRY_GROUPS, LEAD_SOURCES, MARITAL_STATUSES, OWNERSHIP, PERSONAL_COVERAGES, PRIOR_LIMITS, PROPERTY_USES, ROOF_TYPES,
+  CARRIERS, COMMERCIAL_COVERAGES, COMMERCIAL_VEHICLE_TYPES, CONSTRUCTION_TYPES, CONTACT_METHODS, CONTACT_TITLES,
+  ENTITY_TYPES, INDUSTRY_GROUPS, LEAD_SOURCES, OWNERSHIP, PERSONAL_COVERAGES, PRIOR_LIMITS, PROPERTY_USES, ROOF_TYPES,
   UMBRELLA_LIMITS, US_STATES, VEHICLE_USES, phoneDigits,
   type DriverInput, type ExistingRecord, type IntakeKind, type PropertyInput, type VehicleInput,
 } from '../../lib/agent-lead-intake';
 
 interface NewLeadModalProps {
   onClose: () => void;
-  onCreated: (leadId: string) => void;
+  onCreated: (leadId: string, warning?: string) => void;
+  onAccountCreated?: (accountId: string) => void;
 }
 
 const EMPTY_CONTACT = { first_name: '', last_name: '', title: '', phone: '', email: '', preferred_contact: '', street: '', city: '', state: 'AZ', zip: '' };
@@ -95,11 +102,12 @@ function daysUntil(date: string): number | null {
   return Math.round((target - today) / 86400000);
 }
 
-export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps): JSX.Element {
+export default function NewLeadModal({ onClose, onCreated, onAccountCreated }: NewLeadModalProps): JSX.Element {
   const [kind, setKind] = useState<IntakeKind>('personal');
   const [source, setSource] = useState('Phone Call');
   const [contact, setContact] = useState(EMPTY_CONTACT);
-  const [personal, setPersonal] = useState({ dob: '', marital_status: '', occupation: '', prior_limits: '', umbrella_limit: '' });
+  const [personal, setPersonal] = useState({ prior_limits: '', umbrella_limit: '' });
+  const [details, setDetails] = useState<ApplicantDetails>({ ...EMPTY_APPLICANT, previous_addresses: [] });
   const [business, setBusiness] = useState(EMPTY_BUSINESS);
   const [coverages, setCoverages] = useState<string[]>([]);
   const [current, setCurrent] = useState({ carrier: '', expiration: '', premium: '' });
@@ -113,6 +121,8 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
   const [duplicateBlocked, setDuplicateBlocked] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [destination, setDestination] = useState<'lead' | 'account'>('lead');
 
   const fullName = `${contact.first_name} ${contact.last_name}`.trim();
   const homeAddress = [contact.street, [contact.city, [contact.state, contact.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ')].filter(Boolean).join(', ');
@@ -128,15 +138,21 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
     const phone = phoneDigits(contact.phone).length === 10 ? contact.phone : '';
     if (!email && !phone) {
       setMatches([]);
+      setLookupError(null);
       return;
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams({ email, phone });
       void fetch(`/api/leads/intake?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
-        .then(async (res) => (res.ok ? ((await res.json()) as { matches: ExistingRecord[] }).matches : []))
-        .then((found) => setMatches(found))
-        .catch(() => undefined);
+        .then(async (res) => {
+          if (!res.ok) throw new Error('Duplicate check unavailable. We will check again before saving.');
+          return ((await res.json()) as { matches: ExistingRecord[] }).matches;
+        })
+        .then((found) => { if (!controller.signal.aborted) { setMatches(found); setLookupError(null); } })
+        .catch((failure: unknown) => {
+          if (!controller.signal.aborted) setLookupError(failure instanceof Error ? failure.message : 'Duplicate check unavailable. We will check again before saving.');
+        });
     }, 450);
     return () => {
       window.clearTimeout(timer);
@@ -146,7 +162,8 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
 
   const applyPersonalDefaults = useCallback((selected: string[]): void => {
     if (selected.includes('auto')) {
-      setDrivers((prev) => (prev.length ? prev : [{ name: fullName, dob: personal.dob, relationship: 'Self', license_state: contact.state }]));
+      setDrivers((prev) => (prev.length ? prev : [{ ...EMPTY_DRIVER, name: fullName, dob: details.dob, relationship: 'Self',
+        license_state: contact.state, address: homeAddress, previous_addresses: [] }]));
       setVehicles((prev) => (prev.length ? prev : [{ ...EMPTY_VEHICLE }]));
     }
     if (selected.some((value) => PROPERTY_COVERAGES.has(value))) {
@@ -154,7 +171,7 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
         address: homeAddress, use: selected.includes('landlord') ? 'Rental' : 'Primary home', year_built: '', roof: '', construction: '', has_pool: '', dog_breed: '',
       }]));
     }
-  }, [contact.state, fullName, homeAddress, personal.dob]);
+  }, [contact.state, fullName, homeAddress, details.dob]);
 
   function toggleCoverage(value: string): void {
     const next = coverages.includes(value) ? coverages.filter((item) => item !== value) : [...coverages, value];
@@ -208,34 +225,40 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
   }
 
   const payload = useMemo(() => {
-    const base = { kind, source, contact, coverages, current, vehicles, notes };
+    const base = { kind, source, contact, coverages, current, vehicles, notes, additional_details: details };
     return kind === 'personal'
-      ? { ...base, ...personal, drivers, properties }
+      ? { ...base, ...personal, dob: details.dob, marital_status: details.marital_status, occupation: details.occupation, drivers, properties }
       : { ...base, business, industry_answers: Object.fromEntries(Object.entries(answers).filter(([, value]) => value)) };
-  }, [answers, business, contact, coverages, current, drivers, kind, notes, personal, properties, source, vehicles]);
+  }, [answers, business, contact, coverages, current, details, drivers, kind, notes, personal, properties, source, vehicles]);
+  const initialPayload = useRef(JSON.stringify(payload));
+  const { markSaved, confirmDiscard } = useUnsavedChanges(JSON.stringify(payload) !== initialPayload.current);
 
-  async function submit(allowDuplicate: boolean): Promise<void> {
+  async function submit(allowDuplicate: boolean, target: 'lead' | 'account' = destination): Promise<void> {
+    if (isSaving) return;
+    setDestination(target);
     setIsSaving(true);
     setError(null);
     try {
       const res = await fetch('/api/leads/intake', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ intake: payload, allow_duplicate: allowDuplicate }),
+        body: JSON.stringify({ intake: payload, allow_duplicate: allowDuplicate, destination: target }),
       });
-      const body = (await res.json().catch(() => ({}))) as { id?: string; message?: string; matches?: ExistingRecord[] };
+      const body = (await res.json().catch(() => ({}))) as { id?: string; message?: string; warning?: string; matches?: ExistingRecord[] };
       if (res.status === 409 && body.matches) {
         setMatches(body.matches);
         setDuplicateBlocked(true);
         return;
       }
       if (!res.ok || !body.id) {
-        setError(body.message ?? 'The lead could not be created.');
+        setError(body.message ?? `The ${target} could not be created.`);
         return;
       }
-      onCreated(body.id);
+      markSaved();
+      if (target === 'account' && onAccountCreated) onAccountCreated(body.id);
+      else onCreated(body.id, body.warning);
     } catch {
-      setError('The lead could not be created. Check your connection and try again.');
+      setError(`The ${target} could not be created. Check your connection and try again.`);
     } finally {
       setIsSaving(false);
     }
@@ -261,12 +284,13 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
             <button type="button" onClick={() => setShowScript((value) => !value)} className="rounded border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-muted hover:bg-cui-light">
               {showScript ? 'Hide call script' : 'Call script'}
             </button>
-            <button type="button" onClick={onClose} className="rounded bg-cui-light px-3 py-1.5 text-xs font-semibold text-cui-muted hover:bg-cui-border">Close</button>
+            <button type="button" disabled={isSaving} onClick={() => { if (confirmDiscard()) onClose(); }} className="rounded bg-cui-light px-3 py-1.5 text-xs font-semibold text-cui-muted hover:bg-cui-border">Close</button>
           </div>
         </div>
 
-        <form onSubmit={(event) => { event.preventDefault(); void submit(false); }} className={`grid gap-0 ${showScript ? 'lg:grid-cols-[1fr_340px]' : ''}`}>
+        <form onKeyDown={preventImplicitIntakeSubmit} onSubmit={(event) => event.preventDefault()} className={`grid gap-0 ${showScript ? 'lg:grid-cols-[1fr_340px]' : ''}`}>
           <div className="space-y-4 p-5">
+            {lookupError ? <p role="alert" className="text-sm text-cui-danger">{lookupError}</p> : null}
             {matches.length ? (
               <div className={`rounded border px-3 py-2 text-sm ${duplicateBlocked ? 'border-cui-danger/50 bg-rose-50' : 'border-amber-300 bg-amber-50'}`} role="status">
                 <p className="font-semibold text-cui-text">
@@ -286,7 +310,7 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
                 </ul>
                 {duplicateBlocked ? (
                   <button type="button" disabled={isSaving} onClick={() => void submit(true)} className="mt-2 rounded border border-cui-danger px-3 py-1 text-xs font-semibold text-cui-danger hover:bg-white disabled:opacity-60">
-                    Create a separate lead anyway
+                    Create a separate {destination} anyway
                   </button>
                 ) : null}
               </div>
@@ -320,13 +344,7 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
               <TextField label="Last name" value={contact.last_name} onChange={(value) => setContactField('last_name', value)} required />
               {kind === 'commercial' ? (
                 <SelectField label="Title" value={contact.title} onChange={(value) => setContactField('title', value)} options={CONTACT_TITLES} />
-              ) : (
-                <>
-                  <TextField label="Date of birth" type="date" value={personal.dob} onChange={(value) => setPersonal((prev) => ({ ...prev, dob: value }))} />
-                  <SelectField label="Marital status" value={personal.marital_status} onChange={(value) => setPersonal((prev) => ({ ...prev, marital_status: value }))} options={MARITAL_STATUSES} />
-                  <TextField label="Occupation" value={personal.occupation} onChange={(value) => setPersonal((prev) => ({ ...prev, occupation: value }))} />
-                </>
-              )}
+              ) : null}
               <TextField label="Phone" type="tel" value={contact.phone} onChange={(value) => setContactField('phone', value)} required />
               <TextField label="Email" type="email" value={contact.email} onChange={(value) => setContactField('email', value)} />
               <SelectField label="Preferred contact" value={contact.preferred_contact} onChange={(value) => setContactField('preferred_contact', value)} options={CONTACT_METHODS} />
@@ -337,6 +355,10 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
                 <SelectField label="State" value={contact.state} onChange={(value) => setContactField('state', value)} options={US_STATES} />
                 <TextField label="ZIP" value={contact.zip} onChange={(value) => setContactField('zip', value.replace(/[^\d-]/g, '').slice(0, 10))} />
               </div>
+            </Section>
+
+            <Section title="Additional applicant information (optional)">
+              <div className="sm:col-span-2"><ApplicantDetailsFields value={details} onChange={setDetails} disabled={isSaving} personal={kind === 'personal'} /></div>
             </Section>
 
             <Section title="Coverage & current insurance">
@@ -376,21 +398,9 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
               </Section>
             ) : null}
 
-            {kind === 'personal' && (coverages.includes('auto') || drivers.length > 0) ? (
-              <Section title={`Drivers (${drivers.length})`} action={
-                <button type="button" onClick={() => setDrivers((prev) => [...prev, { name: '', dob: '', relationship: '', license_state: contact.state }])} className="text-xs font-semibold text-cui-primary hover:underline">+ Add driver</button>
-              }>
-                {drivers.map((driver, index) => (
-                  <div key={index} className="grid gap-2 rounded border border-cui-border/50 p-2 sm:col-span-2 sm:grid-cols-4">
-                    <TextField label={`Driver ${index + 1} name`} value={driver.name} onChange={(value) => updateRow(setDrivers, index, { name: value })} required />
-                    <TextField label="Date of birth" type="date" value={driver.dob} onChange={(value) => updateRow(setDrivers, index, { dob: value })} />
-                    <SelectField label="Relationship" value={driver.relationship} onChange={(value) => updateRow(setDrivers, index, { relationship: value })} options={DRIVER_RELATIONSHIPS} />
-                    <div className="flex items-end gap-2">
-                      <SelectField label="License state" value={driver.license_state} onChange={(value) => updateRow(setDrivers, index, { license_state: value })} options={US_STATES} />
-                      <RemoveButton label={`Remove driver ${index + 1}`} onClick={() => setDrivers((prev) => prev.filter((_, position) => position !== index))} />
-                    </div>
-                  </div>
-                ))}
+            {kind === 'personal' ? (
+              <Section title={`Drivers (${drivers.length})`}>
+                <div className="sm:col-span-2"><DriverIntakeFields drivers={drivers} onChange={setDrivers} disabled={isSaving} state={contact.state} applicantAddress={homeAddress} /></div>
               </Section>
             ) : null}
 
@@ -401,10 +411,9 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
                 <p className="text-xs text-cui-muted sm:col-span-2">Garaged at the {kind === 'commercial' ? 'business' : 'home'} address unless you change it on the asset later. Leave VIN empty if unknown.</p>
                 {vehicles.map((vehicle, index) => (
                   <div key={index} className="grid gap-2 rounded border border-cui-border/50 p-2 sm:col-span-2 sm:grid-cols-4">
-                    <TextField label={`Vehicle ${index + 1} year`} value={vehicle.year} onChange={(value) => updateRow(setVehicles, index, { year: value.replace(/\D/g, '').slice(0, 4) })} />
-                    <TextField label="Make" value={vehicle.make} onChange={(value) => updateRow(setVehicles, index, { make: value })} />
-                    <TextField label="Model" value={vehicle.model} onChange={(value) => updateRow(setVehicles, index, { model: value })} />
-                    <TextField label="VIN" value={vehicle.vin} onChange={(value) => updateRow(setVehicles, index, { vin: value.toUpperCase().slice(0, 17) })} />
+                    <VehicleDetailsFields value={vehicle} disabled={isSaving} onChange={(details) => updateRow(setVehicles, index, {
+                      year: details.year ?? '', make: details.make ?? '', model: details.model ?? '', vin: details.vin ?? '',
+                    })} />
                     {kind === 'commercial' ? (
                       <SelectField label="Type" value={vehicle.vehicle_type} onChange={(value) => updateRow(setVehicles, index, { vehicle_type: value })} options={COMMERCIAL_VEHICLE_TYPES} />
                     ) : (
@@ -447,7 +456,7 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
 
             <Section title="Call notes">
               <label className={`${labelCls} sm:col-span-2`}>
-                Saved as a call note on the lead
+                Saved as a call note on the selected lead or account
                 <textarea rows={3} className={input} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="What did they ask for? Anything urgent?" />
               </label>
             </Section>
@@ -456,8 +465,15 @@ export default function NewLeadModal({ onClose, onCreated }: NewLeadModalProps):
 
             <div className="flex justify-end gap-2">
               <button type="button" onClick={onClose} className="rounded bg-cui-light px-4 py-2 text-sm font-semibold text-cui-muted hover:bg-cui-border">Cancel</button>
-              <button type="submit" disabled={isSaving} className="rounded bg-cui-primary px-4 py-2 text-sm font-semibold text-white hover:bg-cui-primary/90 disabled:opacity-60">
-                {isSaving ? 'Creating lead…' : `Create ${kind} lead`}
+              {onAccountCreated ? <button type="button" disabled={isSaving}
+                onClick={(event) => { if (event.currentTarget.form?.reportValidity()) void submit(false, 'account'); }}
+                className="rounded border border-cui-primary px-4 py-2 text-sm font-semibold text-cui-primary disabled:opacity-60">
+                {isSaving && destination === 'account' ? 'Saving account...' : 'Save as Account'}
+              </button> : null}
+              <button type="button" disabled={isSaving}
+                onClick={(event) => { if (event.currentTarget.form?.reportValidity()) void submit(false, 'lead'); }}
+                className="rounded bg-cui-primary px-4 py-2 text-sm font-semibold text-white hover:bg-cui-primary/90 disabled:opacity-60">
+                {isSaving && destination === 'lead' ? 'Saving lead...' : 'Save as Lead'}
               </button>
             </div>
           </div>

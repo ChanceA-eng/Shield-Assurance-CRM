@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../../lib/api-auth';
 
+import { friendlyErrorMessage } from '../../../../../lib/workspace-api';
 interface RouteContext {
   params: Promise<{ clientId: string }>;
 }
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const { clientId } = await context.params;
@@ -30,7 +31,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     .limit(200);
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data ?? [], { status: 200 });
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const { clientId } = await context.params;
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     .single();
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json(data, { status: 201 });
@@ -80,7 +81,7 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const { clientId } = await context.params;
@@ -89,7 +90,7 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   if (payload.id) {
     const { error } = await supabase.from('client_tags').delete().eq('id', payload.id).eq('client_id', clientId);
     if (error) {
-      return NextResponse.json({ message: error.message }, { status: 500 });
+      return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
     }
     return NextResponse.json({ ok: true }, { status: 200 });
   }
@@ -101,7 +102,7 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
 
   const { error } = await supabase.from('client_tags').delete().eq('client_id', clientId).eq('tag', tag);
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });

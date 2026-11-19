@@ -6,12 +6,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const db = getSupabaseServerClient();
-  if (!db) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
-  const jobs = ['website-intake', 'follow-up-routine', 'outreach', 'renewal-radar', 'internal-actions'];
+  if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
+  const jobs = ['website-intake', 'follow-up-routine', 'outreach', 'renewal-radar', 'internal-actions', 'due-reminders', 'scheduled-messages', 'custom-workflows', 'server-heartbeat'];
   const results = await Promise.all(jobs.map(async (job) => {
+    const latestQuery = db.from('automation_runs').select('*');
+    const successQuery = db.from('automation_runs').select('finished_at');
     const [latest, success] = await Promise.all([
-      db.from('automation_runs').select('*').eq('job', job).order('started_at', { ascending: false }).limit(1).maybeSingle(),
-      db.from('automation_runs').select('finished_at').eq('job', job).eq('status', 'succeeded').order('finished_at', { ascending: false }).limit(1).maybeSingle(),
+      (job === 'server-heartbeat' ? latestQuery.like('job', 'server-heartbeat%') : latestQuery.eq('job', job)).order('started_at', { ascending: false }).limit(1).maybeSingle(),
+      (job === 'server-heartbeat' ? successQuery.like('job', 'server-heartbeat%') : successQuery.eq('job', job)).eq('status', 'succeeded').order('finished_at', { ascending: false }).limit(1).maybeSingle(),
     ]);
     return { job, latest: latest.data, last_success_at: success.data?.finished_at ?? null, error: latest.error ?? success.error };
   }));

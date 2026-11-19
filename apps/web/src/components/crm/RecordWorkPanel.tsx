@@ -3,12 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Circle, Clock, Pin } from 'lucide-react';
 import { isNoteKind, type NoteKind, type RecordTarget, type WorkspaceNote, type WorkspaceTask } from '@crm/shared';
-import { arizonaDateTimeInput, arizonaInputToIso, formatArizonaDateTime } from '../../lib/arizona-time';
+import { agencyDateTimeInput, agencyInputToIso, DEFAULT_AGENCY_TIME_ZONE, formatAgencyDateTime } from '../../lib/agency-time';
 import { workspaceFetch, workspacePages } from '../../lib/workspace-fetch';
 import { useNotifications } from '../../context/NotificationContext';
 import RecordHistory from './RecordHistory';
 import TaskSnooze from './TaskSnooze';
 import MarketingProfilePanel from './MarketingProfilePanel';
+import { watchConversationUpdates } from '../../lib/conversation-updates';
+import { useAgencyTimeZone } from '../../hooks/useAgencyTimeZone';
+import { taskRecordHref } from '../../lib/task-links';
+import { useUnsavedChanges } from '../../context/WorkspaceNavigationContext';
 
 interface Props {
   target: RecordTarget;
@@ -25,12 +29,16 @@ const inputClass = 'mt-1 w-full rounded border border-cui-border px-2 py-1.5 tex
 
 export default function RecordWorkPanel({ target, name, section, compose, refreshToken = 0, onChanged, onTaskCount }: Props): JSX.Element {
   const { refresh } = useNotifications();
+  const agency = useAgencyTimeZone();
+  const timeZone = agency.timeZone ?? DEFAULT_AGENCY_TIME_ZONE;
   const [notes, setNotes] = useState<WorkspaceNote[]>([]);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [mode, setMode] = useState<'note' | 'reminder' | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const { confirmDiscard } = useUnsavedChanges(Boolean(mode) && dirty);
   const [note, setNote] = useState('');
   const [noteKind, setNoteKind] = useState<NoteKind>('call');
   const [alsoRemind, setAlsoRemind] = useState(false);
@@ -48,9 +56,9 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
   countCallback.current = onTaskCount;
   const query = `record_type=${target.type}&record_id=${target.id}`;
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (silent = false): Promise<void> => {
     const version = ++loadVersion.current;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const [loadedNotes, loadedTasks] = await Promise.all([
         workspacePages<WorkspaceNote>(`/api/interactions?${query}`, 100, 'page'),
@@ -70,6 +78,10 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
 
   useEffect(() => { void load(); }, [load, refreshToken]);
   useEffect(() => {
+    if (section !== 'tasks') return;
+    return watchConversationUpdates(() => load(true));
+  }, [load, section]);
+  useEffect(() => {
     if (compose) {
       setEditingNote(null); setEditingTask(null); setMode(compose.kind);
       saveId.current = null;
@@ -77,6 +89,7 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
   }, [compose?.kind, compose?.token]);
 
   const reset = (): void => {
+    setDirty(false);
     setMode(null); setNote(''); setAlsoRemind(false); setAction(''); setDue('');
     setDescription(''); setPriority('medium'); setEditingNote(null); setEditingTask(null);
     saveId.current = null;
@@ -91,8 +104,9 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
   const save = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();
     const reminderNeeded = mode === 'reminder' || alsoRemind;
-    const dueIso = reminderNeeded ? arizonaInputToIso(due) : null;
-    if (reminderNeeded && (!action.trim() || !dueIso)) { setError('Describe the action and choose a valid Arizona date and time.'); return; }
+    if (reminderNeeded && !agency.timeZone) { setError(agency.error ?? 'Agency time zone is still loading.'); return; }
+    const dueIso = reminderNeeded ? agencyInputToIso(due, timeZone) : null;
+    if (reminderNeeded && (!action.trim() || !dueIso)) { setError('Describe the action and choose a valid agency date and time.'); return; }
     if (mode === 'note' && !note.trim()) { setError('Enter the note before saving.'); return; }
     setBusy(true); setError(null); setNotice(null);
     try {
@@ -177,16 +191,16 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
         <div><h3 className="text-sm font-bold text-cui-text">{section === 'notes' ? 'Notes & history' : 'Tasks & reminders'}</h3>
           <p className="text-xs text-cui-muted">For {name}. Saved work stays attached when the lead is linked to a client account.</p></div>
         <div className="flex gap-2">
-          <button type="button" disabled={busy} onClick={() => { setEditingNote(null); setEditingTask(null); setMode('note'); saveId.current = null; }}
+          <button type="button" disabled={busy} onClick={() => { if (!confirmDiscard()) return; reset(); setMode('note'); }}
             className="rounded border border-cui-primary px-3 py-1.5 text-sm font-semibold text-cui-primary">Add note</button>
-          <button type="button" disabled={busy} onClick={() => { setEditingNote(null); setEditingTask(null); setMode('reminder'); saveId.current = null; }}
+          <button type="button" disabled={busy} onClick={() => { if (!confirmDiscard()) return; reset(); setMode('reminder'); }}
             className="rounded bg-cui-primary px-3 py-1.5 text-sm font-semibold text-white">Add reminder</button>
         </div>
       </div>
       {error ? <div role="alert" className="rounded border border-cui-danger/40 bg-cui-danger/10 p-3 text-sm text-cui-danger">{error} <button type="button" onClick={() => void load()} className="font-semibold underline">Refresh</button></div> : null}
       {notice ? <p role="status" className="rounded bg-cui-success/10 p-3 text-sm text-cui-text">{notice}</p> : null}
       {mode ? (
-        <form onSubmit={(event) => void save(event)} className="space-y-3 rounded border border-cui-border bg-white p-3">
+        <form onChangeCapture={() => setDirty(true)} onSubmit={(event) => void save(event)} className="space-y-3 rounded border border-cui-border bg-white p-3">
           <h4 className="font-semibold text-cui-text">{mode === 'note' ? editingNote ? 'Edit note' : 'Add note' : editingTask ? 'Edit / reschedule task' : 'Add reminder'}</h4>
           {mode === 'note' ? (
             <>
@@ -208,8 +222,9 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
                 <input required autoFocus={mode === 'reminder'} maxLength={200} value={action} onChange={(event) => setAction(event.target.value)}
                   placeholder="Call to confirm truck VINs, request roof details..." className={inputClass} />
               </label>
-              <label className="text-xs font-semibold text-cui-muted">Date and time - Arizona (UTC-7)
-                <input required type="datetime-local" value={due} onChange={(event) => setDue(event.target.value)} className={inputClass} />
+              <label className="text-xs font-semibold text-cui-muted">Date and time - {timeZone}
+                <input required type="datetime-local" aria-label={`Date and time - ${timeZone}`} value={due} disabled={!agency.timeZone}
+                  onChange={(event) => setDue(event.target.value)} className={inputClass} />
               </label>
               <label className="text-xs font-semibold text-cui-muted">Priority
                 <select value={priority} onChange={(event) => setPriority(event.target.value)} className={inputClass}>
@@ -219,12 +234,11 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
               {mode === 'reminder' ? <label className="text-xs font-semibold text-cui-muted sm:col-span-2">Details (optional)
                 <textarea value={description} onChange={(event) => setDescription(event.target.value)} className={`${inputClass} min-h-16`} />
               </label> : null}
-              <p className="text-xs text-cui-muted sm:col-span-2">Creates an in-app reminder, not an email or text to the client. No AI credits are used.</p>
             </div>
           ) : null}
           <div className="flex gap-2">
             <button type="submit" disabled={busy} className="rounded bg-cui-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">{busy ? 'Saving...' : mode === 'note' ? alsoRemind ? 'Save note & reminder' : 'Save note' : 'Save reminder'}</button>
-            <button type="button" disabled={busy} onClick={reset} className="rounded border border-cui-border px-3 py-1.5 text-sm text-cui-muted">Cancel</button>
+            <button type="button" disabled={busy} onClick={() => { if (confirmDiscard()) reset(); }} className="rounded border border-cui-border px-3 py-1.5 text-sm text-cui-muted">Cancel</button>
           </div>
         </form>
       ) : null}
@@ -238,13 +252,13 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
                 <p className="flex items-center gap-1 text-xs font-semibold text-cui-muted">{item.pinned ? <Pin className="h-3 w-3 text-cui-primary" /> : null}{noteLabels[item.note_type] ?? 'General'} note</p>
                 <div className="flex gap-2 text-xs font-semibold text-cui-primary">
                   <button type="button" disabled={busy} onClick={() => void pin(item)}>{item.pinned ? 'Unpin' : 'Pin'}</button>
-                  <button type="button" disabled={busy} onClick={() => { setEditingNote(item); setEditingTask(null); setNote(item.content); setNoteKind(item.note_type); setAlsoRemind(false); setMode('note'); }}>Edit</button>
+                  <button type="button" disabled={busy} onClick={() => { if (!confirmDiscard()) return; reset(); setEditingNote(item); setNote(item.content); setNoteKind(item.note_type); setMode('note'); }}>Edit</button>
                 </div>
               </div>
               <p className="mt-2 whitespace-pre-wrap break-words text-sm text-cui-text">{item.content}</p>
-              <p className="mt-2 text-[11px] text-cui-muted">{formatArizonaDateTime(item.created_at)} AZ | {item.author_name || 'Author not recorded (legacy)'}</p>
-              {item.updated_at !== item.created_at ? <p className="text-[11px] text-cui-muted">Edited {formatArizonaDateTime(item.updated_at)} AZ{item.updated_by ? ` by ${item.updated_by}` : ''}. Earlier text is retained in the activity history.</p> : null}
-              {tasks.filter((task) => task.note_id === item.id).map((task) => <p key={task.id} className="mt-1 text-xs text-cui-primary">Reminder: {task.subject} | {task.status} | {formatArizonaDateTime(task.due_date)} AZ</p>)}
+              <p className="mt-2 text-[11px] text-cui-muted">{formatAgencyDateTime(item.created_at, timeZone)} | {item.author_name || 'Author not recorded (legacy)'}</p>
+              {item.updated_at !== item.created_at ? <p className="text-[11px] text-cui-muted">Edited {formatAgencyDateTime(item.updated_at, timeZone)}{item.updated_by ? ` by ${item.updated_by}` : ''}. Earlier text is retained in the activity history.</p> : null}
+              {tasks.filter((task) => task.note_id === item.id).map((task) => <p key={task.id} className="mt-1 text-xs text-cui-primary">Reminder: {task.subject} | {task.status} | {formatAgencyDateTime(task.due_date, timeZone)}</p>)}
               <RecordHistory target={target} itemId={item.id} table="interactions" />
             </article>
           ))}
@@ -266,18 +280,22 @@ export default function RecordWorkPanel({ target, name, section, compose, refres
                   {view === 'open' ? <Circle className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4 text-cui-success" />}
                 </button>
                 <div className="min-w-0 flex-1">
-                  <p className={`break-words text-sm font-semibold text-cui-text ${view === 'completed' ? 'line-through' : ''}`}>{task.subject}</p>
-                  <p className="mt-1 flex flex-wrap items-center gap-1 text-xs text-cui-muted">{task.kind === 'reminder' ? <Clock className="h-3 w-3" /> : null}{task.kind === 'reminder' ? 'Reminder' : 'Task'} | {formatArizonaDateTime(task.due_date)} AZ | {task.priority} priority</p>
+                  {task.action_href && taskRecordHref(task) ? <a href={taskRecordHref(task) ?? undefined}
+                    className={`break-words text-sm font-semibold text-cui-primary hover:underline ${view === 'completed' ? 'line-through' : ''}`}>{task.subject}</a>
+                    : <p className={`break-words text-sm font-semibold text-cui-text ${view === 'completed' ? 'line-through' : ''}`}>{task.subject}</p>}
+                  <p className="mt-1 flex flex-wrap items-center gap-1 text-xs text-cui-muted">{task.kind === 'reminder' ? <Clock className="h-3 w-3" /> : null}{task.kind === 'reminder' ? 'Reminder' : 'Task'} | {formatAgencyDateTime(task.due_date, timeZone)} | {task.priority} priority</p>
                   {task.description ? <p className="mt-1 whitespace-pre-wrap text-sm text-cui-text">{task.description}</p> : null}
-                  {view === 'completed' ? <p className="mt-1 text-xs text-cui-muted">{task.completed_at ? `Completed ${formatArizonaDateTime(task.completed_at)} AZ` : 'Completion time not recorded (legacy)'}</p> : null}
+                  {view === 'completed' ? <p className="mt-1 text-xs text-cui-muted">{task.completed_at ? `Completed ${formatAgencyDateTime(task.completed_at, timeZone)}` : 'Completion time not recorded (legacy)'}</p> : null}
                 </div>
                 <button type="button" disabled={busy} onClick={() => {
                   if (view === 'completed') { void patchTask(task, 'open'); return; }
-                  setEditingTask(task); setEditingNote(null); setAction(task.subject); setDue(task.due_date ? arizonaDateTimeInput(task.due_date) : '');
+                  if (!confirmDiscard()) return;
+                  reset();
+                  setEditingTask(task); setEditingNote(null); setAction(task.subject); setDue(task.due_date ? agencyDateTimeInput(task.due_date, timeZone) : '');
                   setPriority(task.priority); setDescription(task.description ?? ''); setMode('reminder'); setAlsoRemind(false);
                 }} className="shrink-0 text-xs font-semibold text-cui-primary disabled:opacity-50">{view === 'completed' ? 'Reopen' : 'Edit / reschedule'}</button>
               </div>
-              {view === 'open' ? <div className="mt-3 flex flex-wrap justify-end gap-2"><TaskSnooze subject={task.subject} disabled={busy} onSave={(iso) => snoozeTask(task, iso)} /></div> : null}
+              {view === 'open' ? <div className="mt-3 flex flex-wrap justify-end gap-2"><TaskSnooze subject={task.subject} timeZone={agency.timeZone ?? undefined} disabled={busy} onSave={(iso) => snoozeTask(task, iso)} /></div> : null}
             </article>
           ))}
         </>

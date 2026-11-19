@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../../lib/api-auth';
 
+import { friendlyErrorMessage } from '../../../../../lib/workspace-api';
 interface RouteContext {
   params: Promise<{ id: string }>;
 }
@@ -26,7 +27,7 @@ export async function GET(
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const { id } = await context.params;
@@ -42,7 +43,7 @@ export async function GET(
     .maybeSingle<LeadRow>();
 
   if (leadResult.error) {
-    return NextResponse.json({ message: leadResult.error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(leadResult.error) }, { status: 500 });
   }
 
   const lead = leadResult.data;
@@ -60,7 +61,7 @@ export async function GET(
     .order('sent_at', { ascending: false }).order('id', { ascending: false }).range(offset, offset + 99);
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   return NextResponse.json({ clientId, items: data ?? [], total: count ?? 0, nextOffset: offset + (data?.length ?? 0) < (count ?? 0) ? offset + (data?.length ?? 0) : null }, { status: 200 });

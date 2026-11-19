@@ -49,7 +49,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ course });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to update course.' },
+      { message: error instanceof Error ? error.message : 'Course could not be updated. Please try again.' },
       { status: 500 },
     );
   }

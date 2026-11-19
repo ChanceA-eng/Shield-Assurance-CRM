@@ -42,14 +42,12 @@ export default function ModuleElevenCompletePage(): JSX.Element {
         <section className="rounded-xl border border-slate-200 bg-white p-8 text-left">
           <h2 className="text-2xl font-bold text-slate-900">Next Step</h2>
           <p className="mt-3 leading-relaxed text-slate-700">
-            Continue to Module 12 to deepen advanced general liability strategy, including completed operations,
-            additional insured complexity, subcontractor liability, and contractor-specific endorsement architecture.
+            This static module sequence ends here. Return to the Learning Center to choose an available course and resume your saved progress.
           </p>
         </section>
 
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-          <a href="/learning/module/12" className="rounded-lg bg-slate-950 px-8 py-3 text-sm font-semibold text-white hover:bg-slate-800">Go to Module 12</a>
-          <a href="/learning/course/contractor-insurance-fundamentals/overview" className="rounded-lg border border-slate-300 px-8 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Back to Course Overview</a>
+          <a href="/learning" className="rounded-lg bg-slate-950 px-8 py-3 text-sm font-semibold text-white hover:bg-slate-800">Back to Learning Center</a>
         </div>
       </div>
     </SectionLayout>

@@ -3,11 +3,12 @@ import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../lib/api-auth';
 import { operationErrorStatus } from '../../../../lib/policy-identity';
 
+import { friendlyErrorMessage } from '../../../../lib/workspace-api';
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const authError = await requireApiSession(request);
   if (authError) return authError;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   const payload = await request.json().catch(() => null) as {
     survivor_id?: unknown; merge_ids?: unknown; fields?: unknown;
   } | null;
@@ -20,6 +21,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     p_survivor_id: payload.survivor_id, p_merge_ids: [...new Set(payload.merge_ids)],
     p_fields: payload.fields ?? {},
   });
-  if (error) return NextResponse.json({ message: error.message }, { status: operationErrorStatus(error.code) });
+  if (error) return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: operationErrorStatus(error.code) });
   return NextResponse.json(data);
 }

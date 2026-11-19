@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomUUID } from 'node:crypto';
+import { hasUnresolvedSalesFields } from '@crm/shared';
+import { messageDocument, signatureFormatting } from '../../../lib/email-formatting';
+import { templateSnapshot } from '../../../lib/sales-templates';
+import { getOutreachSender } from '../../../lib/marketing-profile';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { apiActorName, getApiSession } from '../../../lib/api-auth';
 import { sendOutboundEmail } from '../../../lib/email-adapter';
-import { appendAgencySignature } from '../../../lib/agency-signature';
+import { ResendSendError } from '@crm/shared/resend';
+import { appendAgencySignature, appendPersonalSignature } from '../../../lib/agency-signature';
 import { handleInboundReply } from '../../../lib/outreach-engine';
+import { agencyEnabled } from '../../../lib/agency-membership';
+import { sendAgentEmail } from '../../../lib/agent-email';
+import { workspaceApiError, friendlyErrorMessage } from '../../../lib/workspace-api';
 import {
   conversationKeyForRow,
   formatConversationKey,
@@ -52,7 +61,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return json({ message: 'Supabase is not configured.' }, 503);
+  if (!supabase) return json({ message: 'The CRM database is not connected. Contact your administrator.' }, 503);
 
   const params = request.nextUrl.searchParams;
   const rawKey = params.get('conversation_key');
@@ -82,11 +91,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const query = supabase.from('communication_log').select('*').order('sent_at', { ascending: false }).order('id', { ascending: false }).range(offset, offset + limit - 1);
   const { data, error } = await query;
-  if (error) return json({ message: error.message }, 500);
+  if (error) return json({ message: friendlyErrorMessage(error) }, 500);
   return json(data ?? [], 200);
 }
 
 interface PostPayload {
+  sales_template?: unknown;
+  request_id?: string;
+  reply_to_message_id?: string;
   client_id?: string | null;
   lead_id?: string | null;
   conversation_key?: string | null;
@@ -94,7 +106,9 @@ interface PostPayload {
   direction?: string;
   subject?: string | null;
   body?: string;
+  body_document?: unknown;
   automation_type?: string;
+  email_provider?: 'gmail' | 'resend';
   to?: string | null;
   attachments?: Array<{ filename?: string; content?: string; type?: string }>;
   profile_file_ids?: string[];
@@ -116,7 +130,7 @@ async function profileFileAttachments(
   if (ids.length === 0) return { ok: true, links: [], attachments: [] };
   if (!clientId) return { ok: false, status: 400, message: 'Account documents can only be attached to messages on that account.' };
   const { data, error } = await supabase.from('client_files').select(CLIENT_FILE_COLUMNS).eq('client_id', clientId).in('id', ids);
-  if (error) return { ok: false, status: 500, message: error.message };
+  if (error) return { ok: false, status: 500, message: friendlyErrorMessage(error) };
   const records = (data ?? []) as ClientFileRecord[];
   if (records.length !== ids.length) return { ok: false, status: 400, message: 'One or more selected documents are not on this account.' };
 
@@ -149,7 +163,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return json({ message: 'Supabase is not configured.' }, 503);
+  if (!supabase) return json({ message: 'The CRM database is not connected. Contact your administrator.' }, 503);
 
   let payload: PostPayload;
   try {
@@ -161,11 +175,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const channel = payload.channel;
   const body = typeof payload.body === 'string' ? payload.body.trim() : '';
   const automationType = payload.automation_type?.trim() || 'manual';
+  if (payload.email_provider !== undefined && payload.email_provider !== 'gmail' && payload.email_provider !== 'resend') {
+    return json({ message: 'Choose a supported email sender.' }, 400);
+  }
+  if (payload.email_provider === 'gmail' && automationType.toLowerCase() !== 'manual') {
+    return json({ message: 'Connected Gmail is available only for human-initiated one-to-one messages.' }, 400);
+  }
+  const useGmail = payload.email_provider === 'gmail'
+    || (payload.email_provider === undefined && agencyEnabled());
   const direction = payload.direction ?? 'outbound';
   if (channel !== 'email' && channel !== 'sms') return json({ message: 'channel must be email or sms.' }, 400);
   if (direction !== 'outbound' && direction !== 'inbound') return json({ message: 'direction must be outbound or inbound.' }, 400);
   if (!body) return json({ message: 'Message body is required.' }, 400);
+  let bodyDocument;
+  try { bodyDocument = messageDocument(payload.body_document, body); }
+  catch (error) { return workspaceApiError(error, 'communication/formatting'); }
   const subject = payload.subject?.trim() || (channel === 'email' ? 'Message from Shield Assurance' : 'Text message');
+  if (direction === 'outbound' && (hasUnresolvedSalesFields(body) || hasUnresolvedSalesFields(subject))) {
+    return json({ message: 'Complete the template details before sending.' }, 400);
+  }
 
   if (direction === 'inbound') {
     // Manually recorded inbound message (e.g. a reply received outside the CRM). Nothing is sent.
@@ -187,7 +215,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }])
       .select('*')
       .single();
-    if (error) return json({ message: error.message }, 500);
+    if (error) return json({ message: friendlyErrorMessage(error) }, 500);
     if (clientId) {
       const touched = await supabase.from('clients').update({ last_activity_at: new Date().toISOString() }).eq('id', clientId);
       if (touched.error) console.error('[communication-log] last_activity_at update failed', touched.error.message);
@@ -228,12 +256,39 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const linksBlock = profileFiles.links.length > 0
     ? `\n\nDocument links:\n${profileFiles.links.map((item) => `- ${item.name}: ${item.url}`).join('\n')}`
     : '';
-  const messageBody = appendAgencySignature(`${body}${linksBlock}`, automationType.toLowerCase() === 'manual' ? 'personal' : 'system');
+  let provenance: Awaited<ReturnType<typeof templateSnapshot>>;
+  try { provenance = await templateSnapshot(supabase, payload.sales_template); }
+  catch (error) { return workspaceApiError(error, 'communication/template'); }
+  let templateSignature: string | undefined;
+  if (provenance && !useGmail) {
+    try { templateSignature = (await getOutreachSender(supabase)).signature; }
+    catch (error) { return workspaceApiError(error, 'communication/sender'); }
+  }
+  const messageBody = useGmail ? `${body}${linksBlock}` : automationType.toLowerCase() === 'manual'
+    ? appendPersonalSignature(`${body}${linksBlock}`, templateSignature ?? session.user.user_metadata.signature)
+    : appendAgencySignature(`${body}${linksBlock}`, 'system');
 
+  if (useGmail) {
+    try {
+      const result = await sendAgentEmail(supabase, session.user.id, { to: recipient.to, subject, body: messageBody, attachments, bodyDocument }, {
+        attemptId: payload.request_id ?? '', clientId: recipient.clientId, leadId: recipient.leadId, replyId: payload.reply_to_message_id,
+        ...(provenance ? { salesTemplate: provenance } : {}),
+      });
+      return json({ id: result.id, delivery: result.status, provider: result.provider }, 201);
+    } catch (error) { return workspaceApiError(error, 'communication/agent-send'); }
+  }
+
+  const requestId = payload.request_id ?? randomUUID();
   let provider: string;
   try {
-    provider = await sendOutboundEmail({ to: recipient.to, subject, body: messageBody, attachments });
+    provider = await sendOutboundEmail({ to: recipient.to, subject, body: messageBody, attachments,
+      bodyDocument, ...(!templateSignature && automationType.toLowerCase() === 'manual' ? await signatureFormatting(supabase, session.user.id) : {}),
+      ...(provenance?.email_design ? { emailDesign: provenance.email_design } : {}),
+      requestId, leadId: recipient.leadId ?? undefined, clientId: recipient.clientId ?? undefined });
   } catch (error) {
+    if (error instanceof ResendSendError) {
+      return json({ message: error.message, code: error.code }, error.status);
+    }
     const detail = error instanceof Error ? error.message : 'Unknown email delivery failure';
     return json({ message: `Email was not sent: ${detail}`, code: 'provider_rejected' }, 502);
   }
@@ -254,9 +309,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         to: recipient.to,
         ...(recipient.leadId ? { lead_id: recipient.leadId } : {}),
         delivery_status: 'accepted_by_provider',
+        request_id: requestId,
         provider,
         sent_by: apiActorName(session.user),
         attachment_count: attachments.length,
+        ...(provenance ? { sales_template: provenance } : {}),
+        ...(bodyDocument ? { body_document: bodyDocument } : {}),
       },
     }])
     .select('*')
@@ -285,7 +343,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return json({ message: 'Supabase is not configured.' }, 503);
+  if (!supabase) return json({ message: 'The CRM database is not connected. Contact your administrator.' }, 503);
 
   let payload: { read_ids?: unknown };
   try {
@@ -306,7 +364,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     .eq('direction', 'inbound')
     .is('read_at', null)
     .select('id');
-  if (error) return json({ message: error.message }, 500);
+  if (error) return json({ message: friendlyErrorMessage(error) }, 500);
 
   const updated = ((data ?? []) as Array<{ id: string }>).map((row) => row.id);
   return json({ updated: updated.length, ids: updated }, 200);

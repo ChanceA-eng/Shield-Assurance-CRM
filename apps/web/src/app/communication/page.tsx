@@ -1,13 +1,29 @@
 ﻿'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEmailDocument } from '../../hooks/useEmailDocument';
 import Link from 'next/link';
 import type { Route } from 'next';
 import { AlertTriangle, ExternalLink, Inbox as InboxIcon, MessageSquareOff, RefreshCw, Search, Send } from 'lucide-react';
 import SectionLayout from '../../components/crm/SectionLayout';
 import { MESSAGES_READ_EVENT } from '../../context/NotificationContext';
 import { unreadInboundIds } from '../../lib/conversations';
+import ConversationAppointment from '../../components/crm/ConversationAppointment';
+import ConversationSequences from '../../components/crm/ConversationSequences';
+import ConversationReplyControl from '../../components/crm/ConversationReplyControl';
+import AgentSenderBadge from '../../components/crm/AgentSenderBadge';
 import { markMessagesRead, messageStatusLabel, readErrorMessage } from '../../lib/message-read';
+import EmailOpenStatus from '../../components/crm/EmailOpenStatus';
+import { useEmailReceipts } from '../../lib/use-email-receipts';
+import { receiptForMessage } from '../../lib/message-receipts';
+import { watchConversationUpdates } from '../../lib/conversation-updates';
+import ScheduleSend from '../../components/crm/ScheduleSend';
+import SalesTemplatePicker, { type SelectedSalesTemplate } from '../../components/crm/SalesTemplatePicker';
+import MessageComposer, { composerDraftClass, composerSendClass } from '../../components/crm/MessageComposer';
+import ConversationMessage from '../../components/crm/ConversationMessage';
+import ConversationHistory from '../../components/crm/ConversationHistory';
+import { workspaceFetch } from '../../lib/workspace-fetch';
+import { useUnsavedChanges } from '../../context/WorkspaceNavigationContext';
 
 type ConversationKind = 'client' | 'lead' | 'unmatched';
 
@@ -116,7 +132,19 @@ export default function CommunicationCenterPage(): JSX.Element {
 
   const [subjectDraft, setSubjectDraft] = useState('');
   const [bodyDraft, setBodyDraft] = useState('');
+  const { bodyDocument, setBodyDocument } = useEmailDocument(bodyDraft);
+  const { confirmDiscard } = useUnsavedChanges(Boolean(subjectDraft || bodyDraft));
+  const [emailProvider, setEmailProvider] = useState<'default' | 'gmail'>('default');
+  const [replyId, setReplyId] = useState('');
+  useEffect(() => { setReplyId(''); }, [selectedKey, emailProvider]);
   const [isSending, setIsSending] = useState(false);
+  const [isDrafting, setIsDrafting] = useState(false), [includeDossier, setIncludeDossier] = useState(false);
+  const [draftSources, setDraftSources] = useState<string[]>([]);
+  useEffect(() => { setIncludeDossier(false); setDraftSources([]); }, [selectedKey]);
+  const sendRequest = useRef<string | null>(null);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [salesTemplate, setSalesTemplate] = useState<SelectedSalesTemplate | null>(null);
+  useEffect(() => { setSalesTemplate(null); }, [selectedKey]);
 
   const loadConversations = useCallback(async (): Promise<void> => {
     const requestId = ++listRequest.current;
@@ -156,7 +184,7 @@ export default function CommunicationCenterPage(): JSX.Element {
       const next = res.headers.get('X-Next-Offset');
       if (!options.silent) setThreadNext(next ? Number(next) : null);
       setMessages((current) => [...new Map([...(options.offset || options.silent ? current : []), ...rows].map((row) => [row.id, row])).values()]
-        .sort((a, b) => (a.sent_at ?? '').localeCompare(b.sent_at ?? '')));
+        .sort((a, b) => new Date(a.sent_at ?? 0).getTime() - new Date(b.sent_at ?? 0).getTime() || a.id.localeCompare(b.id)));
       setThreadKey(key);
       setThreadError(null);
 
@@ -183,6 +211,10 @@ export default function CommunicationCenterPage(): JSX.Element {
   useEffect(() => { void loadConversations(); }, [loadConversations]);
 
   const openConversation = useCallback((key: string): void => {
+    if (key !== selectedKeyRef.current) {
+      if (!confirmDiscard()) return;
+      setSubjectDraft(''); setBodyDraft(''); setSalesTemplate(null);
+    }
     selectedKeyRef.current = key;
     setSelectedKey(key);
     setThreadError(null);
@@ -194,7 +226,7 @@ export default function CommunicationCenterPage(): JSX.Element {
     const url = new URL(window.location.href);
     url.searchParams.set('conversation', key);
     window.history.replaceState(null, '', url.toString());
-  }, [loadThread, threadKey]);
+  }, [loadThread, threadKey, confirmDiscard]);
 
   useEffect(() => {
     void loadConversations();
@@ -208,17 +240,43 @@ export default function CommunicationCenterPage(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      void loadConversations();
-      if (selectedKeyRef.current) void loadThread(selectedKeyRef.current, { silent: true });
-    }, 30000);
-    return () => clearInterval(timer);
+    return watchConversationUpdates(async () => {
+      await Promise.all([
+        loadConversations(),
+        selectedKeyRef.current ? loadThread(selectedKeyRef.current, { silent: true }) : Promise.resolve(),
+      ]);
+    });
   }, [loadConversations, loadThread]);
 
   const selected = useMemo(
     () => (selectedKey ? conversations.find((conversation) => conversation.key === selectedKey) ?? placeholderConversation(selectedKey) : null),
     [conversations, selectedKey],
   );
+  const emailReceipts = useEmailReceipts(selected?.email, Boolean(selected));
+  const composerBusy = isSending || scheduleBusy || isDrafting;
+
+  const draftMessage = async (): Promise<void> => {
+    if (!selected || (!selected.client_id && !selected.lead_id)) return;
+    const key = selected.key;
+    setIsDrafting(true); setSendError(null);
+    try {
+      const draft = await workspaceFetch<{ subject?: string; body?: string; text?: string; cited_signals?: string[] }>(
+        selected.client_id ? `/api/ai/draft-message?clientId=${encodeURIComponent(selected.client_id)}`
+          : `/api/leads/${encodeURIComponent(selected.lead_id ?? '')}/draft-outreach`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selected.client_id
+          ? { prompt: bodyDraft, subject: subjectDraft, channel: 'email', include_dossier: includeDossier }
+          : { mode: 'draft', instruction: bodyDraft.trim() || undefined, include_dossier: includeDossier }) });
+      const body = selected.client_id ? draft.text : draft.body;
+      if (typeof body !== 'string' || !body.trim()) throw new Error('No usable draft was returned. Your current message is unchanged.');
+      if (selectedKeyRef.current !== key) return;
+      setBodyDraft(body);
+      if (typeof draft.subject === 'string') setSubjectDraft(draft.subject);
+      setDraftSources(draft.cited_signals?.filter((source) => typeof source === 'string') ?? []);
+      setSalesTemplate(null); sendRequest.current = null;
+    } catch (failure) {
+      if (selectedKeyRef.current === key) setSendError(failure instanceof Error ? failure.message : 'Drafting failed. Your message is unchanged.');
+    } finally { setIsDrafting(false); }
+  };
 
   const sendMessage = async (): Promise<void> => {
     if (!selected || !bodyDraft.trim()) return;
@@ -234,12 +292,17 @@ export default function CommunicationCenterPage(): JSX.Element {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          request_id: sendRequest.current ?? (sendRequest.current = crypto.randomUUID()),
           conversation_key: selected.key,
           channel: 'email',
           direction: 'outbound',
           subject: subjectDraft.trim() || 'Message from Shield Assurance',
           body: bodyDraft.trim(),
+          ...(bodyDocument ? { body_document: bodyDocument } : {}),
           automation_type: 'manual',
+          ...(emailProvider === 'gmail' ? { email_provider: 'gmail' as const } : {}),
+          sales_template: salesTemplate,
+          ...(replyId ? { reply_to_message_id: replyId } : {}),
         }),
       });
       if (!res.ok) {
@@ -247,8 +310,11 @@ export default function CommunicationCenterPage(): JSX.Element {
         return;
       }
       setBodyDraft('');
+      setReplyId('');
+      setSalesTemplate(null);
+      sendRequest.current = null;
       setSubjectDraft('');
-      setNotice('Email accepted by the provider for delivery.');
+      setNotice(null);
       await loadThread(selected.key, { silent: true });
       await loadConversations();
     } catch {
@@ -267,7 +333,7 @@ export default function CommunicationCenterPage(): JSX.Element {
 
   return (
     <SectionLayout title="Communication Center">
-      <div className="flex h-[calc(100vh-10rem)] min-h-[480px] overflow-hidden rounded border border-cui-border/60 bg-white shadow-card">
+      <div className="flex h-[calc(100dvh-10rem)] min-h-0 overflow-hidden rounded border border-cui-border/60 bg-white shadow-card">
         <div className={`flex w-full shrink-0 flex-col border-r border-cui-border/60 md:w-80 ${selected ? 'hidden md:flex' : ''}`}>
           <div className="border-b border-cui-border/60 bg-cui-light p-2.5">
             <div className="relative">
@@ -307,6 +373,7 @@ export default function CommunicationCenterPage(): JSX.Element {
                 key={conversation.key}
                 type="button"
                 data-conversation-key={conversation.key}
+                disabled={isSending || scheduleBusy}
                 onClick={() => openConversation(conversation.key)}
                 className={`block w-full border-b border-cui-light px-3 py-2.5 text-left transition hover:bg-cui-light/60 ${
                   selectedKey === conversation.key ? 'bg-cui-primary/5' : ''
@@ -350,14 +417,14 @@ export default function CommunicationCenterPage(): JSX.Element {
             </div>
           ) : (
             <>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cui-border/60 bg-cui-light px-4 py-2.5">
+              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-700 bg-slate-900 px-3 py-2 text-white">
                 <button className="text-xs text-cui-primary md:hidden" onClick={() => { selectedKeyRef.current = null; threadRequest.current++; setSelectedKey(null); }}>Back to inbox</button>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="truncate text-sm font-bold text-cui-text">{selected.name}</p>
+                    <p className="truncate text-sm font-bold">{selected.name}</p>
                     <span className={`rounded px-1.5 py-px text-[10px] font-semibold ${KIND_BADGE[selected.kind].className}`}>{KIND_BADGE[selected.kind].label}</span>
                   </div>
-                  <p className="truncate text-xs text-cui-muted">{[selected.email, selected.phone].filter(Boolean).join(' · ') || 'No contact details on file'}</p>
+                  <p className="truncate text-xs text-slate-300">{[selected.email, selected.phone].filter(Boolean).join(' · ') || 'No contact details on file'}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   {selected.kind === 'client' && selected.client_id ? (
@@ -388,7 +455,8 @@ export default function CommunicationCenterPage(): JSX.Element {
                 <div role="alert" className="mx-4 mt-2 rounded border border-cui-warning/50 bg-cui-warning/15 px-3 py-1.5 text-sm text-[#7a5a00]">{readError}</div>
               ) : null}
 
-              <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4">
+              <ConversationHistory key={selected.key} revision={messages.map((message) => `${message.id}:${message.sent_at}:${message.body}`).join('|')}>
+                {emailReceipts.error ? <p role="alert" className="text-sm text-cui-danger">{emailReceipts.error}</p> : null}
                 {threadNext !== null ? <button disabled={isLoadingThread} className="text-sm font-semibold text-cui-primary" onClick={() => void loadThread(selected.key, { offset: threadNext })}>Load older messages</button> : null}
                 {isLoadingThread && !showThread ? <p className="text-sm text-cui-muted">Loading conversation…</p> : null}
                 {showThread && messages.length === 0 ? (
@@ -397,55 +465,72 @@ export default function CommunicationCenterPage(): JSX.Element {
                 {showThread ? messages.map((message) => {
                   const outbound = (message.direction ?? 'outbound') === 'outbound';
                   return (
-                    <div
-                      key={message.id}
-                      className={`max-w-[80%] rounded border p-2.5 text-sm ${
-                        outbound ? 'ml-auto border-cui-primary/30 bg-cui-primary/5' : 'border-cui-border/60 bg-cui-light/60'
-                      }`}
-                    >
-                      <div className="mb-1 flex items-center justify-between gap-3 text-[11px] text-cui-muted">
+                    <ConversationMessage key={message.id} messageId={message.id} outbound={outbound} channel={message.channel} subject={message.subject} body={message.body}
+                      header={<>
                         <span className="font-bold uppercase">{message.channel ?? 'email'} · {messageStatusLabel(message)}</span>
                         <span>{prettyDateTime(message.sent_at)}</span>
-                      </div>
-                      {message.subject ? <p className="font-semibold text-cui-text">{message.subject}</p> : null}
-                      <p className="whitespace-pre-wrap text-cui-text">{message.body || '--'}</p>
-                    </div>
+                      </>}>
+                      {outbound && message.channel === 'email' ? <div className="mt-2"><EmailOpenStatus receipt={receiptForMessage(message.metadata, emailReceipts.receipts)}
+                        status={typeof message.metadata?.delivery_status === 'string' ? message.metadata.delivery_status : undefined} /></div> : null}
+                    </ConversationMessage>
                   );
                 }) : null}
-              </div>
+              </ConversationHistory>
 
-              <div className="space-y-2 border-t border-cui-border/60 p-3">
+              <div className="shrink-0 space-y-2 border-t border-cui-border/60 bg-white p-3">
                 {sendError ? <div role="alert" className="rounded border border-cui-danger/40 bg-cui-danger/10 px-3 py-1.5 text-sm text-cui-danger">{sendError}</div> : null}
                 {notice ? <div role="status" className="rounded border border-cui-success/40 bg-cui-success/10 px-3 py-1.5 text-sm text-[#2a7a48]">{notice}</div> : null}
                 {selected.can_email ? (
-                  <>
-                    <input
-                      type="text"
-                      value={subjectDraft}
-                      onChange={(event) => setSubjectDraft(event.target.value)}
-                      placeholder="Subject"
-                      className="w-full rounded border border-cui-border px-2.5 py-1.5 text-sm focus:border-cui-primary focus:outline-none"
-                    />
-                    <div className="flex items-end gap-2">
-                      <textarea
-                        value={bodyDraft}
-                        onChange={(event) => setBodyDraft(event.target.value)}
-                        rows={3}
-                        placeholder={`Email ${selected.name}…`}
-                        className="min-h-[4.5rem] flex-1 rounded border border-cui-border px-2.5 py-1.5 text-sm focus:border-cui-primary focus:outline-none"
-                      />
+                  <MessageComposer subject={subjectDraft} body={bodyDraft} onSubjectChange={setSubjectDraft} onBodyChange={setBodyDraft}
+                    bodyDocument={bodyDocument} onDocumentChange={setBodyDocument}
+                    emailDesign={salesTemplate?.email_design}
+                    disabled={composerBusy} bodyPlaceholder={`Email ${selected.name}…`} sender={<AgentSenderBadge />}
+                    draftFeedback={sendError ? <p role="alert" className="text-xs text-cui-danger">{sendError}</p> : null}
+                    emailProvider={emailProvider} onEmailProviderChange={setEmailProvider}
+                    reply={emailProvider === 'gmail' && (selected.client_id || selected.lead_id) ? <ConversationReplyControl key={`reply:${selected.key}`}
+                      target={selected.client_id ? { type: 'client', id: selected.client_id } : { type: 'lead', id: selected.lead_id ?? '' }}
+                      value={replyId} disabled={composerBusy} hasDraft={Boolean(bodyDraft.trim())}
+                      onBusy={setScheduleBusy}
+                      onChange={(id, subject) => { setReplyId(id); if (subject) setSubjectDraft(subject); sendRequest.current = null; }}
+                      onDraft={(body) => { setBodyDraft(body); setSalesTemplate(null); sendRequest.current = null; }} /> : null}
+                    tools={selected.client_id || selected.lead_id ? <ConversationAppointment key={`appointment:${selected.key}`}
+                      target={selected.client_id ? { type: 'client', id: selected.client_id } : { type: 'lead', id: selected.lead_id ?? '' }}
+                      name={selected.name} disabled={composerBusy} /> : null}
+                    templates={<SalesTemplatePicker key={`sales:${selected.key}`} conversation={selected.key} disabled={composerBusy}
+                      appliedTemplate={salesTemplate} onRemove={() => {
+                        setSubjectDraft(''); setBodyDraft(''); setSalesTemplate(null); sendRequest.current = null;
+                      }}
+                      hasDraft={Boolean(bodyDraft.trim())} onBusy={setScheduleBusy} onApply={(draft) => {
+                        setSubjectDraft(draft.subject); setBodyDraft(draft.body); setSalesTemplate(draft.template); sendRequest.current = null;
+                      }} />}
+                    draftAction={<>
+                      {selected.client_id || selected.lead_id ? <button type="button" disabled={composerBusy || Boolean(selected.client_id && !bodyDraft.trim())}
+                        className={composerDraftClass} onClick={() => void draftMessage()}>{isDrafting ? 'Drafting...' : 'Draft with AI'}</button> : null}
+                    </>}
+                    actions={<>
                       <button
                         type="button"
                         onClick={() => void sendMessage()}
-                        disabled={isSending || !bodyDraft.trim()}
-                        className="inline-flex items-center gap-1.5 rounded bg-cui-primary px-3 py-2 text-sm font-semibold text-white transition hover:bg-cui-primary/90 disabled:opacity-60"
+                        disabled={composerBusy || !bodyDraft.trim()}
+                        className={composerSendClass}
                       >
                         <Send className="h-3.5 w-3.5" />
                         {isSending ? 'Sending…' : 'Send email'}
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-cui-muted">Replies go out by email. Text messages cannot be sent from the CRM yet.</p>
-                  </>
+                      </button></>}
+                    schedule={<ScheduleSend key={`schedule:${selected.key}`} conversationKey={selected.key} subject={subjectDraft} body={bodyDraft} bodyDocument={bodyDocument}
+                        replySelected={Boolean(replyId)} template={salesTemplate}
+                        emailProvider={emailProvider} disabled={isSending || isDrafting} onBusy={setScheduleBusy}
+                        onScheduled={() => { setBodyDraft(''); setSubjectDraft(''); setSalesTemplate(null); sendRequest.current = null; }} />}
+                    footer={<>
+                      {selected.client_id ? <ConversationSequences key={`sequences:${selected.key}`} target={{ type: 'client', id: selected.client_id }} />
+                        : selected.lead_id ? <ConversationSequences key={`sequences:${selected.key}`} target={{ type: 'lead', id: selected.lead_id }} /> : null}
+                    </>}>
+                    {selected.client_id || selected.lead_id ? <label className="flex gap-2 text-xs">
+                      <input type="checkbox" checked={includeDossier} disabled={composerBusy} onChange={(event) => setIncludeDossier(event.target.checked)} />
+                      Include current confirmed dossier findings in this AI draft only
+                    </label> : null}
+                    {draftSources.length ? <p className="text-xs text-cui-muted">Draft grounding: {draftSources.join('; ')}</p> : null}
+                    </MessageComposer>
                 ) : (
                   <div className="flex items-center gap-2 rounded border border-cui-border/60 bg-cui-light px-3 py-2 text-sm text-cui-muted">
                     <MessageSquareOff className="h-4 w-4 shrink-0" />

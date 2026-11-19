@@ -1,5 +1,5 @@
 import { createServerClient } from '@supabase/ssr';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 
 function getSupabaseAuthEnv(): { url: string; anonKey: string } {
@@ -13,9 +13,13 @@ function getSupabaseAuthEnv(): { url: string; anonKey: string } {
   return { url, anonKey };
 }
 
-export async function createSupabaseServerAuthClient(): Promise<SupabaseClient> {
-  const cookieStore = await cookies();
+export async function createSupabaseServerAuthClient(token?: string): Promise<SupabaseClient> {
   const { url, anonKey } = getSupabaseAuthEnv();
+  if (token) return createClient(url, anonKey, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const cookieStore = await cookies();
 
   return createServerClient(url, anonKey, {
     cookies: {

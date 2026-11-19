@@ -10,7 +10,7 @@ import { PATCH } from '../app/api/outreach/outbox/[id]/route';
 import { activityFilters, DeliveryState } from '../app/outreach/DeliveryState';
 
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
-vi.mock('./api-auth', () => ({ requireApiSession: vi.fn().mockResolvedValue(null) }));
+vi.mock('./api-auth', () => ({ requireApiSession: vi.fn().mockResolvedValue(null), getApiSession: vi.fn().mockResolvedValue({ user: { id: '10000000-0000-4000-8000-000000000001' } }) }));
 vi.mock('./email-adapter', () => ({ sendOutboundEmail: vi.fn() }));
 const id = '168413e9-a6a4-4dff-a8bf-8f8df83dace6';
 interface Call { url: URL; method: string; body: Record<string, unknown> | null }
@@ -42,7 +42,7 @@ describe('outreach reconciliation presentation', () => {
   it.each(['sending', 'acceptance_unknown', 'failed'])('offers no resend or mutation action for %s', (status) => {
     const html = renderToStaticMarkup(createElement(DeliveryState, { status, busy: false, onFinish: vi.fn() }));
     expect(html).toContain('Do not resend.');
-    expect(html).toContain('Gmail/SendGrid logs');
+    expect(html).toContain('email provider');
     expect(html).not.toContain('<button');
   });
   it('only offers recording recovery when acceptance is already persisted', () => {
@@ -95,25 +95,38 @@ describe('outreach reconciliation API', () => {
     respond = (call) => call.url.searchParams.get('id') === `eq.${id}` ? json(null) : original(call);
     expect((await GET(new NextRequest(`http://localhost/api/outreach?attempt=${id}`))).status).toBe(404);
   });
-  it('finishes recording through only the transactional RPC, never a provider', async () => {
+  it('finishes recording through the transactional RPC, never a provider', async () => {
     const response = await PATCH(new NextRequest(`http://localhost/api/outreach/outbox/${id}`, {
       method: 'PATCH', body: JSON.stringify({ action: 'finish_recording' }),
     }), { params: Promise.resolve({ id }) });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ delivery_status: 'accepted_by_provider' });
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url.pathname).toBe('/rest/v1/rpc/finalize_outreach_send');
-    expect(calls[0].body?.p_outbox_id).toBe(id);
+    const finalizeCalls = calls.filter((call) => call.url.pathname === '/rest/v1/rpc/finalize_outreach_send');
+    expect(finalizeCalls).toHaveLength(1);
+    expect(finalizeCalls[0].body?.p_outbox_id).toBe(id);
+    expect(calls.some((call) => call.url.pathname === '/rest/v1/outreach_settings')).toBe(true);
     expect(sendOutboundEmail).not.toHaveBeenCalled();
   });
   it('does not convert rejected recovery for uncertain acceptance into a send', async () => {
-    respond = () => json({ message: 'Provider acceptance is not recorded; do not resend', code: 'P0001' }, 400);
+    respond = (call) => call.url.pathname.endsWith('/outreach_outbox')
+      ? json({ agent_user_id: null, prospecting_touch_id: null })
+      : json({ message: 'Provider acceptance is not recorded; do not resend', code: 'P0001' }, 400);
     const response = await PATCH(new NextRequest(`http://localhost/api/outreach/outbox/${id}`, {
       method: 'PATCH', body: JSON.stringify({ action: 'finish_recording' }),
     }), { params: Promise.resolve({ id }) });
     expect(response.status).toBe(500);
     expect(await response.json()).toMatchObject({ message: expect.stringContaining('do not resend') });
+    expect(calls).toHaveLength(2);
+    expect(sendOutboundEmail).not.toHaveBeenCalled();
+  });
+  it('blocks another plan owner from rejecting a prospecting draft', async () => {
+    respond = () => json({ agent_user_id: id, prospecting_touch_id: id });
+    const response = await PATCH(new NextRequest(`http://localhost/api/outreach/outbox/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ action: 'reject' }),
+    }), { params: Promise.resolve({ id }) });
+    expect(response.status).toBe(403);
     expect(calls).toHaveLength(1);
+    expect(calls[0].method).toBe('GET');
     expect(sendOutboundEmail).not.toHaveBeenCalled();
   });
 });

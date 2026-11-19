@@ -4,9 +4,11 @@ import {
   prepareLead,
   readIntakeSections,
   validateAgentIntake,
+  validateAccountIntakeDetails,
   type AgentIntake,
 } from './agent-lead-intake';
 import { validateAsset } from './workspace-validation';
+import { EMPTY_APPLICANT } from './applicant-details';
 
 const contact = {
   first_name: ' Maria ', last_name: 'Lopez', phone: '(602) 555-0142', email: 'Maria@Example.com',
@@ -53,6 +55,63 @@ function valid(value: unknown): AgentIntake {
 }
 
 describe('validateAgentIntake', () => {
+  it('preserves grouped and custom occupations, license fields and legacy optional history', () => {
+    const additional_details = { ...EMPTY_APPLICANT, occupation: 'Registered Nurses', occupation_code: '29-1141.00',
+      employer: 'Synthetic Hospital', employment_status: 'Employed', years_employed: '2', years_at_address: '1', months_at_address: '3',
+      previous_addresses: [{ address: '789 Previous Road', from: '2021-01-01', to: '2024-01-01' }],
+      requested_effective: '2027-01-01', requested_expiration: '2028-01-01' };
+    const intake = valid({ ...personal, additional_details, drivers: [{ ...personal.drivers[0], license_number: 'QA1234',
+      license_issued: '2020-04-02', license_expires: '2028-04-02', license_status: 'Valid', license_class: 'D', years_licensed: '20' }] });
+    const prepared = prepareLead(intake, 'QA');
+    expect(prepared.lead.form_payload.agent_intake.answers.additional_details).toEqual({ ...additional_details, occupation_industry: '29' });
+    expect(prepared.assets.find((asset) => asset.asset_type === 'driver')?.details).toMatchObject({
+      license_number: 'QA1234', license_expires: '2028-04-02', dob: '1985-04-02',
+    });
+    expect(prepared.assets.find((asset) => asset.asset_type === 'driver')?.details.notes).toBeUndefined();
+    expect(readIntakeSections(prepared.lead.form_payload)?.sections).toContainEqual(expect.objectContaining({
+      title: 'Previous address 1', fields: expect.arrayContaining([{ label: 'Address', value: '789 Previous Road' }]),
+    }));
+    expect(valid({ ...personal, additional_details: { ...EMPTY_APPLICANT, occupation: 'Specialized craftworker' } }).additional_details?.occupation).toBe('Specialized craftworker');
+  });
+
+  it('keeps individual driver addresses and histories separate in answers, summaries and inventory', () => {
+    const drivers = [
+      { ...personal.drivers[0], address: '123 Current Road', years_at_address: '1', months_at_address: '2', residence_status: 'Own',
+        previous_addresses: [{ address: '789 Previous Road', from: '2021-01-01', to: '2024-01-01', years_at_address: '3', months_at_address: '0' }] },
+      { name: 'Other driver', address: '456 Different Road', years_at_address: '5' },
+    ];
+    const prepared = prepareLead(valid({ ...personal, drivers }), 'QA');
+    expect(prepared.lead.form_payload.agent_intake.answers).toMatchObject({ drivers });
+    const driverAssets = prepared.assets.filter((asset) => asset.asset_type === 'driver');
+    expect(driverAssets[0].details).toMatchObject({ address: '123 Current Road', years_at_address: '1' });
+    expect(driverAssets[1].details).toMatchObject({ address: '456 Different Road', years_at_address: '5' });
+    expect(validateAsset({ ...driverAssets[0], source: 'client_reported' })).not.toBeTypeOf('string');
+    expect(prepared.lead.form_payload.agent_intake.sections.find((section) => section.title.startsWith('Driver 1'))?.fields).toContainEqual({ label: 'Previous address 1 years', value: '3' });
+    expect(validateAgentIntake({ ...personal, drivers: [{ ...drivers[0], months_at_address: '12' }] })).toMatch(/0 to 11/);
+    expect(validateAgentIntake({ ...personal, drivers: [{ ...drivers[0], previous_addresses: [{ from: '2024-01-01', to: '2023-01-01' }] }] })).toMatch(/must not precede/);
+  });
+
+  it('infers industries for older occupation records but rejects cross-industry selections', () => {
+    expect(valid({ ...personal, additional_details: { occupation: 'Registered Nurses', occupation_code: '29-1141.00' } }).additional_details?.occupation_industry).toBe('29');
+    expect(validateAgentIntake({ ...personal, additional_details: { occupation: 'Registered Nurses', occupation_code: '29-1141.00', occupation_industry: '47' } })).toMatch(/selected industry/);
+  });
+
+  it('rejects forged occupations, impossible dates and reversed optional date ranges', () => {
+    expect(validateAgentIntake({ ...personal, additional_details: { occupation: 'Forged', occupation_code: '29-1141.00' } })).toMatch(/occupation/);
+    expect(validateAgentIntake({ ...personal, additional_details: { requested_effective: '2027-02-30' } })).toMatch(/valid/);
+    expect(validateAgentIntake({ ...personal, additional_details: { months_at_address: '12' } })).toMatch(/0 to 11/);
+    expect(validateAgentIntake({ ...personal, additional_details: { requested_effective: '2028-01-01', requested_expiration: '2027-01-01' } })).toMatch(/after/);
+    expect(validateAgentIntake({ ...personal, additional_details: { previous_addresses: [{ address: 'Old', from: '2024-01-01', to: '2023-01-01' }] } })).toMatch(/must not precede/);
+    expect(validateAgentIntake({ ...personal, drivers: [{ ...personal.drivers[0], license_issued: '2024-01-01', license_expires: '2023-01-01' }] })).toMatch(/must not be before/);
+  });
+
+  it('computes account summaries server-side without adding new required applicant fields', () => {
+    const details = validateAccountIntakeDetails({ applicant: { years_at_address: '1' }, sections: [{ title: 'Injected', fields: [] }] });
+    expect(details.applicant.previous_addresses).toEqual([]);
+    expect(details.sections).toEqual([{ title: 'Address history', fields: [{ label: 'Years at current address', value: '1' }] }]);
+    expect(() => validateAccountIntakeDetails({ drivers: [{ name: '' }] })).toThrow(/name is required/);
+    expect(() => validateAccountIntakeDetails('not an object')).toThrow(/must be an object/);
+  });
   it('normalizes a personal intake', () => {
     const intake = valid(personal);
     expect(intake.contact.first_name).toBe('Maria');

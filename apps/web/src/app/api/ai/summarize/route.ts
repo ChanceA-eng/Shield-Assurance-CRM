@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
-import { requireApiSession } from '../../../../lib/api-auth';
+import { getApiSession } from '../../../../lib/api-auth';
 import { recordOutreachContext } from '../../../../lib/lead-outreach-context';
-import { workspaceApiError } from '../../../../lib/workspace-api';
+import { workspaceApiError, friendlyErrorMessage } from '../../../../lib/workspace-api';
 import { isUuid } from '../../../../lib/workspace-validation';
 
 function safeDate(value?: string | null): string {
@@ -13,11 +13,11 @@ function safeDate(value?: string | null): string {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const clientId = request.nextUrl.searchParams.get('clientId')?.trim();
@@ -37,15 +37,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   ]);
 
   if (clientRes.error) {
-    return NextResponse.json({ message: clientRes.error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(clientRes.error) }, { status: 500 });
   }
   if (commsRes.error) {
-    return NextResponse.json({ message: commsRes.error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(commsRes.error) }, { status: 500 });
   }
   if (!clientRes.data) return NextResponse.json({ message: 'Client not found.' }, { status: 404 });
   let contextData: Awaited<ReturnType<typeof recordOutreachContext>>;
   try {
-    contextData = await recordOutreachContext(supabase, { type: 'client', id: clientId });
+    contextData = await recordOutreachContext(supabase, { type: 'client', id: clientId }, session.user.id);
   } catch (failure) {
     return workspaceApiError(failure, 'account-summary/context');
   }
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       occurred_at: new Date().toISOString(),
     },
   ]);
-  if (activity.error) return NextResponse.json({ message: activity.error.message }, { status: 500 });
+  if (activity.error) return NextResponse.json({ message: friendlyErrorMessage(activity.error) }, { status: 500 });
 
   return NextResponse.json({ ok: true, summary }, { status: 200 });
 }

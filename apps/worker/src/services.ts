@@ -1,3 +1,5 @@
+import { resendConfiguration, sendResendEmail } from '@crm/shared/resend';
+
 export async function sendSms(input: { to: string; body: string }): Promise<{ providerId: string }> {
   if (!input.to) {
     throw new Error('SMS recipient is required.');
@@ -8,7 +10,7 @@ export async function sendSms(input: { to: string; body: string }): Promise<{ pr
   const from = process.env.TWILIO_FROM_NUMBER;
 
   if (!sid || !token || !from) {
-    return { providerId: `sms-local-${Date.now()}` };
+    throw new Error('Twilio is not configured; no SMS was sent.');
   }
 
   const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
@@ -36,42 +38,16 @@ export async function sendWelcomeEmail(input: {
   to: string;
   accountName: string;
   dealTitle: string;
+  requestId?: string;
 }): Promise<{ providerId: string }> {
   if (!input.to) {
     throw new Error('Email recipient is required.');
   }
 
-  const sendGridApiKey = process.env.SENDGRID_API_KEY;
-  const sendGridFrom = process.env.SENDGRID_FROM_EMAIL;
-
-  if (!sendGridApiKey || !sendGridFrom) {
-    return { providerId: `email-local-${Date.now()}` };
-  }
-
-  const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${sendGridApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      personalizations: [{ to: [{ email: input.to }] }],
-      from: { email: sendGridFrom },
-      subject: `Your policy is now bound: ${input.dealTitle}`,
-      content: [
-        {
-          type: 'text/plain',
-          value: `Hi, your policy for ${input.accountName} has been bound successfully.`,
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`SendGrid email failed: ${response.status} ${response.statusText}`);
-  }
-
-  return {
-    providerId: response.headers.get('x-message-id') ?? `email-${Date.now()}`,
-  };
+  if (!input.requestId) throw new Error('A stable workflow send ID is required for Resend.');
+  return sendResendEmail({
+    to: input.to, subject: `Your policy is now bound: ${input.dealTitle}`,
+    body: `Hi, your policy for ${input.accountName} has been bound successfully.`,
+    requestId: input.requestId, purpose: 'service',
+  }, resendConfiguration(process.env));
 }

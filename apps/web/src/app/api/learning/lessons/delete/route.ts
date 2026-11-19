@@ -16,7 +16,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to delete lesson.' },
+      { message: error instanceof Error ? error.message : 'Lesson could not be deleted. Please try again.' },
       { status: 500 },
     );
   }

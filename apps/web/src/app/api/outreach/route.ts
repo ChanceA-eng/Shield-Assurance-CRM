@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
-import { requireApiSession } from '../../../lib/api-auth';
+import { requireApiSession, getApiSession } from '../../../lib/api-auth';
+import { agencyEnabled } from '../../../lib/agency-membership';
+import { requireAgencyOwner } from '../../../lib/agency-access';
 import { getOutreachSettings, sentTodayCount } from '../../../lib/outreach-engine';
 import { isUuid } from '../../../lib/workspace-validation';
 import { parseOutreachSender } from '../../../lib/marketing-profile';
-import { workspaceApiError, workspaceBody } from '../../../lib/workspace-api';
+import { workspaceApiError, workspaceBody, databaseError } from '../../../lib/workspace-api';
+import { isAgencyTimeZone } from '../../../lib/agency-time';
 
 /** Outreach command center payload: settings, pending approvals, enrollments, counters. */
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -12,7 +15,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (authError) return authError;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const statuses = ['sent', 'failed', 'sending', 'acceptance_unknown', 'accepted_by_provider'];
   const filter = request.nextUrl.searchParams.get('recent_status') ?? 'all';
@@ -22,9 +25,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: 'Unknown outreach activity status.' }, { status: 400 });
   }
   try {
-  const [settings, sentToday, pendingRes, enrollmentsRes, recentRes, optOutsRes, selectedRes] = await Promise.all([
-    getOutreachSettings(supabase),
-    sentTodayCount(supabase),
+  const settings = await getOutreachSettings(supabase);
+  const [sentToday, pendingRes, enrollmentsRes, recentRes, optOutsRes, selectedRes] = await Promise.all([
+    sentTodayCount(supabase, settings.timezone),
     supabase
       .from('outreach_outbox')
       .select('*')
@@ -77,6 +80,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   return NextResponse.json(
     {
       settings,
+      agent_outreach_enabled: agencyEnabled(),
       sent_today: sentToday,
       pending: withLead(pending as Array<{ lead_id: string }>),
       enrollments: withLead(enrollments as Array<{ lead_id: string }>),
@@ -92,16 +96,28 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
 /** Updates outreach settings. */
 export async function PATCH(request: NextRequest): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   try {
+  await requireAgencyOwner(supabase, session.user.id);
   const payload = await workspaceBody(request);
-  const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  const allowed = ['approval_mode', 'daily_send_cap', 'send_window_start', 'send_window_end', 'timezone', 'sender_profile', 'confirm_automatic_sending', 'expected_revision'];
+  if (Object.keys(payload).some((key) => !allowed.includes(key))) return NextResponse.json({ message: 'An unsupported setting was supplied.' }, { status: 400 });
+  if (payload.expected_revision !== undefined && (typeof payload.expected_revision !== 'number' || !Number.isInteger(payload.expected_revision)
+    || payload.expected_revision < 1 || payload.expected_revision > 2147483647)) {
+    return NextResponse.json({ message: 'Choose a valid settings revision.' }, { status: 400 });
+  }
+  const update: Record<string, unknown> = {};
+  if (payload.approval_mode !== undefined && typeof payload.approval_mode !== 'boolean') return NextResponse.json({ message: 'Choose whether sending requires approval.' }, { status: 400 });
   if (typeof payload.approval_mode === 'boolean') update.approval_mode = payload.approval_mode;
+  if (payload.timezone !== undefined) {
+    if (!isAgencyTimeZone(payload.timezone)) return NextResponse.json({ message: 'Choose a supported agency time zone.' }, { status: 400 });
+    update.timezone = payload.timezone;
+  }
   for (const [field, min, max] of [['daily_send_cap', 1, 200], ['send_window_start', 0, 23], ['send_window_end', 1, 24]] as const) {
     if (payload[field] !== undefined) {
       const value = payload[field];
@@ -117,9 +133,11 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   }
   if (payload.sender_profile !== undefined) update.sender_profile = parseOutreachSender(payload.sender_profile);
 
-  const { data, error } = await supabase.from('outreach_settings').update(update).eq('id', 1).select('id').single();
-  if (error) return NextResponse.json({ message: error.message }, { status: 500 });
-  if (!data) return NextResponse.json({ message: 'Outreach settings were not saved.' }, { status: 500 });
+  const args = { p_actor: session.user.id, p_update: update, p_confirm_automatic: payload.confirm_automatic_sending === true };
+  const { error } = payload.expected_revision === undefined
+    ? await supabase.rpc('save_agency_outreach_settings', args)
+    : await supabase.rpc('save_agency_outreach_settings_versioned', { ...args, p_expected_revision: payload.expected_revision });
+  if (error) throw databaseError(error);
   return NextResponse.json({ ok: true }, { status: 200 });
   } catch (error) {
     return workspaceApiError(error, 'outreach/settings');

@@ -15,7 +15,7 @@ export async function GET(
     return NextResponse.json(safePayload, { status: 200 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to load Rashi document.' },
+      { message: error instanceof Error ? error.message : 'Rashi document could not be loaded. Refresh the page to try again.' },
       { status: 500 },
     );
   }

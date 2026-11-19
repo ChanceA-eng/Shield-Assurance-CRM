@@ -14,11 +14,12 @@ const NavContext = createContext<NavContextValue | null>(null);
 export function NavProvider({ children }: { children: React.ReactNode }): JSX.Element {
   const [isNavOpen, setIsNavOpen] = useState(true);
 
-  // Start collapsed on small screens so the mobile overlay is not open by default.
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-      setIsNavOpen(false);
-    }
+    const desktop = window.matchMedia('(min-width: 768px)');
+    const syncNavigation = (): void => setIsNavOpen(desktop.matches);
+    syncNavigation();
+    desktop.addEventListener('change', syncNavigation);
+    return () => desktop.removeEventListener('change', syncNavigation);
   }, []);
 
   const openNav = (): void => setIsNavOpen(true);

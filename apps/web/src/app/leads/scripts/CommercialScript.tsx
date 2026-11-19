@@ -59,19 +59,19 @@ export default function CommercialScript({ onChange }: CommercialScriptProps): J
   return (
     <div className="space-y-4">
       <div>
-        <h4 className="mb-1 text-sm font-semibold text-[#20a8d8]">📞 Phase 1: Phone Hook</h4>
+        <h4 className="mb-1 text-sm font-semibold text-cui-primary-strong">📞 Phase 1: Phone Hook</h4>
         <textarea
-          className="w-full rounded border border-[#c8ced3] p-2 text-sm leading-relaxed text-[#2f2f2f] focus:border-[#20a8d8] focus:outline-none"
+          className="w-full rounded-lg border border-cui-border p-2 text-sm leading-relaxed text-[#2f2f2f] focus:border-cui-primary-strong focus:outline-none"
           rows={5}
           value={hook}
           onChange={(e) => setHook(e.target.value)}
         />
       </div>
 
-      <hr className="border-[#f0f3f5]" />
+      <hr className="border-cui-light" />
 
       <div>
-        <h4 className="mb-2 text-sm font-semibold text-[#20a8d8]">💻 Phase 2: Discovery Checklist</h4>
+        <h4 className="mb-2 text-sm font-semibold text-cui-primary-strong">💻 Phase 2: Discovery Checklist</h4>
 
         <div className="space-y-1">
           {checklist.map((item) => (
@@ -86,7 +86,7 @@ export default function CommercialScript({ onChange }: CommercialScriptProps): J
                 type="text"
                 value={item.label}
                 onChange={(e) => updateLabel(item.id, e.target.value)}
-                className="flex-1 rounded border border-transparent px-1 py-0.5 text-sm text-[#2f2f2f] hover:border-[#c8ced3] focus:border-[#20a8d8] focus:outline-none"
+                className="flex-1 rounded-lg border border-transparent px-1 py-0.5 text-sm text-[#2f2f2f] hover:border-cui-border focus:border-cui-primary-strong focus:outline-none"
               />
               <button
                 type="button"
@@ -107,12 +107,12 @@ export default function CommercialScript({ onChange }: CommercialScriptProps): J
             value={newItemLabel}
             onChange={(e) => setNewItemLabel(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addItem(); } }}
-            className="flex-1 rounded border border-[#c8ced3] px-2 py-1 text-sm focus:border-[#20a8d8] focus:outline-none"
+            className="flex-1 rounded-lg border border-cui-border px-2 py-1 text-sm focus:border-cui-primary-strong focus:outline-none"
           />
           <button
             type="button"
             onClick={addItem}
-            className="rounded border border-[#20a8d8] px-2 py-1 text-xs font-semibold text-[#20a8d8] hover:bg-[#e8f4fd]"
+            className="rounded-lg border border-cui-primary-strong px-2 py-1 text-xs font-semibold text-cui-primary-strong hover:bg-[#e8f4fd]"
           >
             + Add
           </button>

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import SectionLayout from '../../../components/crm/SectionLayout';
 import { CONTRACTOR_MASTER_COURSE_TITLE } from '../../../lib/learning/catalog/contractor-liability-course';
+import { postLearningMutation } from '../../../lib/learning/api';
 
 interface CourseItem {
   id: string;
@@ -18,12 +19,13 @@ export default function CourseBuilderPage(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [importingFlagship, setImportingFlagship] = useState(false);
+  const [creatingCourse, setCreatingCourse] = useState(false);
 
   async function loadCourses(): Promise<CourseItem[]> {
     const response = await fetch('/api/learning/courses/list');
     if (!response.ok) {
       const payload = (await response.json()) as { message?: string };
-      throw new Error(payload.message ?? 'Failed to load courses.');
+      throw new Error(payload.message ?? 'Courses could not be loaded. Refresh the page to try again.');
     }
     const payload = (await response.json()) as { courses?: CourseItem[] };
     const list = payload.courses ?? [];
@@ -90,7 +92,7 @@ export default function CourseBuilderPage(): JSX.Element {
         await ensureFlagshipCourse(initialCourses);
         await loadCourses();
       } catch (initialError) {
-        setError(initialError instanceof Error ? initialError.message : 'Failed to load courses.');
+        setError(initialError instanceof Error ? initialError.message : 'Courses could not be loaded. Refresh the page to try again.');
       } finally {
         setLoading(false);
       }
@@ -100,36 +102,42 @@ export default function CourseBuilderPage(): JSX.Element {
   }, []);
 
   async function createCourse(): Promise<void> {
-    if (!title.trim()) {
-      return;
+    if (!title.trim() || creatingCourse) return;
+    setCreatingCourse(true);
+    setError(null);
+    try {
+      await postLearningMutation('/api/learning/courses/create', { title, description, level }, 'Course could not be created.');
+      setTitle('');
+      setDescription('');
+      setLevel('BEGINNER');
+      await loadCourses();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Course could not be created. Your draft is still available.');
+    } finally {
+      setCreatingCourse(false);
     }
+  }
 
-    await fetch('/api/learning/courses/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, level }),
-    });
-
-    setTitle('');
-    setDescription('');
-    setLevel('BEGINNER');
-    await loadCourses();
+  async function refreshCourses(): Promise<void> {
+    setError(null);
+    try { await loadCourses(); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : 'Courses could not be loaded. Refresh and retry.'); }
   }
 
   return (
     <SectionLayout title="Course Builder">
       <div className="space-y-4">
-        <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
+        <section className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center gap-2">
-            <a href="/learning" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Back to Learning Center</a>
-            <a href="/" className="rounded-md border border-[#c8ced3] px-3 py-1.5 text-xs font-semibold text-[#23282c] hover:bg-[#f0f3f5]">Exit Studio</a>
+            <a href="/learning" className="rounded-md border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-text hover:bg-cui-light">Back to Learning Center</a>
+            <a href="/" className="rounded-md border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-text hover:bg-cui-light">Exit Studio</a>
             <button
               type="button"
               onClick={() => {
                 void importFlagshipNow();
               }}
               disabled={importingFlagship}
-              className="rounded-md border border-[#167495] px-3 py-1.5 text-xs font-semibold text-[#167495] hover:bg-[#eef5ff] disabled:opacity-60"
+              className="rounded-md border border-cui-primary-strong px-3 py-1.5 text-xs font-semibold text-cui-primary-strong hover:bg-[#eef5ff] disabled:opacity-60"
             >
               {importingFlagship ? 'Importing...' : 'Import Contractor Master Course'}
             </button>
@@ -146,7 +154,7 @@ export default function CourseBuilderPage(): JSX.Element {
             <button
               type="button"
               onClick={() => {
-                void loadCourses();
+                void refreshCourses();
               }}
               className="rounded-md border border-[#5c667a] px-3 py-1.5 text-xs font-semibold text-[#5c667a] hover:bg-[#f5f7fb]"
             >
@@ -155,23 +163,23 @@ export default function CourseBuilderPage(): JSX.Element {
           </div>
         </section>
 
-        <section className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm">
-          <h2 className="text-base font-bold text-[#23282c]">Create Course</h2>
+        <section className="rounded-lg border border-cui-border bg-white p-4 shadow-sm">
+          <h2 className="text-base font-bold text-cui-text">Create Course</h2>
           <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
             <input
-              className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm"
+              className="rounded-md border border-cui-border px-3 py-2 text-sm"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="Course title"
             />
             <input
-              className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm md:col-span-2"
+              className="rounded-md border border-cui-border px-3 py-2 text-sm md:col-span-2"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Description"
             />
             <select
-              className="rounded-md border border-[#c8ced3] px-3 py-2 text-sm"
+              className="rounded-md border border-cui-border px-3 py-2 text-sm"
               value={level}
               onChange={(event) => {
                 const value = event.target.value;
@@ -187,23 +195,22 @@ export default function CourseBuilderPage(): JSX.Element {
           </div>
           <button
             type="button"
-            onClick={() => {
-              void createCourse();
-            }}
-            className="mt-3 rounded-md bg-[#23282c] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#133a6b]"
+            onClick={() => { void createCourse(); }}
+            disabled={creatingCourse}
+            className="mt-3 rounded-md bg-cui-text px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#133a6b]"
           >
-            + Create Course
+            {creatingCourse ? 'Creating...' : '+ Create Course'}
           </button>
         </section>
 
         {loading ? <p className="text-sm text-[#514f4d]">Loading course studio...</p> : null}
-        {error ? <p className="text-sm font-semibold text-[#a61b1b]">{error}</p> : null}
+        {error ? <p role="alert" className="text-sm font-semibold text-[#a61b1b]">{error}</p> : null}
 
         <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {courses.map((course) => (
-            <a key={course.id} href={`/learning/course-builder/${course.id}`} className="rounded-lg border border-[#c8ced3] bg-white p-4 shadow-sm transition hover:border-[#167495]">
+            <a key={course.id} href={`/learning/course-builder/${course.id}`} className="rounded-lg border border-cui-border bg-white p-4 shadow-sm transition hover:border-cui-primary-strong">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[#706e6b]">{course.level}</p>
-              <h3 className="mt-1 text-sm font-bold text-[#23282c]">{course.title}</h3>
+              <h3 className="mt-1 text-sm font-bold text-cui-text">{course.title}</h3>
               <p className="mt-1 text-xs text-[#514f4d]">{course.modules.length} modules</p>
             </a>
           ))}

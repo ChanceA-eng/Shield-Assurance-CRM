@@ -18,6 +18,7 @@ interface KnowledgeDocument {
   title: string;
   sourceType: string;
   sourceUrl: string | null;
+  sourcePublishedAt: string | null;
   carrierName: string | null;
   stateContext: string | null;
   policyType: string | null;
@@ -66,6 +67,10 @@ interface AnalyzeResponse {
 
 type QuickActionId = 'APPETITE' | 'ELIGIBILITY' | 'EXCLUSIONS' | 'DECISION';
 
+function formatSourceDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(value));
+}
+
 const quickActions: Array<{ id: QuickActionId; label: string; prompt: string }> = [
   {
     id: 'APPETITE',
@@ -107,15 +112,15 @@ export default function RashiDocumentView({ documentId }: { documentId: string }
       try {
         const response = await fetch(`/api/rashi/documents/${documentId}`, { cache: 'no-store' });
         if (!response.ok) {
-          const payload = (await response.json().catch(() => ({ message: 'Failed to load document.' }))) as { message?: string };
-          setError(payload.message ?? 'Failed to load document.');
+          const payload = (await response.json().catch(() => ({ message: 'Document could not be loaded. Refresh the page to try again.' }))) as { message?: string };
+          setError(payload.message ?? 'Document could not be loaded. Refresh the page to try again.');
           return;
         }
 
         const payload = (await response.json()) as KnowledgeDocument;
         setDocument(payload);
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : 'Failed to load document.');
+        setError(loadError instanceof Error ? loadError.message : 'Document could not be loaded. Refresh the page to try again.');
       } finally {
         setLoading(false);
       }
@@ -274,7 +279,7 @@ export default function RashiDocumentView({ documentId }: { documentId: string }
   };
 
   if (loading) {
-    return <div className="text-sm text-[#73818f]">Loading document...</div>;
+    return <div className="text-sm text-cui-muted">Loading document...</div>;
   }
 
   if (error) {
@@ -282,7 +287,7 @@ export default function RashiDocumentView({ documentId }: { documentId: string }
   }
 
   if (!document) {
-    return <div className="text-sm text-[#73818f]">Document not found.</div>;
+    return <div className="text-sm text-cui-muted">Document not found.</div>;
   }
 
   const embeddedSourceUrl = document.sourceUrl ? getEmbeddedSourceUrl(document.sourceUrl) : null;
@@ -302,10 +307,16 @@ export default function RashiDocumentView({ documentId }: { documentId: string }
           </Link>
           <span className="text-gray-200">|</span>
           <h2 className="text-xl font-bold text-gray-900">{document.title}</h2>
+          <div className="text-xs text-gray-500">
+            <p>{document.sourcePublishedAt
+              ? `Reported publication date ${formatSourceDate(document.sourcePublishedAt)}`
+              : 'Source publication date not recorded'}</p>
+            <p>Library record updated {formatSourceDate(document.updatedAt)}</p>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold uppercase text-gray-700">
+          <span className="rounded-lg bg-gray-100 px-2 py-0.5 text-xs font-semibold uppercase text-gray-700">
             {document.sourceType}
           </span>
           <span className={`rounded px-2 py-0.5 text-xs font-semibold ${statusBadgeClassName(document.status)}`}>
@@ -414,7 +425,7 @@ export default function RashiDocumentView({ documentId }: { documentId: string }
                     p: ({ children }) => <p className="my-1 whitespace-pre-wrap">{children}</p>,
                     ul: ({ children }) => <ul className="list-disc space-y-1 pl-4">{children}</ul>,
                     li: ({ children }) => <li className="my-1">{children}</li>,
-                    strong: ({ children }) => <strong className="rounded bg-yellow-50 px-1 font-bold text-gray-950">{children}</strong>,
+                    strong: ({ children }) => <strong className="rounded-lg bg-yellow-50 px-1 font-bold text-gray-950">{children}</strong>,
                   }}
                 >
                   {activeActionResult.answer}

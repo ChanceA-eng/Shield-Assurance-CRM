@@ -94,7 +94,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
     return NextResponse.json(payload, { status: 200 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to load Rashi sheets.' },
+      { message: error instanceof Error ? error.message : 'Rashi sheets could not be loaded. Refresh the page to try again.' },
       { status: 500 },
     );
   }
@@ -120,7 +120,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json(serializeSheet(created), { status: 201 });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to create Rashi sheet.' },
+      { message: error instanceof Error ? error.message : 'Rashi sheet could not be created. Please try again.' },
       { status: 500 },
     );
   }

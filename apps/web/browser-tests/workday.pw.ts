@@ -8,8 +8,10 @@ test('legacy Workday opens Tasks with one copy of each task, assignment and comp
   const task = data.tasks[0];
   await expect(page.getByText(task.subject, { exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: `Reassign ${task.subject}`, exact: true }).click();
-  await page.getByLabel('New assignee', { exact: true }).fill('Alex Producer');
-  await page.getByRole('button', { name: 'Save assignment', exact: true }).click();
+  const reassign = page.getByRole('dialog', { name: 'Reassign task' });
+  await reassign.getByLabel('New assignee', { exact: true }).fill('Alex Producer');
+  await reassign.getByRole('button', { name: 'Save assignment', exact: true }).click();
+  await expect(reassign).toHaveCount(0);
   await expect(page.getByText('Alex Producer', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: `Complete ${task.subject}`, exact: true }).click();
   await expect(page.getByText(task.subject, { exact: true })).toHaveCount(0);
@@ -20,15 +22,31 @@ test('legacy Workday opens Tasks with one copy of each task, assignment and comp
   await expect(page.getByRole('region', { name: 'Additional follow-ups' })).toHaveCount(0);
 });
 
-test('quick task creation uses named record selection and preserves assigned ownership', async ({ page, data }) => {
+test('New task popup uses named record selection, ignores Enter in record search and preserves ownership', async ({ page, data }) => {
   await page.goto('/tasks');
-  await page.getByLabel('Task action', { exact: true }).fill('Collect the second truck VIN');
-  await page.getByLabel('Task record type', { exact: true }).selectOption('lead');
-  await page.getByLabel('Related record', { exact: true }).selectOption(leadId);
-  await page.getByLabel('Task assignee', { exact: true }).fill('Alex Producer');
-  await page.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(page.getByLabel('Task action', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Task action', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'New task', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'New task' });
+  await dialog.getByLabel('Task action', { exact: true }).fill('Collect the second truck VIN');
+  await dialog.getByLabel('Task record type', { exact: true }).selectOption('lead');
+  await dialog.getByLabel('Search related record', { exact: true }).press('Enter');
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Related record', { exact: true }).selectOption(leadId);
+  await dialog.getByLabel('Task assignee', { exact: true }).fill('Alex Producer');
+  await dialog.getByLabel('Task assignee', { exact: true }).press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Leo Example: Collect the second truck VIN', exact: true })).toBeVisible();
+  expect(data.tasks.filter((task) => task.subject.includes('second truck VIN'))).toHaveLength(1);
   expect(data.tasks.find((task) => task.subject.includes('second truck VIN'))).toMatchObject({ related_type: 'lead', related_id: leadId, assignee: 'Alex Producer' });
+  await page.getByRole('button', { name: 'New task', exact: true }).click();
+  await page.getByRole('dialog', { name: 'New task' }).getByLabel('Task action', { exact: true }).fill('Unsaved draft');
+  page.once('dialog', (prompt) => void prompt.dismiss());
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'New task' })).toBeVisible();
+  page.once('dialog', (prompt) => void prompt.accept());
+  await page.getByRole('button', { name: 'Close new task', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'New task' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New task', exact: true })).toBeFocused();
 });
 
 test('Tasks no longer loads a second work queue or duplicates converted website requests', async ({ page, data }) => {

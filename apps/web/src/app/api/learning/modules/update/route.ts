@@ -32,7 +32,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ module });
   } catch (error) {
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to update module.' },
+      { message: error instanceof Error ? error.message : 'Module could not be updated. Please try again.' },
       { status: 500 },
     );
   }

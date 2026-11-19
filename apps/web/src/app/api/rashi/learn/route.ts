@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getApiSession } from '../../../../lib/api-auth';
 import { askRashi } from '../../../../lib/rashi-server';
 import { prisma } from '../../../../lib/prisma';
 
@@ -10,6 +11,9 @@ function toStringValue(value: unknown): string {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
+
   try {
     const body = await request.json();
     const message = toStringValue(body.message);

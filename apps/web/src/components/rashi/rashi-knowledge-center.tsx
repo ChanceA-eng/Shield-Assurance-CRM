@@ -10,6 +10,7 @@ interface KnowledgeAsset {
   type: string;
   category: string;
   url: string | null;
+  sourcePublishedAt: string | null;
   indexed: boolean;
   internal: boolean;
   updatedAt: string;
@@ -19,6 +20,10 @@ type FilterKey = 'all' | 'carrier_appetite' | 'state_manual' | 'training_video';
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleDateString();
+}
+
+function formatSourceDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(value));
 }
 
 function typeBadgeClasses(type: string): string {
@@ -42,7 +47,7 @@ export default function RashiKnowledgeCenter(): JSX.Element {
       try {
         const response = await fetch('/api/assets/list', { cache: 'no-store' });
         if (!response.ok) {
-          throw new Error('Failed to load assets.');
+          throw new Error('Assets could not be loaded. Refresh the page to try again.');
         }
 
         const payload = (await response.json()) as { assets?: KnowledgeAsset[] };
@@ -73,12 +78,17 @@ export default function RashiKnowledgeCenter(): JSX.Element {
           <p className="mt-0.5 text-xs text-gray-500">Firm wide underwriting assets, guidelines, and manuals.</p>
         </div>
 
+        <div className="flex flex-wrap gap-2">
+        <Link href={'/rashi/carrier-appetite' as Route} className="rounded border border-cui-primary px-3 py-1.5 text-xs font-semibold text-cui-primary">
+          Review Carrier Appetite
+        </Link>
         <Link
           href={'/rashi/knowledge' as Route}
           className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-gray-800"
         >
           Open Knowledge Manager & Sheets
         </Link>
+        </div>
       </section>
 
       <section className="space-y-6">
@@ -133,6 +143,9 @@ export default function RashiKnowledgeCenter(): JSX.Element {
                     </span>
                   </div>
                   <h3 className="truncate text-sm font-semibold text-gray-950">{asset.title}</h3>
+                  <p className="mt-0.5 text-xs text-gray-500">
+                    {asset.sourcePublishedAt ? `Reported publication date ${formatSourceDate(asset.sourcePublishedAt)}` : 'Source publication date not recorded'}
+                  </p>
                   <p className="mt-0.5 text-xs text-gray-400">Updated {formatDate(asset.updatedAt)}</p>
                 </div>
 

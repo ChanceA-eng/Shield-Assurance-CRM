@@ -25,6 +25,16 @@ export interface AssetDetails {
   serial_number?: string;
   description?: string;
   license_state?: string;
+  dob?: string;
+  license_number?: string;
+  license_class?: string;
+  license_status?: string;
+  license_issued?: string;
+  license_expires?: string;
+  years_licensed?: string;
+  years_at_address?: string;
+  months_at_address?: string;
+  residence_status?: string;
   relationship?: string;
   notes?: string;
 }
@@ -75,7 +85,18 @@ export const ASSET_FIELDS: Record<AssetKind, AssetField[]> = {
   ],
   driver: [
     { key: 'relationship', label: 'Relationship / role' },
+    { key: 'dob', label: 'Date of birth' },
+    { key: 'license_number', label: 'License number' },
     { key: 'license_state', label: 'License state' },
+    { key: 'license_class', label: 'License class' },
+    { key: 'license_status', label: 'License status' },
+    { key: 'license_issued', label: 'License issued' },
+    { key: 'license_expires', label: 'License expires' },
+    { key: 'years_licensed', label: 'Years licensed' },
+    { key: 'address', label: 'Address' },
+    { key: 'years_at_address', label: 'Years at current address' },
+    { key: 'months_at_address', label: 'Additional months at current address' },
+    { key: 'residence_status', label: 'Residence status' },
     { key: 'drivers', label: 'Assigned vehicles' },
   ],
   general: [

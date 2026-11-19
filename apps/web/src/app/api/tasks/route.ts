@@ -3,17 +3,20 @@ import { randomUUID } from 'node:crypto';
 import { isRecordType, type WorkspaceTask } from '@crm/shared';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { apiActorName, getApiSession } from '../../../lib/api-auth';
-import { endOfArizonaDay } from '../../../lib/arizona-time';
+import { endOfAgencyDay } from '../../../lib/agency-time';
+import { parseTaskDueDate } from '../../../lib/task-timeliness';
+import { getAgencyTimeZone } from '../../../lib/automation-settings';
 import { absoluteDateTime, isUuid } from '../../../lib/workspace-validation';
 import { namedTaskSubject, resolveRecordScope, taskFilter, WorkspaceError } from '../../../lib/record-scope';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../lib/workspace-api';
 import { taskRecordHref } from '../../../lib/task-links';
+import { assertAppointmentTaskAccess } from '../../../lib/appointment-lifecycle';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const params = request.nextUrl.searchParams;
     const status = params.get('status') ?? 'all';
@@ -23,11 +26,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 200) : 20;
     const offset = Number(params.get('offset') ?? '0');
     if (!Number.isSafeInteger(offset) || offset < 0) throw new WorkspaceError('Invalid task offset.', 400);
-    let query = supabase.from('tasks').select('*', { count: 'exact', head: countOnly });
+    const recordHistory = Boolean(params.get('record_id') || params.get('related_id'));
+    let query = supabase.from(recordHistory ? 'tasks' : 'active_workspace_tasks').select('*', { count: 'exact', head: countOnly });
     if (status === 'open' || status === 'completed') query = query.eq('status', status);
     else if (status === 'overdue') query = query.eq('status', 'open').lt('due_date', new Date().toISOString());
     else if (status !== 'all') throw new WorkspaceError('Invalid task status filter.', 400);
-    if (params.get('due') === 'today') query = query.lt('due_date', endOfArizonaDay(new Date()).toISOString());
+    if (params.get('due') === 'today') {
+      const timezone = await getAgencyTimeZone(supabase);
+      query = query.lt('due_date', endOfAgencyDay(new Date(), timezone).toISOString());
+    }
     if (params.get('kind')) query = query.eq('kind', params.get('kind'));
 
     const recordType = params.get('record_type');
@@ -65,6 +72,24 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         for (const row of rows.filter((item) => item.related_type === relatedType)) {
           const record = result.data?.find((item) => item.id === row.related_id);
           if (record?.client_id) accountByTask.set(row.id, record.client_id);
+        }
+      }
+      const requestTasks = rows.filter((row) => row.related_type === 'policy_change_request' && row.related_id);
+      if (requestTasks.length) {
+        const requests = await supabase.from('policy_change_requests')
+          .select('id,policy_id')
+          .in('id', requestTasks.map((row) => row.related_id!));
+        if (requests.error) throw databaseError(requests.error);
+        const policies = requests.data?.length
+          ? await supabase.from('policies').select('id,client_id')
+            .in('id', requests.data.map((item) => item.policy_id))
+          : { data: [], error: null };
+        if (policies.error) throw databaseError(policies.error);
+        const accountByPolicy = new Map((policies.data ?? []).map((policy) => [policy.id, policy.client_id]));
+        for (const row of requestTasks) {
+          const requestRecord = requests.data?.find((item) => item.id === row.related_id);
+          const accountId = requestRecord ? accountByPolicy.get(requestRecord.policy_id) : undefined;
+          if (accountId) accountByTask.set(row.id, accountId);
         }
       }
       const eventIds = rows.filter((row) => row.related_type === 'event' && row.related_id).map((row) => row.related_id!);
@@ -115,17 +140,6 @@ function statusOf(value: unknown): string {
   return value;
 }
 
-function dueOf(value: unknown): string | null {
-  if (value === null || value === '') return null;
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    const due = absoluteDateTime(`${value}T16:00:00-07:00`);
-    if (due) return due;
-  }
-  const due = absoluteDateTime(value);
-  if (!due) throw new WorkspaceError('Choose a valid task date and time.', 400);
-  return due;
-}
-
 function assigneeOf(value: unknown): string | null {
   if (value === null || value === '') return null;
   if (typeof value !== 'string' || value.trim().length > 120 || !value.trim()) throw new WorkspaceError('Enter an assignee name of at most 120 characters, or leave unassigned.', 400);
@@ -136,17 +150,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const body = await workspaceBody(request);
     let subject = typeof body.subject === 'string' ? body.subject.trim() : typeof body.title === 'string' ? body.title.trim() : '';
     if (!subject || subject.length > 240) throw new WorkspaceError('Enter an action of at most 240 characters.', 400);
     const kind = body.kind ?? 'task';
     if (kind !== 'task' && kind !== 'reminder') throw new WorkspaceError('Invalid task type.', 400);
-    const due = body.due_date === undefined ? null : dueOf(body.due_date);
+    const due = body.due_date === undefined ? null : await parseTaskDueDate(body.due_date, () => getAgencyTimeZone(supabase));
     if (kind === 'reminder' && !due) throw new WorkspaceError('Reminders need a date and time.', 400);
     const relatedType = typeof body.related_type === 'string' ? body.related_type : null;
     const relatedId = body.related_id ?? null;
+    if (relatedType === 'event') throw new WorkspaceError('Create appointments from Calendar; their linked tasks are created automatically.', 400);
     if ((relatedType === null) !== (relatedId === null) || (relatedId !== null && !isUuid(relatedId))) throw new WorkspaceError('Choose a valid related record.', 400);
     let accountId: string | null = null;
     if (isRecordType(relatedType) && isUuid(relatedId)) {
@@ -185,17 +200,18 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const body = await workspaceBody(request);
     if (!isUuid(body.id)) throw new WorkspaceError('A valid task id is required.', 400);
     const existing = await supabase.from('tasks').select('*').eq('id', body.id).maybeSingle<WorkspaceTask>();
     if (existing.error) throw databaseError(existing.error);
     if (!existing.data) throw new WorkspaceError('Task not found.', 404);
+    await assertAppointmentTaskAccess(supabase, session.user.id, existing.data, body);
     const updates: Record<string, unknown> = { updated_by: apiActorName(session.user) };
     if (body.status !== undefined) updates.status = statusOf(body.status);
     if (body.priority !== undefined) updates.priority = priorityOf(body.priority);
-    if (body.due_date !== undefined) updates.due_date = dueOf(body.due_date);
+    if (body.due_date !== undefined) updates.due_date = await parseTaskDueDate(body.due_date, () => getAgencyTimeZone(supabase));
     if (body.assignee !== undefined) updates.assignee = assigneeOf(body.assignee);
     if (body.subject !== undefined) {
       if (typeof body.subject !== 'string' || !body.subject.trim() || body.subject.length > 240) throw new WorkspaceError('Enter a valid task action.', 400);

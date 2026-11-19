@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
-import { requireApiSession } from '../../../lib/api-auth';
+import { requireApiSession, getApiSession, apiActorName } from '../../../lib/api-auth';
 import { processLeadStatusChanged } from '../../../lib/automation';
 import { ACTIVE_LEAD_STATUSES, normalizeLeadStatus } from '../../../lib/lead-pipeline';
 import { scheduleIntakeTask, isWarmSource } from '../../../lib/intake-task';
 import { applyResubmission } from '../../../lib/resubmission';
-import { sourceSubmissionId } from '../../../lib/website-intake';
-import { workspaceBody, workspaceApiError } from '../../../lib/workspace-api';
+import { websiteSubmissionReceipts } from '../../../lib/website-receipts';
+import { databaseError, workspaceBody, workspaceApiError, friendlyErrorMessage } from '../../../lib/workspace-api';
+import { isUuid } from '../../../lib/workspace-validation';
+import { WorkspaceError } from '../../../lib/record-scope';
+import { describeLeadArchive, parseLeadArchiveResults } from '../../../lib/lead-archive';
+import { leadContactRestrictions } from '../../../lib/message-delivery';
 
 interface NewLeadPayload {
   id?: string;
@@ -98,14 +102,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return jsonWithCors(request, { message: 'Supabase is not configured.' }, { status: 503 });
+    return jsonWithCors(request, { message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const searchParams = request.nextUrl.searchParams;
   if (searchParams.get('actionableCount') === 'true') {
     const { data, error } = await supabase.rpc('get_actionable_leads_count');
     if (error) {
-      return jsonWithCors(request, { message: error.message }, { status: 500 });
+      console.error('[leads/actionable-count]', error);
+      return jsonWithCors(request, { message: 'Lead counts could not be loaded.' }, { status: 500 });
     }
 
     return jsonWithCors(request, { count: typeof data === 'number' ? data : 0 }, { status: 200 });
@@ -121,9 +126,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const columns =
     searchParams.get('full') === 'true'
       ? '*'
-      : 'id,full_name,industry,category,phone,email,address,source,line_of_business,status,created_at,website,est_employees,est_revenue,estimated_premium,stage_changed_at,lost_reason,last_viewed_at,last_activity_at';
+      : 'id,full_name,industry,category,phone,email,address,source,line_of_business,status,created_at,website,est_employees,est_revenue,estimated_premium,stage_changed_at,lost_reason,last_viewed_at,last_activity_at,archived_at,archive_reason,account_id';
 
-  let query = supabase.from('leads').select(columns).order('created_at', { ascending: false }).limit(limit);
+  let query = supabase.from('leads').select(columns).order(status === 'archived' ? 'archived_at' : 'created_at', { ascending: false }).limit(limit);
+  const accountId = searchParams.get('account_id');
+  if (accountId) {
+    if (!isUuid(accountId)) return jsonWithCors(request, { message: 'Choose a valid account.' }, { status: 400 });
+    query = query.eq('account_id', accountId);
+  }
+  query = status === 'archived' ? query.not('archived_at', 'is', null) : query.is('archived_at', null);
   const search = searchParams.get('q')?.trim();
   if (search) query = query.ilike('full_name', `%${search.replace(/[\\%_]/g, '\\$&')}%`);
   if (status === 'open') {
@@ -132,19 +143,28 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     query = query.eq('status', status);
   }
 
-  const { data, error } = await query;
+  const { data, error } = await query.returns<Array<Record<string, unknown> & { id: string }>>();
   if (error) {
-    return jsonWithCors(request, { message: error.message }, { status: 500 });
+    console.error('[leads/get]', error);
+    return jsonWithCors(request, { message: 'Leads could not be loaded. Refresh the page to try again.' }, { status: 500 });
   }
 
-  return jsonWithCors(request, data ?? [], { status: 200 });
+  const rows = data ?? [];
+  if (!rows.length) return jsonWithCors(request, [], { status: 200 });
+  try {
+    const restrictions = await leadContactRestrictions(supabase, rows.map((row) => row.id));
+    return jsonWithCors(request, rows.map((row) => ({ ...row, do_not_contact: restrictions.get(row.id) ?? true })), { status: 200 });
+  } catch (failure) {
+    console.error('[leads/contact-restrictions]', failure);
+    return jsonWithCors(request, { message: 'Leads could not be loaded. Please try again.' }, { status: 503 });
+  }
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   // Public endpoint by design: external website forms post leads here (see website-integration.md).
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return jsonWithCors(request, { message: 'Supabase is not configured.' }, { status: 503 });
+    return jsonWithCors(request, { message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   let payload: NewLeadPayload & Record<string, unknown>;
@@ -189,12 +209,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     form_payload: payload,
   };
 
-  const submissionId = sourceSubmissionId(payload);
-  if (submissionId) {
-    const recorded = await supabase.from('lead_intake_events').select('lead_id').eq('submission_key', `website:${submissionId}`).maybeSingle();
-    if (recorded.error) return jsonWithCors(request, { message: recorded.error.message }, { status: 500 });
-    if (recorded.data) return jsonWithCors(request, { id: recorded.data.lead_id, duplicate: true }, { status: 200 });
-  }
+  try {
+    const receipts = await websiteSubmissionReceipts(supabase, [payload]);
+    if (receipts.has(0)) return jsonWithCors(request, { id: receipts.get(0), duplicate: true }, { status: 200 });
+  } catch (error) { return workspaceApiError(error, 'leads/submission-receipt'); }
   // Resubmission check: a repeat inquiry is a hot signal, not a new lead.
   const email = normalizeText(payload.email)?.toLowerCase() ?? null;
   const phoneDigitsValue = (normalizeText(payload.phone) ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
@@ -207,7 +225,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle<{ id: string; full_name: string; status: string | null; form_payload: Record<string, unknown> | null }>();
-    if (byEmail.error) return jsonWithCors(request, { message: byEmail.error.message }, { status: 500 });
+    if (byEmail.error) return jsonWithCors(request, { message: friendlyErrorMessage(byEmail.error) }, { status: 500 });
     existing = byEmail.data ?? null;
   }
   if (!existing && phoneDigitsValue.length === 10) {
@@ -216,7 +234,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .select('id,full_name,status,form_payload,phone')
       .order('created_at', { ascending: false })
       .limit(1000);
-    if (byPhone.error) return jsonWithCors(request, { message: byPhone.error.message }, { status: 500 });
+    if (byPhone.error) return jsonWithCors(request, { message: friendlyErrorMessage(byPhone.error) }, { status: 500 });
     existing =
       (byPhone.data ?? []).find(
         (row) => ((row.phone as string | null) ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '') === phoneDigitsValue,
@@ -236,11 +254,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const { data, error } = await supabase.from('leads').insert([insertData]).select('*').single();
   if (error) {
-    if (error.code === '23505' && submissionId) {
-      const recorded = await supabase.from('lead_intake_events').select('lead_id').eq('submission_key', `website:${submissionId}`).maybeSingle();
-      if (recorded.data) return jsonWithCors(request, { id: recorded.data.lead_id, duplicate: true });
+    if (error.code === '23505') {
+      try {
+        const receipts = await websiteSubmissionReceipts(supabase, [payload]);
+        if (receipts.has(0)) return jsonWithCors(request, { id: receipts.get(0), duplicate: true });
+      } catch (failure) { return workspaceApiError(failure, 'leads/submission-receipt'); }
     }
-    return jsonWithCors(request, { message: error.message }, { status: 500 });
+    return jsonWithCors(request, { message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   await scheduleIntakeTask(supabase, {
@@ -265,7 +285,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return jsonWithCors(request, { message: 'Supabase is not configured.' }, { status: 503 });
+    return jsonWithCors(request, { message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const payload = (await request.json()) as NewLeadPayload;
@@ -312,7 +332,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 
   const { data, error } = await supabase.rpc('patch_lead_profile', { p_lead_id: payload.id, p_changes: updates });
   if (error) {
-    return jsonWithCors(request, { message: error.message }, { status: 500 });
+    return workspaceApiError(databaseError(error), 'leads/patch');
   }
 
   await processLeadStatusChanged({
@@ -325,25 +345,29 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function DELETE(request: NextRequest): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return jsonWithCors(request, { message: 'Supabase is not configured.' }, { status: 503 });
+    return jsonWithCors(request, { message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
-  const payload = (await request.json()) as { id?: string };
-  if (!payload.id) {
-    return jsonWithCors(request, { message: 'id is required.' }, { status: 400 });
+  // Leads are archived, never erased, so their history and linked records stay intact and can be restored.
+  try {
+    const payload = await workspaceBody(request);
+    if (!isUuid(payload.id)) {
+      return jsonWithCors(request, { message: 'Choose a lead to archive.' }, { status: 400 });
+    }
+    const saved = await supabase.rpc('archive_leads', { p_ids: [payload.id], p_actor: apiActorName(session.user), p_reason: null });
+    if (saved.error) throw databaseError(saved.error);
+    const results = parseLeadArchiveResults(saved.data);
+    if (!results || results.length !== 1) throw new WorkspaceError('We could not confirm the change. Refresh the page to check the lead.', 503);
+    if (results[0].outcome === 'missing') return jsonWithCors(request, { message: 'This lead was already removed. Refresh the page.' }, { status: 404 });
+    return jsonWithCors(request, { ok: true, archived: true, results, message: describeLeadArchive('archive', results) }, { status: 200 });
+  } catch (error) {
+    return workspaceApiError(error, 'leads/delete');
   }
-
-  const { error } = await supabase.from('leads').delete().eq('id', payload.id);
-  if (error) {
-    return jsonWithCors(request, { message: error.message }, { status: 500 });
-  }
-
-  return jsonWithCors(request, { ok: true }, { status: 200 });
 }
 
 export async function OPTIONS(request: NextRequest): Promise<NextResponse> {

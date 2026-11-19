@@ -63,13 +63,13 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
     try {
       const res = await fetch('/api/leads/duplicates', { cache: 'no-store' });
       if (!res.ok) {
-        setError('Failed to scan for duplicates.');
+        setError('Duplicates could not be checked. Please try again.');
         return;
       }
       const payload = (await res.json()) as { groups: DupGroup[] };
       setGroups(payload.groups);
     } catch {
-      setError('Failed to scan for duplicates.');
+      setError('Duplicates could not be checked. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -132,56 +132,56 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded border border-[#c8ced3] bg-white shadow-xl">
-        <div className="flex shrink-0 items-center justify-between border-b border-[#f0f3f5] bg-[#f8f9fa] px-4 py-3">
+      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-cui-border bg-white shadow-xl">
+        <div className="flex shrink-0 items-center justify-between border-b border-cui-light bg-cui-light px-4 py-3">
           <div className="flex items-center gap-2">
             {reviewing ? (
-              <button type="button" onClick={() => setReviewing(null)} className="rounded p-1 text-[#73818f] hover:bg-[#f0f3f5]">
+              <button type="button" onClick={() => setReviewing(null)} className="rounded-lg p-1 text-cui-muted hover:bg-cui-light">
                 <ArrowLeft className="h-4 w-4" />
               </button>
             ) : null}
-            <h2 className="text-lg font-bold text-[#23282c]">
+            <h2 className="text-lg font-bold text-cui-text">
               {reviewing ? 'Review Merge' : `Duplicate Leads ${loading ? '' : `(${groups.length} group${groups.length === 1 ? '' : 's'})`}`}
             </h2>
           </div>
-          <button type="button" onClick={onClose} className="rounded p-1.5 text-[#73818f] hover:bg-[#f0f3f5]" aria-label="Close">
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-cui-muted hover:bg-cui-light" aria-label="Close">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {error ? <div className="mx-4 mt-3 shrink-0 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+        {error ? <div className="mx-4 mt-3 shrink-0 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {!reviewing ? (
             <>
-              {loading ? <p className="text-sm text-[#73818f]">Scanning your book for duplicates…</p> : null}
+              {loading ? <p className="text-sm text-cui-muted">Scanning your book for duplicates…</p> : null}
               {!loading && groups.length === 0 ? (
-                <p className="rounded border border-dashed border-[#c8ced3] p-6 text-center text-sm text-[#73818f]">
+                <p className="rounded-lg border border-dashed border-cui-border p-6 text-center text-sm text-cui-muted">
                   No duplicate leads detected. Clean book.
                 </p>
               ) : null}
               <div className="space-y-3">
                 {groups.map((group, index) => (
-                  <div key={index} className="rounded border border-[#c8ced3]">
-                    <div className="flex items-center justify-between border-b border-[#f0f3f5] bg-[#f8f9fa] px-3 py-2">
-                      <p className="text-sm font-semibold text-[#23282c]">
-                        {group.leads.length} leads <span className="font-normal text-[#73818f]">— {group.reason}</span>
+                  <div key={index} className="rounded-lg border border-cui-border">
+                    <div className="flex items-center justify-between border-b border-cui-light bg-cui-light px-3 py-2">
+                      <p className="text-sm font-semibold text-cui-text">
+                        {group.leads.length} leads <span className="font-normal text-cui-muted">— {group.reason}</span>
                       </p>
                       <button
                         type="button"
                         onClick={() => startReview(group)}
-                        className="inline-flex items-center gap-1.5 rounded bg-[#20a8d8] px-3 py-1.5 text-xs font-bold text-white hover:brightness-95"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-cui-primary-strong px-3 py-1.5 text-xs font-bold text-white hover:brightness-95"
                       >
                         <GitMerge className="h-3.5 w-3.5" />
                         Review merge
                       </button>
                     </div>
-                    <ul className="divide-y divide-[#f0f3f5]">
+                    <ul className="divide-y divide-cui-light">
                       {group.leads.map((lead) => (
                         <li key={lead.id} className="flex items-center gap-3 px-3 py-2 text-sm">
-                          <span className="min-w-0 flex-1 truncate font-semibold text-[#167495]">{lead.full_name}</span>
-                          <span className="hidden text-xs text-[#73818f] md:block">{lead.email ?? lead.phone ?? 'no contact'}</span>
-                          <span className="shrink-0 rounded bg-[#f0f3f5] px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#73818f]">
+                          <span className="min-w-0 flex-1 truncate font-semibold text-cui-primary-strong">{lead.full_name}</span>
+                          <span className="hidden text-xs text-cui-muted md:block">{lead.email ?? lead.phone ?? 'no contact'}</span>
+                          <span className="shrink-0 rounded-lg bg-cui-light px-1.5 py-0.5 text-[10px] font-semibold uppercase text-cui-muted">
                             {lead.contacts} contacts · {lead.renewals} renewals
                           </span>
                         </li>
@@ -193,17 +193,17 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
             </>
           ) : (
             <div className="space-y-4">
-              <p className="text-sm text-[#5c6873]">
+              <p className="text-sm text-cui-muted">
                 Pick which values win, edit anything, then confirm. Everything else is pulled automatically from all{' '}
                 {reviewing.leads.length} leads — contacts, renewals, industry, website, revenue, risk data, notes, and
                 tasks all move to the surviving record. Nothing is lost.
               </p>
 
               {/* Survivor selection */}
-              <div className="rounded border border-[#c8ced3]">
-                <div className="border-b border-[#f0f3f5] bg-[#f8f9fa] px-3 py-2 text-sm font-semibold text-[#5c6873]">Surviving record</div>
+              <div className="rounded-lg border border-cui-border">
+                <div className="border-b border-cui-light bg-cui-light px-3 py-2 text-sm font-semibold text-cui-muted">Surviving record</div>
                 {reviewing.leads.map((lead) => (
-                  <label key={lead.id} className="flex cursor-pointer items-center gap-2 border-t border-[#f0f3f5] px-3 py-2 text-sm first:border-t-0 hover:bg-[#f0f3f5]/60">
+                  <label key={lead.id} className="flex cursor-pointer items-center gap-2 border-t border-cui-light px-3 py-2 text-sm first:border-t-0 hover:bg-cui-light/60">
                     <input
                       type="radio"
                       name="survivor"
@@ -211,8 +211,8 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
                       onChange={() => setSurvivorId(lead.id)}
                       className="accent-[#20a8d8]"
                     />
-                    <span className="min-w-0 flex-1 truncate font-semibold text-[#23282c]">{lead.full_name}</span>
-                    <span className="shrink-0 text-xs text-[#73818f]">
+                    <span className="min-w-0 flex-1 truncate font-semibold text-cui-text">{lead.full_name}</span>
+                    <span className="shrink-0 text-xs text-cui-muted">
                       richness {lead.richness} · {new Date(lead.created_at).toLocaleDateString()}
                     </span>
                   </label>
@@ -220,9 +220,9 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
               </div>
 
               {/* Field comparison + final values */}
-              <div className="overflow-x-auto rounded border border-[#c8ced3]">
+              <div className="overflow-x-auto rounded-lg border border-cui-border">
                 <table className="w-full text-left text-sm">
-                  <thead className="border-b border-[#e1e6ea] bg-[#f8f9fa] text-xs uppercase tracking-wide text-[#73818f]">
+                  <thead className="border-b border-[#e1e6ea] bg-cui-light text-xs uppercase tracking-wide text-cui-muted">
                     <tr>
                       <th className="w-32 px-3 py-2 font-bold">Field</th>
                       {reviewing.leads.map((lead) => (
@@ -231,13 +231,13 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
                           {lead.full_name.slice(0, 18)}
                         </th>
                       ))}
-                      <th className="w-56 px-3 py-2 font-bold text-[#167495]">Final value (editable)</th>
+                      <th className="w-56 px-3 py-2 font-bold text-cui-primary-strong">Final value (editable)</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#f0f3f5]">
+                  <tbody className="divide-y divide-cui-light">
                     {(Object.keys(FIELD_LABELS) as FieldKey[]).map((key) => (
                       <tr key={key}>
-                        <td className="px-3 py-2 font-semibold text-[#5c6873]">{FIELD_LABELS[key]}</td>
+                        <td className="px-3 py-2 font-semibold text-cui-muted">{FIELD_LABELS[key]}</td>
                         {reviewing.leads.map((lead) => {
                           const value = fieldValue(lead, key);
                           return (
@@ -246,13 +246,13 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
                                 <button
                                   type="button"
                                   onClick={() => setFinalFields((prev) => ({ ...prev, [key]: value }))}
-                                  className={`break-all text-left hover:underline ${finalFields[key] === value ? 'font-semibold text-[#167495]' : 'text-[#23282c]'}`}
+                                  className={`break-all text-left hover:underline ${finalFields[key] === value ? 'font-semibold text-cui-primary-strong' : 'text-cui-text'}`}
                                   title="Use this value"
                                 >
                                   {value}
                                 </button>
                               ) : (
-                                <span className="text-[#c8ced3]">--</span>
+                                <span className="text-cui-border">--</span>
                               )}
                             </td>
                           );
@@ -262,7 +262,7 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
                             type="text"
                             value={finalFields[key]}
                             onChange={(event) => setFinalFields((prev) => ({ ...prev, [key]: event.target.value }))}
-                            className="w-full rounded border border-[#c8ced3] px-2 py-1 text-sm"
+                            className="w-full rounded-lg border border-cui-border px-2 py-1 text-sm"
                           />
                         </td>
                       </tr>
@@ -275,7 +275,7 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
                 <button
                   type="button"
                   onClick={() => setReviewing(null)}
-                  className="rounded border border-[#c8ced3] bg-white px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#f0f3f5]"
+                  className="rounded-lg border border-cui-border bg-white px-3 py-2 text-sm font-semibold text-cui-muted hover:bg-cui-light"
                 >
                   Cancel
                 </button>
@@ -283,7 +283,7 @@ export default function DuplicatesModal({ onClose, onMerged }: DuplicatesModalPr
                   type="button"
                   onClick={() => void confirmMerge()}
                   disabled={isMerging || !finalFields.full_name.trim()}
-                  className="inline-flex items-center gap-1.5 rounded bg-[#4dbd74] px-4 py-2 text-sm font-bold text-white hover:brightness-95 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-cui-success px-4 py-2 text-sm font-bold text-white hover:brightness-95 disabled:opacity-50"
                 >
                   <GitMerge className="h-4 w-4" />
                   {isMerging ? 'Merging…' : `Merge ${reviewing.leads.length} into 1`}

@@ -37,8 +37,8 @@ export function parseMarketingProfile(value: unknown): MarketingProfile {
   return profile;
 }
 
-export function parseOutreachSender(value: unknown): OutreachSender {
-  const sender = strings(value, DEFAULT_OUTREACH_SENDER, 1000);
+export function parseOutreachSender(value: unknown, maxLength = 1000): OutreachSender {
+  const sender = strings(value, DEFAULT_OUTREACH_SENDER, maxLength);
   if (!sender.name || !sender.agency || !sender.signature) throw new WorkspaceError('Sender name, agency and signature are required.', 400);
   return sender;
 }

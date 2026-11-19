@@ -27,10 +27,18 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    ".next-combined-release/types/**/*.ts",
+    ".next-conversation-qa/types/**/*.ts",
+    ".next-gmail-dashboard/types/**/*.ts",
+    ".next-local-alt/types/**/*.ts",
+    ".next-local/types/**/*.ts",
+    ".next-qa/types/**/*.ts",
+    ".next-settings-controls-qa/types/**/*.ts",
+    ".next-social-review-0d415d13/types/**/*.ts",
     ".next-verify/types/**/*.ts",
+    ".next-workflows-build/types/**/*.ts",
     ".next/types/**/*.ts",
-    "next-env.d.ts",
-    ".next-qa/types/**/*.ts"
+    "next-env.d.ts"
   ],
   "exclude": [
     "node_modules"

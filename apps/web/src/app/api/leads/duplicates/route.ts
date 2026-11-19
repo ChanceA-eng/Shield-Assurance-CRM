@@ -3,6 +3,7 @@ import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { requireApiSession } from '../../../../lib/api-auth';
 import { findDuplicateGroups, type IdentityRecord } from '../../../../lib/lead-identity';
 
+import { friendlyErrorMessage } from '../../../../lib/workspace-api';
 interface LeadRow extends IdentityRecord {
   address: string | null;
   line_of_business: string | null;
@@ -33,16 +34,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const { data, error } = await supabase
     .from('leads')
     .select('id,full_name,email,phone,address,line_of_business,source,status,estimated_premium,created_at,form_payload')
+    .is('archived_at', null)
     .limit(1000);
 
   if (error) {
-    return NextResponse.json({ message: error.message }, { status: 500 });
+    return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });
   }
 
   const leads = (data ?? []) as LeadRow[];

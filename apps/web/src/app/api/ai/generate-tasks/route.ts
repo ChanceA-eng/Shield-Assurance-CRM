@@ -4,6 +4,7 @@ import { getApiSession, apiActorName } from '../../../../lib/api-auth';
 import { isUuid } from '../../../../lib/workspace-validation';
 import { startOfArizonaDay } from '../../../../lib/arizona-time';
 
+import { friendlyErrorMessage } from '../../../../lib/workspace-api';
 interface TaskCandidate {
   subject: string;
   description: string;
@@ -24,7 +25,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+    return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   }
 
   const clientId = request.nextUrl.searchParams.get('clientId')?.trim();
@@ -43,9 +44,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .limit(200),
   ]);
 
-  if (clientRes.error) return NextResponse.json({ message: clientRes.error.message }, { status: 500 });
-  if (policiesRes.error) return NextResponse.json({ message: policiesRes.error.message }, { status: 500 });
-  if (openClientTasksRes.error) return NextResponse.json({ message: openClientTasksRes.error.message }, { status: 500 });
+  if (clientRes.error) return NextResponse.json({ message: friendlyErrorMessage(clientRes.error) }, { status: 500 });
+  if (policiesRes.error) return NextResponse.json({ message: friendlyErrorMessage(policiesRes.error) }, { status: 500 });
+  if (openClientTasksRes.error) return NextResponse.json({ message: friendlyErrorMessage(openClientTasksRes.error) }, { status: 500 });
   if (!clientRes.data) return NextResponse.json({ message: 'Client not found.' }, { status: 404 });
 
   const clientName = clientRes.data.full_name;
@@ -106,7 +107,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .select('id,subject');
 
     if (insertRes.error) {
-      return NextResponse.json({ message: insertRes.error.message }, { status: 500 });
+      return NextResponse.json({ message: friendlyErrorMessage(insertRes.error) }, { status: 500 });
     }
     createdCount = insertRes.data?.length ?? 0;
   }
@@ -130,7 +131,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       occurred_at: new Date().toISOString(),
     },
   ]);
-  if (activity.error) return NextResponse.json({ message: activity.error.message }, { status: 500 });
+  if (activity.error) return NextResponse.json({ message: friendlyErrorMessage(activity.error) }, { status: 500 });
 
   return NextResponse.json(
     {

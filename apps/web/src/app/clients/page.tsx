@@ -8,6 +8,13 @@ import { workspaceFetch } from '../../lib/workspace-fetch';
 import { useNotifications } from '../../context/NotificationContext';
 import { formatArizonaDateTime } from '../../lib/arizona-time';
 import type { DirectoryFilter, DirectoryResult, DirectoryRow } from '../../lib/client-directory';
+import AccountPolicyIntake from '../../components/crm/AccountPolicyIntake';
+import NewAccountIntakeForm from '../../components/crm/NewAccountIntakeForm';
+import * as Dialog from '@radix-ui/react-dialog';
+import { X } from 'lucide-react';
+import { useUnsavedChanges } from '../../context/WorkspaceNavigationContext';
+import { useStaffWorkspace } from '../../context/StaffWorkspaceContext';
+import StaffRecordList from '../../components/crm/StaffRecordList';
 
 interface Client {
   id: string;
@@ -25,18 +32,11 @@ interface Client {
   created_at: string;
 }
 
-interface NewClientForm {
-  full_name: string;
-  phone: string;
-  email: string;
-  address: string;
-  source: string;
-  email_consent: boolean;
-  sms_consent: boolean;
-  preferred_channel: 'email' | 'sms' | 'both';
+export default function ClientsPage(): JSX.Element {
+  return useStaffWorkspace() === 'full' ? <ClientsContent /> : <StaffRecordList kind="accounts" />;
 }
 
-export default function ClientsPage(): JSX.Element {
+function ClientsContent(): JSX.Element {
   const [clients, setClients] = useState<DirectoryRow[]>([]);
   const [search, setSearch] = useState('');
   const { unreadMessages } = useNotifications();
@@ -47,19 +47,11 @@ export default function ClientsPage(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showNewClient, setShowNewClient] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
-  const [newClient, setNewClient] = useState<NewClientForm>({
-    full_name: '',
-    phone: '',
-    email: '',
-    address: '',
-    source: '',
-    email_consent: false,
-    sms_consent: false,
-    preferred_channel: 'email',
-  });
+  const [editBaseline, setEditBaseline] = useState('');
+  const { confirmDiscard, markSaved } = useUnsavedChanges(Boolean(editingClient) && JSON.stringify(editingClient) !== editBaseline);
+  const closeEditor = (): void => { if (!isSavingEdit && confirmDiscard()) setEditingClient(null); };
 
   const fetchClients = async (): Promise<void> => {
     setLoading(true);
@@ -73,7 +65,7 @@ export default function ClientsPage(): JSX.Element {
       setClients(data.items);
       setTotal(data.total);
     } catch (failure) {
-      if (version === loadVersion.current) setError(failure instanceof Error ? failure.message : 'Failed to load accounts.');
+      if (version === loadVersion.current) setError(failure instanceof Error ? failure.message : 'Accounts could not be loaded. Refresh the page to try again.');
     } finally {
       if (version === loadVersion.current) setLoading(false);
     }
@@ -84,52 +76,18 @@ export default function ClientsPage(): JSX.Element {
     return () => { clearTimeout(timer); loadVersion.current++; };
   }, [search, filter, page]);
 
-  const handleCreateClient = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
-    e.preventDefault();
-    setIsCreating(true);
-    setError(null);
-
-    const res = await fetch('/api/clients', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newClient),
-    });
-
-    if (!res.ok) {
-      const payload = (await res.json().catch(() => ({ message: 'Failed to create client.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to create client.');
-      setIsCreating(false);
-      return;
-    }
-
-    setIsCreating(false);
-    setShowNewClient(false);
-    setNewClient({ full_name: '', phone: '', email: '', address: '', source: '', email_consent: false, sms_consent: false, preferred_channel: 'email' });
-    await fetchClients();
-  };
-
   const handleUpdateClient = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
     if (!editingClient) return;
     setIsSavingEdit(true);
     setError(null);
 
-    const res = await fetch('/api/clients', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingClient),
-    });
-
-    if (!res.ok) {
-      const payload = (await res.json().catch(() => ({ message: 'Failed to update client.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to update client.');
-      setIsSavingEdit(false);
-      return;
-    }
-
-    setIsSavingEdit(false);
-    setEditingClient(null);
-    await fetchClients();
+    try {
+      await workspaceFetch('/api/clients', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editingClient) });
+      markSaved(); setEditingClient(null); await fetchClients();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Account could not be updated. Please try again.');
+    } finally { setIsSavingEdit(false); }
   };
 
   const handleRemoveClient = async (id: string): Promise<void> => {
@@ -143,8 +101,8 @@ export default function ClientsPage(): JSX.Element {
     });
 
     if (!res.ok) {
-      const payload = (await res.json().catch(() => ({ message: 'Failed to remove client.' }))) as { message?: string };
-      setError(payload.message ?? 'Failed to remove client.');
+      const payload = (await res.json().catch(() => ({ message: 'Client could not be removed. Please try again.' }))) as { message?: string };
+      setError(payload.message ?? 'Client could not be removed. Please try again.');
       return;
     }
 
@@ -154,11 +112,11 @@ export default function ClientsPage(): JSX.Element {
   return (
     <SectionLayout title="Accounts">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-cui-muted">Your book of business and prospect accounts. Client status comes from placed policies.</p>
+        <p className="text-sm text-cui-muted">{total} accounts in your book of business.</p>
         <button
           type="button"
           onClick={() => setShowNewClient(true)}
-          className="rounded border border-[#1b8eb7] bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7]"
+          className="crm-button-primary"
         >
           + New Account
         </button>
@@ -169,26 +127,26 @@ export default function ClientsPage(): JSX.Element {
           <label className="block text-sm font-semibold text-cui-text">Search accounts
             <input type="search" maxLength={200} value={search} onChange={(event) => { setSearch(event.target.value); setPage(0); }}
               placeholder="Name, business, email, phone or policy number"
-              className="mt-2 w-full rounded border border-cui-border px-3 py-2 font-normal" />
+              className="crm-input mt-2 font-normal" />
           </label>
           <div className="mt-3 flex flex-wrap gap-2" aria-label="Account filters">
             {([['all', 'All accounts'], ['active', 'Active clients'], ['prospect', 'Prospects'], ['former', 'Former clients'],
               ['renewals', 'Renewals in 30 days'], ['overdue', 'Overdue work']] as const).map(([value, label]) =>
               <button key={value} type="button" aria-pressed={filter === value} onClick={() => { setFilter(value); setPage(0); }}
-                className={`rounded border px-3 py-1.5 text-sm ${filter === value ? 'border-cui-primary bg-cui-primary text-white' : 'border-cui-border text-cui-text'}`}>{label}</button>)}
+                className="crm-tab">{label}</button>)}
           </div>
         </CardBody>
       </Card>
-      {error ? <div role="alert" className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error} <button onClick={() => void fetchClients()} className="underline">Retry</button></div> : null}
-      {loading ? <div className="text-sm text-[#73818f]">Loading clients...</div> : null}
+      {error ? <div role="alert" className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error} <button onClick={() => void fetchClients()} className="underline">Retry</button></div> : null}
+      {loading ? <div className="text-sm text-cui-muted">Loading clients...</div> : null}
 
       {!loading && !error ? (
-        <div className="overflow-x-auto rounded border border-cui-border bg-white shadow-sm">
+        <div className="overflow-x-auto rounded-xl border border-cui-border bg-cui-panel shadow-card">
           {clients.length === 0 ? (
-            <div className="p-4 text-sm text-[#73818f]">No clients found.</div>
+            <div className="p-4 text-sm text-cui-muted">No clients found.</div>
           ) : (
             <table className="w-full text-left text-sm">
-              <thead className="bg-[#f8f9fa] text-[#73818f]">
+              <thead className="bg-cui-light text-cui-muted">
                 <tr>
                   <th className="px-3 py-2">Account / Contact</th>
                   <th className="px-3 py-2">Policy status</th>
@@ -199,8 +157,8 @@ export default function ClientsPage(): JSX.Element {
               </thead>
               <tbody>
                 {clients.map((client) => (
-                  <tr key={client.id} className="border-t border-[#f0f3f5]">
-                    <td className="px-3 py-2 font-semibold text-[#20a8d8]">
+                  <tr key={client.id} className="border-t border-cui-border/60 transition hover:bg-cui-light/70">
+                    <td className="px-3 py-2 font-semibold text-cui-primary-strong">
                       <div className="flex items-center gap-2">
                         <Link href={`/clients/${client.id}`} className="hover:underline">
                           {client.full_name}
@@ -219,7 +177,7 @@ export default function ClientsPage(): JSX.Element {
                       <p className="mt-1 font-normal text-cui-muted">{client.email || 'Email not recorded'}</p>
                       <p className="font-normal text-cui-muted">{client.phone || 'Phone not recorded'}</p>
                     </td>
-                    <td className="px-3 py-2"><span className="rounded bg-cui-light px-2 py-1 text-xs font-semibold">{client.lifecycle}</span>
+                    <td className="px-3 py-2"><span className="rounded-lg bg-cui-light px-2 py-1 text-xs font-semibold">{client.lifecycle}</span>
                       <p className="mt-2 text-xs text-cui-muted">{client.policy_count} policies</p>
                       {client.renewal_date ? <p className="text-xs text-cui-muted">Next expiration {client.renewal_date}</p> : null}
                     </td>
@@ -230,7 +188,7 @@ export default function ClientsPage(): JSX.Element {
                     </td>
                     <td className="px-3 py-2">{client.assigned_producer || 'Unassigned'}</td>
                     <td className="px-3 py-2 text-xs">
-                      <button type="button" className="mr-2 font-semibold text-[#167495] hover:underline" onClick={() => setEditingClient(client)}>
+                      <button type="button" className="mr-2 font-semibold text-cui-primary-strong hover:underline" onClick={() => { setEditBaseline(JSON.stringify(client)); setEditingClient(client); setError(null); }}>
                         Edit
                       </button>
                       <button type="button" className="font-semibold text-[#c23934] hover:underline" onClick={() => void handleRemoveClient(client.id)}>
@@ -247,138 +205,63 @@ export default function ClientsPage(): JSX.Element {
       {!loading && !error ? <div className="mt-3 flex items-center justify-between gap-3 text-sm text-cui-muted">
         <p role="status">{total} matching accounts · Page {page + 1} of {Math.max(1, Math.ceil(total / 25))}</p>
         <div className="flex gap-2">
-          <button disabled={page === 0} onClick={() => setPage((value) => value - 1)} className="rounded border border-cui-border px-3 py-1 disabled:opacity-40">Previous</button>
-          <button disabled={(page + 1) * 25 >= total} onClick={() => setPage((value) => value + 1)} className="rounded border border-cui-border px-3 py-1 disabled:opacity-40">Next</button>
+          <button disabled={page === 0} onClick={() => setPage((value) => value - 1)} className="crm-button">Previous</button>
+          <button disabled={(page + 1) * 25 >= total} onClick={() => setPage((value) => value + 1)} className="crm-button">Next</button>
         </div>
       </div> : null}
 
       {showNewClient ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
-            <h2 className="mb-3 text-lg font-bold text-[#23282c]">New Account</h2>
-            <form onSubmit={handleCreateClient} className="space-y-2">
-              <input
-                required
-                type="text"
-                placeholder="Full Name"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
-                value={newClient.full_name}
-                onChange={(e) => setNewClient((prev) => ({ ...prev, full_name: e.target.value }))}
-              />
-              <input
-                type="text"
-                placeholder="Phone"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
-                value={newClient.phone}
-                onChange={(e) => setNewClient((prev) => ({ ...prev, phone: e.target.value }))}
-              />
-              <input
-                type="email"
-                placeholder="Email"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
-                value={newClient.email}
-                onChange={(e) => setNewClient((prev) => ({ ...prev, email: e.target.value }))}
-              />
-              <input
-                type="text"
-                placeholder="Address"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
-                value={newClient.address}
-                onChange={(e) => setNewClient((prev) => ({ ...prev, address: e.target.value }))}
-              />
-              <input
-                required
-                type="text"
-                placeholder="Source"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
-                value={newClient.source}
-                onChange={(e) => setNewClient((prev) => ({ ...prev, source: e.target.value }))}
-              />
-
-              <label className="flex items-center gap-2 text-sm text-[#5c6873]">
-                <input
-                  type="checkbox"
-                  checked={newClient.email_consent}
-                  onChange={(e) => setNewClient((prev) => ({ ...prev, email_consent: e.target.checked }))}
-                />
-                I agree to receive emails about my insurance.
-              </label>
-
-              <label className="flex items-center gap-2 text-sm text-[#5c6873]">
-                <input
-                  type="checkbox"
-                  checked={newClient.sms_consent}
-                  onChange={(e) => setNewClient((prev) => ({ ...prev, sms_consent: e.target.checked }))}
-                />
-                I agree to receive text messages about my insurance.
-              </label>
-
-              <select
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
-                value={newClient.preferred_channel}
-                onChange={(e) => setNewClient((prev) => ({ ...prev, preferred_channel: e.target.value as NewClientForm['preferred_channel'] }))}
-              >
-                <option value="email">Preferred Contact: Email</option>
-                <option value="sms">Preferred Contact: SMS</option>
-                <option value="both">Preferred Contact: Both</option>
-              </select>
-
-              <button
-                type="submit"
-                disabled={isCreating}
-                className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:opacity-60"
-              >
-                {isCreating ? 'Saving Client...' : 'Save Client'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowNewClient(false)}
-                className="w-full rounded bg-[#e4e5e6] px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#c8ced3]"
-              >
-                Cancel
-              </button>
-            </form>
-          </div>
-        </div>
+        <AccountPolicyIntake intent="account">
+          <NewAccountIntakeForm onCreated={async () => { setShowNewClient(false); await fetchClients(); }}
+            onCancel={() => setShowNewClient(false)} />
+        </AccountPolicyIntake>
       ) : null}
 
       {editingClient ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded border border-[#c8ced3] bg-white p-4 shadow-xl">
-            <h2 className="mb-3 text-lg font-bold text-[#23282c]">Edit Client</h2>
+        <Dialog.Root open onOpenChange={(open) => { if (!open) closeEditor(); }}><Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-[100] bg-slate-950/60 backdrop-blur-sm" />
+          <Dialog.Content className="crm-shell fixed left-1/2 top-1/2 z-[101] max-h-[90dvh] w-[min(94vw,28rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-cui-border bg-cui-panel p-5 text-cui-text shadow-panel">
+            <div className="mb-4 flex items-center justify-between"><Dialog.Title className="text-lg font-bold">Edit account</Dialog.Title>
+              <button type="button" onClick={closeEditor} disabled={isSavingEdit} className="rounded-lg p-2 text-cui-muted hover:bg-cui-light" aria-label="Close account editor"><X className="h-4 w-4" /></button></div>
+            <Dialog.Description className="sr-only">Update account contact information and communication preferences.</Dialog.Description>
             <form onSubmit={handleUpdateClient} className="space-y-2">
               <input
                 required
                 type="text"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                aria-label="Account name"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingClient.full_name}
                 onChange={(e) => setEditingClient((prev) => (prev ? { ...prev, full_name: e.target.value } : prev))}
               />
               <input
                 type="text"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                aria-label="Phone"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingClient.phone || ''}
                 onChange={(e) => setEditingClient((prev) => (prev ? { ...prev, phone: e.target.value } : prev))}
               />
               <input
                 type="email"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                aria-label="Email"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingClient.email || ''}
                 onChange={(e) => setEditingClient((prev) => (prev ? { ...prev, email: e.target.value } : prev))}
               />
               <input
                 type="text"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                aria-label="Address"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingClient.address || ''}
                 onChange={(e) => setEditingClient((prev) => (prev ? { ...prev, address: e.target.value } : prev))}
               />
               <input
                 type="text"
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                aria-label="Source"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingClient.source || ''}
                 onChange={(e) => setEditingClient((prev) => (prev ? { ...prev, source: e.target.value } : prev))}
               />
-              <label className="flex items-center gap-2 text-sm text-[#5c6873]">
+              <label className="flex items-center gap-2 text-sm text-cui-muted">
                 <input
                   type="checkbox"
                   checked={Boolean(editingClient.email_consent)}
@@ -386,7 +269,7 @@ export default function ClientsPage(): JSX.Element {
                 />
                 Email consent
               </label>
-              <label className="flex items-center gap-2 text-sm text-[#5c6873]">
+              <label className="flex items-center gap-2 text-sm text-cui-muted">
                 <input
                   type="checkbox"
                   checked={Boolean(editingClient.sms_consent)}
@@ -395,7 +278,7 @@ export default function ClientsPage(): JSX.Element {
                 SMS consent
               </label>
               <select
-                className="w-full rounded border border-[#c8ced3] px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-cui-border px-3 py-2 text-sm"
                 value={editingClient.preferred_channel || 'email'}
                 onChange={(e) =>
                   setEditingClient((prev) => (prev ? { ...prev, preferred_channel: e.target.value as Client['preferred_channel'] } : prev))
@@ -406,23 +289,24 @@ export default function ClientsPage(): JSX.Element {
                 <option value="both">Preferred Contact: Both</option>
               </select>
 
+              {error ? <p role="alert" className="text-sm text-rose-700">{error}</p> : null}
               <button
                 type="submit"
                 disabled={isSavingEdit}
-                className="w-full rounded bg-[#20a8d8] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1b8eb7] disabled:opacity-60"
+                className="crm-button-primary w-full"
               >
                 {isSavingEdit ? 'Saving Changes...' : 'Save Changes'}
               </button>
               <button
                 type="button"
-                onClick={() => setEditingClient(null)}
-                className="w-full rounded bg-[#e4e5e6] px-3 py-2 text-sm font-semibold text-[#5c6873] hover:bg-[#c8ced3]"
+                onClick={closeEditor}
+                className="crm-button w-full"
               >
                 Cancel
               </button>
             </form>
-          </div>
-        </div>
+          </Dialog.Content>
+        </Dialog.Portal></Dialog.Root>
       ) : null}
     </SectionLayout>
   );

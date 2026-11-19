@@ -2,6 +2,8 @@
 
 import React from 'react';
 import { usePathname } from 'next/navigation';
+import Link from 'next/link';
+import type { Route } from 'next';
 
 /**
  * Standard page content wrapper: CoreUI-style page header plus content area.
@@ -20,16 +22,17 @@ export default function SectionLayout({ title, children }: { title: string; chil
     : `/learning/module/${moduleId}`;
 
   return (
-    <div className="flex min-h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-cui-border/60 bg-white px-6 py-3 shadow-card">
-        <h1 className="flex-1 text-xl font-bold tracking-tight text-cui-text">{title}</h1>
+    <div className="flex min-h-full min-w-0 flex-col" data-crm-page>
+      <header className="flex min-h-16 flex-wrap items-center gap-3 border-b border-cui-border bg-cui-panel px-4 py-4 md:px-6">
+        <span className="h-7 w-1 rounded-full bg-cui-primary" aria-hidden="true" />
+        <h1 className="min-w-0 flex-1 text-2xl font-bold tracking-tight text-cui-text">{title}</h1>
         {onModuleRoute ? (
-          <a
-            href={exitHref}
-            className="inline-flex items-center rounded border border-cui-danger/40 bg-cui-danger/10 px-3 py-2 text-sm font-bold text-cui-danger transition hover:bg-cui-danger/20"
+          <Link
+            href={exitHref as Route}
+            className="crm-button-danger"
           >
             Exit
-          </a>
+          </Link>
         ) : null}
       </header>
       <main className="flex-1 p-4 md:p-6">{children}</main>

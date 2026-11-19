@@ -21,13 +21,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const rows: IntakeRow[] = [];
     for (let offset = 0; ; offset += 100) {
       const { data, error } = await supabase.from('lead_intake_events')
         .select('id,lead_id,submitted_at,received_at,time_basis,snapshot,leads!inner(full_name,line_of_business,account_id,industry)')
-        .is('opened_at', null).is('dismissed_at', null).is('handled_at', null)
+        .is('opened_at', null).is('dismissed_at', null).is('handled_at', null).is('leads.archived_at', null)
         .order('submitted_at', { ascending: false }).order('received_at', { ascending: false }).order('id', { ascending: false })
         .range(offset, offset + 99).returns<IntakeRow[]>();
       if (error) throw databaseError(error);
@@ -58,7 +58,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const supabase = getSupabaseServerClient();
-  if (!supabase) return NextResponse.json({ message: 'Supabase is not configured.' }, { status: 503 });
+  if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
     const body = await workspaceBody(request);
     const ids: unknown = body.ids ?? (body.id ? [body.id] : null);
