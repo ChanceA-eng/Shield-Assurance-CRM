@@ -8,6 +8,8 @@ coverage
 .DS_Store
 .vercel
 .env*
+.env.example
+/README.md
 **/.next-qa
 **/.next-local
 **/.next-local-alt
