@@ -31,7 +31,7 @@ export default function EmailTextEditor({ value, onChange, disabled = false, lab
       } catch (failure) { setError(failure instanceof Error ? failure.message : 'Unsupported formatting.'); }
     },
   });
-  useEffect(() => { editor?.setEditable(!disabled); }, [editor, disabled]);
+  useEffect(() => { editor?.setEditable(!disabled, false); }, [editor, disabled]);
   useEffect(() => {
     const doc = value ?? documentFromText('');
     if (editor && JSON.stringify(editor.getJSON()) !== JSON.stringify(doc)) editor.commands.setContent(doc, { emitUpdate: false });
