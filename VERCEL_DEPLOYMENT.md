@@ -1,6 +1,14 @@
 # Vercel Deployment Checklist
 
-## Rich email workspace (local, not deployed)
+## Rich email workspace
+
+Hosted schema preparation on November 19, 2026 applied eight reviewed
+migrations: Team foundation and Owner protection, active Tasks, Team request
+and dispatch authorization, staff policy inbox, branding images, and rich email.
+They passed a transactional dry-run before application; the hosted schema
+preflight passed afterward. Older migration-history gaps were not replayed.
+Team remains disabled with `enforcement_version=0`; publishing this release
+does not complete or activate the separate full Team rollout.
 
 Templates now support an email-safe block workspace: one to three columns,
 draggable text/image/button/divider/spacer blocks, borders, spacing, colors,
@@ -29,7 +37,7 @@ Verify image upload, personal signature save/reload and delivery previews on
 the release candidate before promoting it. Do not send customer emails as a
 test or enable the separate Team rollout based on these editor checks.
 
-## Team invitation fix (local, not deployed)
+## Team invitation fix
 
 The existing agency owner can invite producers without enabling the personal
 Gmail rollout or configuring Pub/Sub. Invitations still use Supabase Auth
@@ -43,7 +51,7 @@ already have active membership and verify the owner can still sign in. The
 current invite option grants producer access to customer records, with explicit
 owner confirmation; do not use it to invite limited-access content staff.
 
-## Team access foundation (local, not activated)
+## Team access foundation (not activated)
 
 The additive `20261110120000_team_access_foundation.sql` migration introduces
 editable role bundles, scoped member exceptions, versioned/audited access changes

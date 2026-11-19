@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createClient, type User } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from './supabase-server';
@@ -8,6 +8,7 @@ import { POST as addAsset, PATCH as changeAsset } from '../app/api/record-assets
 import { POST as addNote, PATCH as changeNote } from '../app/api/interactions/route';
 import { GET as getTasks, PATCH as changeTask } from '../app/api/tasks/route';
 import { GET as getLead } from '../app/api/leads/[id]/route';
+import { POST as submitLead } from '../app/api/leads/route';
 import { GET as getBriefing } from '../app/api/briefing/route';
 import { GET as getRecent } from '../app/api/recent/route';
 import { GET as getAttention, PATCH as acknowledgeAttention } from '../app/api/leads/attention/route';
@@ -58,6 +59,41 @@ beforeEach(() => {
 });
 
 describe('Workspace route contracts', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('lets authorized website pushes fill receipt-linked leads without replacing producer edits', async () => {
+    vi.stubEnv('WEBSITE_SYNC_TOKEN', 'website-test-token');
+    respond = (url, method) => {
+      if (url.pathname.endsWith('/website_submission_receipts_for')) return json([{ position: 0, lead_id: leadId }]);
+      if (url.pathname.endsWith('/leads') && method === 'GET') return json({ id: leadId, address: 'Producer address', zip: null });
+      if (url.pathname.endsWith('/leads') && method === 'PATCH') return new Response(null, { status: 204 });
+      return json({ message: 'Unexpected request' }, 500);
+    };
+    const response = await submitLead(new NextRequest('http://localhost:3000/api/leads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer website-test-token' },
+      body: JSON.stringify({ full_name: 'Synthetic lead', pipeline_push: true, submission_id: 'synthetic', address: 'Website address', zip: '85001' }),
+    }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: leadId, duplicate: true, updatedFields: ['zip'] });
+    const update = calls.find((call) => call.method === 'PATCH');
+    expect(update?.body).toEqual({ zip: '85001' });
+    expect(update?.url.searchParams.get('id')).toBe(`eq.${leadId}`);
+  });
+
+  it('does not refill duplicate submissions without authorization or recreate deleted receipt-linked leads', async () => {
+    vi.stubEnv('WEBSITE_SYNC_TOKEN', 'website-test-token');
+    for (const receiptId of [leadId, null]) {
+      calls.length = 0;
+      respond = () => json([{ position: 0, lead_id: receiptId }]);
+      const response = await submitLead(request('/api/leads', 'POST', { full_name: 'Synthetic lead', pipeline_push: true }));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ id: receiptId, duplicate: true });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url.pathname).toContain('/rpc/website_submission_receipts_for');
+    }
+  });
+
   it('authenticates placement documents and policy history before queries', async () => {
     const denied = NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     vi.mocked(getApiSession).mockResolvedValue({ user: null, error: denied });

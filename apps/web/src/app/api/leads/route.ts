@@ -11,6 +11,7 @@ import { isUuid } from '../../../lib/workspace-validation';
 import { WorkspaceError } from '../../../lib/record-scope';
 import { describeLeadArchive, parseLeadArchiveResults } from '../../../lib/lead-archive';
 import { leadContactRestrictions } from '../../../lib/message-delivery';
+import { FILLABLE_COLUMNS, isAuthorizedWebsitePush, missingFieldUpdates } from '../../../lib/website-push';
 
 interface NewLeadPayload {
   id?: string;
@@ -199,6 +200,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     zip: normalizeText(payload.zip),
     state: normalizeText(payload.state),
     business: normalizeText(payload.business),
+    industry: normalizeText(payload.industry),
+    address: normalizeText(payload.address),
     primary_coverage: normalizeText(payload.primaryCoverage),
     vehicle_details: normalizeText(payload.vehicleDetails),
     details,
@@ -211,7 +214,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   try {
     const receipts = await websiteSubmissionReceipts(supabase, [payload]);
-    if (receipts.has(0)) return jsonWithCors(request, { id: receipts.get(0), duplicate: true }, { status: 200 });
+    if (receipts.has(0)) {
+      const leadId = receipts.get(0);
+      if (!leadId || !isAuthorizedWebsitePush(payload, request.headers.get('authorization'))) {
+        return jsonWithCors(request, { id: leadId, duplicate: true }, { status: 200 });
+      }
+      const card = await supabase.from('leads').select(FILLABLE_COLUMNS).eq('id', leadId).maybeSingle();
+      if (card.error) throw databaseError(card.error);
+      const updates = card.data ? missingFieldUpdates(card.data, payload) : {};
+      if (Object.keys(updates).length) {
+        const saved = await supabase.from('leads').update(updates).eq('id', leadId);
+        if (saved.error) throw databaseError(saved.error);
+      }
+      return jsonWithCors(request, { id: leadId, duplicate: true, updatedFields: Object.keys(updates) }, { status: 200 });
+    }
   } catch (error) { return workspaceApiError(error, 'leads/submission-receipt'); }
   // Resubmission check: a repeat inquiry is a hot signal, not a new lead.
   const email = normalizeText(payload.email)?.toLowerCase() ?? null;

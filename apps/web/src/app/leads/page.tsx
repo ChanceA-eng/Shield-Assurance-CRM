@@ -626,7 +626,7 @@ function LeadsPageInner(): JSX.Element {
   return (
     <SectionLayout title="Leads">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-cui-muted">Manage open insurance leads and intake.</p>
+        <p className="text-sm text-cui-muted">Manage open insurance leads and new requests.</p>
         <div className="flex flex-wrap items-center gap-2">
           <Link
             href="/leads/import"

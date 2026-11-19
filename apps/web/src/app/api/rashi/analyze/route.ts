@@ -432,7 +432,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const [riskAnalysis, bundleAnalysis] = await Promise.all([
       askRashi({
         question:
-          `Analyze this prospect against all relevant carrier guidelines for underwriting risks, eligibility blockers, exclusions, and missing intake data. `
+          `Analyze this prospect against all relevant carrier guidelines for underwriting risks, eligibility blockers, exclusions, and missing application data. `
           + `Prioritize actionable underwriting alerts.\n\nProspect profile:\n${profileBlock}`,
         topK,
         stateContext: snapshot.state ?? undefined,

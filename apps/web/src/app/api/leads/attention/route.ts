@@ -63,7 +63,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     const body = await workspaceBody(request);
     const ids: unknown = body.ids ?? (body.id ? [body.id] : null);
     if (!Array.isArray(ids) || ids.length === 0 || !ids.every(isUuid)) throw new WorkspaceError('Valid submission ids are required.', 400);
-    if (body.action !== 'opened' && body.action !== 'dismissed' && body.action !== 'handled') throw new WorkspaceError('Invalid intake action.', 400);
+    if (body.action !== 'opened' && body.action !== 'dismissed' && body.action !== 'handled') throw new WorkspaceError('Invalid request action.', 400);
     const { data, error } = await supabase.rpc('acknowledge_intake_events', {
       p_ids: [...new Set(ids)], p_action: body.action, p_actor: session.user.id,
     });

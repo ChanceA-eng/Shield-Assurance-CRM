@@ -17,10 +17,10 @@ const supabase = createClient(url, serviceRoleKey, {
 });
 
 const checks = [
-  supabase.from('email_signature_designs').select('user_id,document,rows', { head: true }),
-  supabase.from('scheduled_messages').select('body_document', { head: true }),
-  supabase.from('agent_email_attempts').select('email_formatting', { head: true }),
-  supabase.from('active_workspace_tasks').select('id,related_type,related_id,status', { head: true }),
+  supabase.from('email_signature_designs').select('user_id,document,rows').limit(0),
+  supabase.from('scheduled_messages').select('body_document').limit(0),
+  supabase.from('agent_email_attempts').select('email_formatting').limit(0),
+  supabase.from('active_workspace_tasks').select('id,related_type,related_id,status').limit(0),
   supabase.from('workers_comp_evidence').select('id,lead_id,client_id,revision,evidence,updated_at,updated_by', { head: true }),
   supabase.from('record_contact_preferences').select('lead_id,client_id,do_not_contact,reason,updated_at,updated_by', { head: true }),
   supabase.rpc('lead_contact_restrictions', { p_leads: [] }),
