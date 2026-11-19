@@ -80,10 +80,15 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     const origin = request.headers.get('origin');
     const host = request.headers.get('host');
     const hostOrigin = host ? `${request.nextUrl.protocol}//${host}` : null;
+    const signatureImage = pathname === '/api/account/signature-image' && request.method === 'POST';
+    const validContentType = request.headers.get('content-type')?.toLowerCase()
+      .startsWith(signatureImage ? 'multipart/form-data;' : 'application/json');
     if (request.headers.get('sec-fetch-site') === 'cross-site'
       || (origin && origin !== request.nextUrl.origin && origin !== hostOrigin && origin !== process.env.CRM_WEB_ORIGIN)
-      || !request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) {
-      return NextResponse.json({ message: 'Send account changes from this CRM using JSON.' }, { status: 403 });
+      || !validContentType) {
+      return NextResponse.json({ message: signatureImage
+        ? 'Upload signature images from this CRM using its image picker.'
+        : 'Send account changes from this CRM using JSON.' }, { status: 403 });
     }
   }
 

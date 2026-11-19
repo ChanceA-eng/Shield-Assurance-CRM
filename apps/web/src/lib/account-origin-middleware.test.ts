@@ -56,6 +56,28 @@ it('allows a same-origin JSON account request when Next normalizes the local hos
   expect((await middleware(request)).status).toBe(401);
 });
 
+it('allows signature image multipart uploads through the same-origin guard without bypassing authentication', async () => {
+  const headers = { host: 'crm.example.invalid', origin: 'https://crm.example.invalid',
+    'sec-fetch-site': 'same-origin', 'content-type': 'multipart/form-data; boundary=example' };
+  const request = new NextRequest('https://crm.example.invalid/api/account/signature-image', {
+    method: 'POST', headers, body: '--example--',
+  });
+  expect((await middleware(request)).status).toBe(401);
+  expect((await middleware(new NextRequest('https://crm.example.invalid/api/account', {
+    method: 'PATCH', headers, body: '--example--',
+  }))).status).toBe(403);
+});
+
+it('rejects cross-origin signature image uploads before authentication', async () => {
+  const request = new NextRequest('https://crm.example.invalid/api/account/signature-image', {
+    method: 'POST', body: '--example--',
+    headers: { origin: 'https://unrelated.example', 'sec-fetch-site': 'cross-site',
+      'content-type': 'multipart/form-data; boundary=example' },
+  });
+  expect((await middleware(request)).status).toBe(403);
+  expect(getUser).not.toHaveBeenCalled();
+});
+
 it.each([
   { origin: 'https://unrelated.example', 'sec-fetch-site': 'cross-site', 'content-type': 'application/json' },
   { origin: 'https://unrelated.example', 'sec-fetch-site': 'same-site', 'content-type': 'application/json' },
