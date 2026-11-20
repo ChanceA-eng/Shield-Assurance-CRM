@@ -6,6 +6,7 @@ import SectionLayout from './SectionLayout';
 import { staffRecords, type StaffRecordKind } from '../../lib/staff-records';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 import { StaffPolicyInbox, StaffPolicyRequestDialog } from './StaffPolicyRequests';
+import { downloadAccountDocument, uploadAccountDocument, type AccountDocumentView } from '../../lib/account-document-client';
 
 interface Row {
   id: string;
@@ -21,6 +22,54 @@ interface Row {
   renewal_date?: string;
   canEdit?: boolean;
   canRequest?: boolean;
+  canReadDocuments?: boolean;
+  canUploadDocuments?: boolean;
+}
+
+function AccountDocuments({ row, onClose }: { row: Row; onClose: () => void }): JSX.Element {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [files, setFiles] = useState<AccountDocumentView[]>();
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    dialog.current?.showModal();
+    const controller = new AbortController();
+    void workspaceFetch<AccountDocumentView[]>(`/api/clients/${row.id}/files`, { signal: controller.signal }).then(setFiles)
+      .catch((failure: unknown) => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Could not load documents.'); });
+    return () => controller.abort();
+  }, [row.id]);
+  return <dialog ref={dialog} onClose={onClose} onCancel={(event) => { if (busy) event.preventDefault(); }}
+    aria-labelledby="staff-account-documents-title" className="w-full max-w-lg rounded-lg border border-cui-border bg-cui-panel p-5 text-cui-text shadow-xl backdrop:bg-black/50">
+    <h2 id="staff-account-documents-title" className="mb-3 text-lg font-semibold">Documents for {row.full_name}</h2>
+    {error && <p role="alert" className="mb-2 text-sm text-cui-danger">{error}</p>}
+    {files?.length ? <ul className="max-h-64 divide-y divide-cui-border overflow-auto">{files.map((entry) => <li key={entry.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+      <span className="break-all">{entry.file_name}</span>
+      {entry.download_url && <button className="crm-button" type="button" disabled={busy} onClick={async () => {
+        setError(''); setBusy(true);
+        try {
+          const result = await downloadAccountDocument(entry);
+          if (!result.ok) setError(result.message);
+        } finally { setBusy(false); }
+      }}>Download</button>}
+    </li>)}</ul> : <p className="text-sm text-cui-muted">{files ? 'No documents.' : !error ? 'Loading documents...' : null}</p>}
+    {row.canUploadDocuments && files && <form className="mt-4 flex flex-wrap items-end gap-2" onSubmit={async (event) => {
+      event.preventDefault();
+      if (!file || busy) return;
+      const form = event.currentTarget;
+      setError(''); setBusy(true);
+      try {
+        const result = await uploadAccountDocument(row.id, file);
+        if (!result.ok) { setError(result.message); return; }
+        setFiles((current) => [result.document, ...(current ?? []).filter((entry) => entry.id !== result.document.id)]);
+        form.reset(); setFile(null);
+      } finally { setBusy(false); }
+    }}>
+      <label className="text-sm">File<input type="file" className="block max-w-full" required disabled={busy} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
+      <button className="crm-button-primary" type="submit" disabled={!file || busy}>Upload</button>
+    </form>}
+    <div className="mt-4 flex justify-end"><button className="crm-button" type="button" disabled={busy} onClick={() => dialog.current?.close()}>Close</button></div>
+  </dialog>;
 }
 
 function AccountContactEditor({ row, onClose, onSaved }: { row: Row; onClose: () => void; onSaved: () => void }): JSX.Element {
@@ -82,6 +131,7 @@ export default function StaffRecordList({ kind }: { kind: StaffRecordKind }): JS
   const [result, setResult] = useState<{ rows: Row[]; more: boolean } | null>(null);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<Row | null>(null);
+  const [viewingDocuments, setViewingDocuments] = useState<Row | null>(null);
   const [requesting, setRequesting] = useState<Row | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -98,7 +148,7 @@ export default function StaffRecordList({ kind }: { kind: StaffRecordKind }): JS
   }, [kind, label, query, retry]);
 
   const changePage = (page: number): void => { setResult(null); setQuery({ ...query, page }); };
-  const hasActions = result?.rows.some((row) => row.canEdit || row.canRequest);
+  const hasActions = result?.rows.some((row) => row.canEdit || row.canRequest || row.canReadDocuments);
   return <SectionLayout title={label}>
     {kind === 'policies' ? <StaffPolicyInbox /> : null}
     <Card>
@@ -130,9 +180,10 @@ export default function StaffRecordList({ kind }: { kind: StaffRecordKind }): JS
                   : kind === 'leads' ? [row.full_name, row.email, row.phone, row.line_of_business, row.status] : [row.full_name, row.email, row.phone, row.account_type];
                 return <tr key={row.id} className="border-b border-cui-border">{values.map((value, index) =>
                   <td key={index} className="px-3 py-2">{value || '-'}</td>)}
-                  {hasActions ? <td className="px-3 py-2">{row.canEdit ? <button className="crm-button"
+                  {hasActions ? <td className="space-x-2 px-3 py-2">{row.canEdit ? <button className="crm-button"
                     aria-label={`Edit contact for ${row.full_name}`} onClick={() => { setSaved(false); setEditing(row); }}>Edit contact</button>
-                    : row.canRequest ? <button className="crm-button" onClick={() => { setSubmitted(false); setRequesting(row); }}>Request change</button> : null}</td> : null}
+                    : row.canRequest ? <button className="crm-button" onClick={() => { setSubmitted(false); setRequesting(row); }}>Request change</button> : null}
+                    {row.canReadDocuments && <button className="crm-button" onClick={() => setViewingDocuments(row)}>Documents</button>}</td> : null}
                 </tr>;
               })}</tbody>
             </table>
@@ -146,6 +197,7 @@ export default function StaffRecordList({ kind }: { kind: StaffRecordKind }): JS
     </Card>
     {editing ? <AccountContactEditor row={editing} onClose={() => setEditing(null)}
       onSaved={() => { setSaved(true); setRetry((value) => value + 1); }} /> : null}
+    {viewingDocuments && <AccountDocuments row={viewingDocuments} onClose={() => setViewingDocuments(null)} />}
     {requesting ? <StaffPolicyRequestDialog id={requesting.id} label={`${requesting.account?.full_name ?? 'Policy'} ${requesting.policy_number ?? ''}`.trim()}
       onClose={() => setRequesting(null)} onSubmitted={() => setSubmitted(true)} /> : null}
   </SectionLayout>;

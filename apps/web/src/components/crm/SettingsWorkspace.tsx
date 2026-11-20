@@ -13,6 +13,8 @@ import BusinessResearchSettings from './BusinessResearchSettings';
 import OpportunitySettings from './OpportunitySettings';
 import DiscoverySourceSettings from './DiscoverySourceSettings';
 import AskRashi from './AskRashi';
+import type { TeamSettingsData } from '../../lib/team-settings';
+import type { EmailChange } from '../../lib/account-security';
 
 function currentTab(requested: string | null): SettingsTab {
   if (requested === 'outreach' || requested === 'operations') return 'automation';
@@ -40,7 +42,9 @@ function DiscoverySettings({ active }: { active: boolean }): JSX.Element {
   </div>;
 }
 
-export default function SettingsWorkspace(): JSX.Element {
+export default function SettingsWorkspace({ team, emailRequests }: {
+  team: TeamSettingsData | null; emailRequests: EmailChange[] | null;
+}): JSX.Element {
   const params = useSearchParams();
   const tab = currentTab(params.get('tab'));
   const requestedSection = params.get('section');
@@ -75,7 +79,7 @@ export default function SettingsWorkspace(): JSX.Element {
     </div>
     {visited.map((id) => <div key={id} role="tabpanel" hidden={tab !== id} id={`panel-${id}`}
       aria-labelledby={`tab-${id}`} tabIndex={0} className="space-y-5 focus:outline-none">
-      {id === 'team' ? <><AgencyTeamSettings /><AccountEmailApprovals /></> : null}
+      {id === 'team' ? <><AgencyTeamSettings initial={team} /><AccountEmailApprovals initial={emailRequests} /></> : null}
       {id === 'email' ? <EmailConnectionSettings /> : null}
       {id === 'automation' ? <AutomationWorkspace section={section} active={tab === id} /> : null}
       {id === 'intelligence' ? <DiscoverySettings active={tab === id} /> : null}

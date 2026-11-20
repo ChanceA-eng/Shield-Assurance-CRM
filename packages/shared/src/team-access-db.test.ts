@@ -51,6 +51,8 @@ beforeEach(async () => {
   await db.exec(await readFile(new URL('../../../supabase/migrations/20261119121000_team_request_authorization.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../../../supabase/migrations/20261119122000_team_dispatch_authorization.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../../../supabase/migrations/20261119123000_staff_policy_inbox.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261119231000_direct_team_access.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261119232000_team_setup_reauthorization.sql', import.meta.url), 'utf8'));
 }, 30000);
 afterEach(async () => { await db.close(); });
 
@@ -66,6 +68,65 @@ const delivery = (version: number, user: string | null, error: string | null = n
 const accept = () => db.query('select public.accept_team_invitation($1,$2) as saved', [invitee, invitation]);
 
 describe('Team access migration in isolated PostgreSQL', () => {
+  it('scopes a custom-titled invitee independently of the rollout and never grants authority from the title', async () => {
+    await db.query(`insert into auth.users(id,email) values ($1,'custom@example.test')`, [invitee]);
+    const save = (actor: string, target: string, grants: Record<string, string>, version: number | null, active = false) =>
+      db.query(`select save_team_profile($1,$2,'custom@example.test','Custom Member','Administrator',$3,$4,$5)`, [actor, target, grants, active, version]);
+    const access = async () => (await db.query('select team_request_access() as access')).rows[0];
+    await expect(save(producer, invitee, {}, null)).rejects.toMatchObject({ code: '42501' });
+    await expect(save(admin, owner, {}, 1)).rejects.toMatchObject({ code: '42501' });
+    await expect(save(owner, invitee, { 'messages.send': 'agency' }, null)).rejects.toMatchObject({ code: '22023' });
+    await save(admin, invitee, { 'leads.view': 'assigned' }, null);
+    await db.query(`select set_config('request.jwt.claim.sub',$1,false)`, [invitee]);
+    await db.query('select record_team_setup_email($1,$2,false)', [admin, invitee]);
+    await db.query('update auth.users set email_confirmed_at=now() where id=$1', [invitee]);
+    await expect(db.query('select accept_team_profile($1)', [invitee])).rejects.toMatchObject({ code: '42501' });
+    expect(await access()).toEqual({ access: { mode: 'restricted', grants: {}, policyAdmin: false } });
+    await db.query('select record_team_setup_email($1,$2,true)', [admin, invitee]);
+    await db.query('select accept_team_profile($1)', [invitee]);
+    expect(await access()).toEqual({ access: { mode: 'restricted', grants: { 'leads.view': 'assigned' }, policyAdmin: false } });
+    expect((await db.query('select team_legacy_database_access() as direct, team_record_dispatch_allowed($1,null,null) as dispatch, team_profile_manager($1) as manager', [invitee])).rows)
+      .toEqual([{ direct: false, dispatch: false, manager: false }]);
+    await save(admin, invitee, {}, 4, true);
+    expect(await access()).toEqual({ access: { mode: 'restricted', grants: {}, policyAdmin: false } });
+    await expect(save(admin, invitee, { 'leads.view': 'agency' }, 4, true)).rejects.toMatchObject({ code: 'PT409' });
+    await save(admin, invitee, {}, 5);
+    expect((await db.query('select agency_session_allowed() as allowed')).rows).toEqual([{ allowed: false }]);
+  });
+  it('lets delegated team administrators manage only members within their own selected grants', async () => {
+    const set = (actor: string, target: string, grants: object, version = 1) =>
+      db.query(`select save_team_profile($1,$2,null,null,'Office Coordinator',$3,true,$4)`, [actor, target, grants, version]);
+    await set(owner, producer, { 'team.manage': 'agency', 'leads.view': 'assigned' });
+    expect((await db.query('select team_profile_manager($1) as allowed', [producer])).rows).toEqual([{ allowed: true }]);
+    await expect(set(producer, admin, {})).rejects.toMatchObject({ code: '42501' });
+    await expect(set(producer, owner, {})).rejects.toMatchObject({ code: '42501' });
+    await expect(set(producer, producer, { 'team.manage': 'agency', 'leads.view': 'agency' }, 2)).rejects.toMatchObject({ code: '42501' });
+    await set(producer, producer, { 'leads.view': 'assigned' }, 2);
+    expect((await db.query('select team_profile_manager($1) as allowed', [producer])).rows).toEqual([{ allowed: false }]);
+  });
+  it('does not activate revoked setup or an invite whose sender lost Team authority', async () => {
+    await db.query(`select save_team_profile($1,$2,null,null,'Team Coordinator','{"team.manage":"agency"}',true,1)`, [owner, producer]);
+    await db.query(`insert into auth.users(id,email) values($1,'pending@example.test')`, [invitee]);
+    await db.query(`select save_team_profile($1,$2,'pending@example.test','Pending Member','Custom Title','{}',false,null)`, [producer, invitee]);
+    await db.query(`select record_team_setup_email($1,$2,true)`, [producer, invitee]);
+    await db.query('update auth.users set email_confirmed_at=now() where id=$1', [invitee]);
+    await db.query(`select save_team_profile($1,$2,null,null,'Former Coordinator','{}',true,2)`, [owner, producer]);
+    await expect(db.query('select accept_team_profile($1)', [invitee])).rejects.toMatchObject({ code: '42501' });
+    await db.query('select revoke_team_profile($1,$2)', [owner, invitee]);
+    await expect(db.query('select accept_team_profile($1)', [invitee])).rejects.toMatchObject({ code: '42501' });
+  });
+  it('allows a current manager to reauthorize setup after its original sender loses authority', async () => {
+    await db.query(`insert into auth.users(id,email) values($1,'pending@example.test')`, [invitee]);
+    await db.query(`select save_team_profile($1,$2,'pending@example.test','Pending Member','Custom Title','{}',false,null)`, [admin, invitee]);
+    await db.query('select record_team_setup_email($1,$2,true)', [admin, invitee]);
+    await db.query('update auth.users set email_confirmed_at=now() where id=$1', [invitee]);
+    await db.query('update agency_members set active=false where user_id=$1', [admin]);
+    await expect(db.query('select accept_team_profile($1)', [invitee])).rejects.toMatchObject({ code: '42501' });
+    await db.query('select record_team_setup_email($1,$2,true)', [owner, invitee]);
+    await db.query('select accept_team_profile($1)', [invitee]);
+    expect((await db.query('select active,team_invited_by from agency_members where user_id=$1', [invitee])).rows)
+      .toEqual([{ active: true, team_invited_by: owner }]);
+  });
   it('routes scoped staff requests by urgency without changing policy, and restricts review and corrections to admins', async () => {
     await db.query(`insert into public.clients(id,agent_user_id,full_name) values ($1,$2,'Assigned'),($3,$4,'Other')`,
       [invitee, producer, invitation, admin]);

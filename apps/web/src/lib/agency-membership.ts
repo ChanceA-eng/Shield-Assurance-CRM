@@ -20,9 +20,15 @@ export function teamInviteRedirect(): string | null {
   const origin = process.env.CRM_WEB_ORIGIN?.trim();
   if (!configured && !origin) return null;
   try {
-    const url = configured ? new URL(configured) : new URL('/auth/accept', origin);
+    let url = configured ? new URL(configured) : new URL('/auth/accept', origin);
     if (url.pathname !== '/auth/accept' || url.username || url.password || url.search || url.hash) return null;
-    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) return null;
+    const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    if (local && origin) {
+      const publicOrigin = new URL(origin);
+      if (publicOrigin.protocol === 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(publicOrigin.hostname)
+        && !publicOrigin.username && !publicOrigin.password) url = new URL('/auth/accept', publicOrigin);
+    }
+    if (url.protocol !== 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return null;
     return url.href;
   } catch {
     return null;

@@ -37,27 +37,38 @@ Verify image upload, personal signature save/reload and delivery previews on
 the release candidate before promoting it. Do not send customer emails as a
 test or enable the separate Team rollout based on these editor checks.
 
-## Team invitation fix
+## Website-style Team access
 
-The existing agency owner can invite producers without enabling the personal
-Gmail rollout or configuring Pub/Sub. Invitations still use Supabase Auth
-email delivery. Allow the exact activation URL in Supabase Auth:
-`CRM_INVITE_REDIRECT_URI`, or `/auth/accept` on `CRM_WEB_ORIGIN` when no
-explicit redirect is set. Do not enable Gmail to fix an invitation.
+Apply `20261119231000_direct_team_access.sql` and
+`20261119232000_team_setup_reauthorization.sql` before deploying this workspace.
+The owner and existing administrators see the roster in the first authenticated
+response. A role title is freeform and has no authorization effect. Invites
+start with no CRM workspace grants unless the sender selects them explicitly.
+The new per-person access mode does not turn on the old role-bundle rollout.
+Existing non-owner legacy members retain their current access until an authorized
+manager saves their new permission set. The owner cannot be edited or deactivated.
 
-On initialized agencies, CRM admission now checks active membership even with
-the mailbox rollout disabled. Before releasing, verify all intended staff
-already have active membership and verify the owner can still sign in. The
-current invite option grants producer access to customer records, with explicit
-owner confirmation; do not use it to invite limited-access content staff.
+Configure Resend and set `CRM_INVITE_REDIRECT_URI` or `CRM_WEB_ORIGIN` to the
+public HTTPS CRM. A localhost override falls back to the configured HTTPS
+origin, otherwise sending is blocked. Gmail configuration is not required.
+Setup is inactive until provider acceptance and verified recipient activation.
+Use **Resend setup** to issue a fresh link or **Revoke invitation** to block
+activation. Email provider acceptance is not evidence of delivery.
+Activation rechecks the sending manager's current authority. An authorized
+manager can resend to reauthorize a pending setup after its original sender
+loses Team access.
+
+Use an isolated QA project to verify custom titles, zero-permission sign-in,
+granted and denied workspaces, edited/suspended staff, resend and revocation.
+Do not create a temporary Owner in production; the Owner trigger prevents cleanup.
 
 ## Team access foundation (not activated)
 
 The additive `20261110120000_team_access_foundation.sql` migration introduces
 editable role bundles, scoped member exceptions, versioned/audited access changes
 and a retryable invitation lifecycle. Team membership is designed independently
-of Gmail and multi-agency onboarding. The existing production invitation flow
-has not yet been replaced.
+of Gmail and multi-agency onboarding. Its role-bundle invitation flow is
+superseded by the Website-style per-person Team workspace above.
 
 The migration leaves `team_access_rollout.enabled=false` and
 `enforcement_version=0`. New management RPCs reject changes in that state.
@@ -171,12 +182,8 @@ panels stop polling. Discovery tools load individually and omit successful
 directory scan dumps while preserving repair actions. Email/integration setup
 shows specific fixes instead of generic support messages.
 
-Invite member is a popup with retained input on failure and an owner-only API.
-Production invitations remain blocked: `CRM_MULTI_AGENT_ENABLED` is off,
-`CRM_INVITE_REDIRECT_URI` is missing, and `GMAIL_PUBSUB_TOPIC`,
-`GMAIL_PUBSUB_AUDIENCE`, and `GMAIL_PUBSUB_SERVICE_ACCOUNT` are unconfigured.
-The popup lists these prerequisites. No rollout gates, environment settings,
-database schema or mail-provider configuration were changed by this release.
+The earlier invitation popup and its Gmail prerequisites are superseded by
+the Website-style Team access section above.
 Multi-agent rollout must still verify record permissions and per-agent Gmail.
 
 Verification: strict TypeScript and the hosted production build passed;
@@ -2009,7 +2016,7 @@ AI also requires the configured provider key and documented Gmail AI privacy app
 1. Create or select the agency's project in [Google Cloud Console](https://console.cloud.google.com/). Enable **Gmail API** and **Cloud Pub/Sub API**.
 2. Configure Google Auth Platform branding, support contact and audience. Use **Internal** only when the project belongs to the agency's Workspace organization and every agent belongs to that organization. Otherwise use **External**, add intended test users for initial testing, and complete applicable Google verification before production rollout. Shared mailbox sync requests `https://www.googleapis.com/auth/gmail.readonly` (restricted) and `https://www.googleapis.com/auth/gmail.send` (sensitive). The separate manual send-only connection requests `openid`, `https://www.googleapis.com/auth/userinfo.email`, and `https://www.googleapis.com/auth/gmail.send`; it cannot read or sync mailbox content. External testing is not a durable production authorization setup. See [Google's scope requirements](https://developers.google.com/workspace/gmail/api/auth/scopes).
 3. Create an OAuth client with application type **Web application**. Register the exact authorized redirect URI `https://shield-assurance-crm.vercel.app/api/gmail/callback` (replace the origin if the actual live CRM differs). Store its ID and secret as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in Vercel's secure production environment, and set `GMAIL_OAUTH_REDIRECT_URI` to that exact URI. Never paste the secret into chat.
-4. Set `CRM_INVITE_REDIRECT_URI=https://shield-assurance-crm.vercel.app/auth/accept`. Add the exact activation URL to **Supabase Auth > URL Configuration > Redirect URLs** and verify invitation SMTP delivery. Invitations use Supabase Auth mail, not the CRM's Resend send adapter.
+4. Configure Team setup separately using the **Website-style Team access** instructions above. It does not depend on Gmail or Supabase SMTP.
 5. Generate a private 32-byte encryption key locally. Set `GMAIL_TOKEN_KEY_VERSION=v1` and `GMAIL_TOKEN_KEYS` to a JSON object shaped as `{"v1":"<base64-encoded-32-byte-key>"}` in secure deployment settings. Do not use a placeholder key, commit it, log it, or replace it after mailbox connection without preserving the previous version in the keyring. A local generation command is `node -e "process.stdout.write(JSON.stringify({v1:require('node:crypto').randomBytes(32).toString('base64')}))"`; keep the output private.
 6. Create a Pub/Sub topic. Grant `gmail-api-push@system.gserviceaccount.com` the **Pub/Sub Publisher** role on that topic. Set `GMAIL_PUBSUB_TOPIC=projects/<project-id>/topics/<topic-id>`. Create an authenticated push subscription to `https://shield-assurance-crm.vercel.app/api/gmail/push`, using a dedicated service account. Set `GMAIL_PUBSUB_SERVICE_ACCOUNT` to that account's email and `GMAIL_PUBSUB_AUDIENCE` to the exact OIDC audience configured for the push subscription. Keep signed push verification enabled.
 7. Provision the existing worker and Redis; Vercel alone does not run this worker. Configure `CRM_WEB_ORIGIN`, `CRON_SECRET`, `REDIS_HOST`, `REDIS_PORT` and both agent/Gmail flags consistently in the worker's secure environment. Verify reconciliation reaches `/api/gmail/sync/worker` and that expired authorization, failed sends and watch renewal are surfaced.

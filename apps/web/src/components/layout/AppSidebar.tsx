@@ -21,7 +21,7 @@ import {
 import { navigationCategories, activeNavigationHref, type NavCategory } from '../../config/navigation';
 import { useNav } from '../../context/NavContext';
 import { useNotifications } from '../../context/NotificationContext';
-import { useStaffRecords, useStaffWorkspace } from '../../context/StaffWorkspaceContext';
+import { useStaffRecords, useStaffWorkspace, useTeamManager } from '../../context/StaffWorkspaceContext';
 import { staffRecords } from '../../lib/staff-records';
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -62,6 +62,7 @@ function SidebarNavigation(): JSX.Element {
   const { isNavOpen, closeNav } = useNav();
   const workspace = useStaffWorkspace();
   const records = useStaffRecords();
+  const teamManager = useTeamManager();
   const { dueTodayCount, unreadMessages } = useNotifications();
   const messageCount = unreadMessages.total;
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
@@ -116,6 +117,10 @@ function SidebarNavigation(): JSX.Element {
         onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
         <User className="h-4 w-4 shrink-0" aria-hidden="true" />My Account
       </a>
+      {teamManager && <a href="/settings?tab=team" aria-current={pathname === '/settings' ? 'page' : undefined}
+        onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
+        <Settings className="h-4 w-4 shrink-0" aria-hidden="true" />Team access
+      </a>}
     </nav>
   ) : (
     <nav aria-label="Main navigation" className="flex-1 overflow-y-auto py-2">

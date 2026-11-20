@@ -1,7 +1,9 @@
 import { test, expect } from './workspace-fixtures';
 import { DEFAULT_OPPORTUNITY_SETTINGS } from '@crm/shared';
 
-const owner = { user_id: 'cf98e001-b31a-4fbc-9eba-31ac9215d439', email: 'owner@example.invalid', role: 'owner', active: true };
+const owner = { user_id: 'cf98e001-b31a-4fbc-9eba-31ac9215d439', email: 'owner@example.invalid', role: 'owner', active: true,
+  role_title: null, team_name: null, direct_grants: null, setup_state: null, access_version: 1, invitation_id: null };
+const teamResponse = (members: object[]) => ({ owner: true, managerGrants: null, members, invitationIssue: null, activity: [] });
 
 test('Settings switches without server reloads, retains drafts and cached data, and supports browser Back', async ({ page, settingsOwner }) => {
   void settingsOwner;
@@ -9,30 +11,30 @@ test('Settings switches without server reloads, retains drafts and cached data, 
   const serverNavigations: string[] = [];
   await page.route('**/api/agency?team=true', async (route) => {
     teamReads++;
-    await route.fulfill({ json: { member: owner, members: [owner], enabled: true, can_invite: true, issues: [] } });
+    await route.fulfill({ json: teamResponse([owner]) });
   });
   await page.goto('/settings');
   await expect(page.getByRole('tab', { name: 'Team', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('button', { name: 'Invite member', exact: true })).toBeEnabled();
+  await expect(page.getByText('Protected access', { exact: true }).first()).toBeVisible();
   page.on('request', (request) => {
     if (new URL(request.url()).pathname === '/settings' && (request.isNavigationRequest() || request.headers().rsc === '1')) serverNavigations.push(request.url());
   });
   await page.getByRole('tab', { name: 'Marketing permission', exact: true }).click();
   await page.getByLabel('Recipient email', { exact: true }).fill('draft@example.invalid');
   await page.getByRole('tab', { name: 'Team', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Invite member', exact: true })).toBeEnabled();
+  await expect(page.getByText('Protected access', { exact: true }).first()).toBeVisible();
   await page.goBack();
   await expect(page.getByRole('tab', { name: 'Marketing permission', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByLabel('Recipient email', { exact: true })).toHaveValue('draft@example.invalid');
   await page.goForward();
   await expect(page.getByRole('tab', { name: 'Team', exact: true })).toHaveAttribute('aria-selected', 'true');
-  expect(teamReads).toBe(1);
+  expect(teamReads).toBe(0);
   expect(serverNavigations).toEqual([]);
 });
 
-test('Invite member popup preserves failed invitations, retries and refreshes the member list', async ({ page, settingsOwner }) => {
+test('Inline invitation preserves a failed draft, retries and refreshes the member list', async ({ page, settingsOwner }) => {
   void settingsOwner;
-  const members = [owner];
+  const members: object[] = [owner];
   const invitations: unknown[] = [];
   await page.route('**/api/agency**', async (route) => {
     const url = new URL(route.request().url());
@@ -40,81 +42,59 @@ test('Invite member popup preserves failed invitations, retries and refreshes th
     if (route.request().method() === 'POST') {
       invitations.push(route.request().postDataJSON());
       if (invitations.length === 1) return route.fulfill({ status: 503, json: { message: 'Invitation service unavailable. Try again.' } });
-      members.push({ ...owner, user_id: 'cf98e001-b31a-4fbc-9eba-31ac9215d440', email: 'new-agent@example.invalid', role: 'agent' });
+      members.push({ ...owner, user_id: 'cf98e001-b31a-4fbc-9eba-31ac9215d440', email: 'new-agent@example.invalid', role: 'agent',
+        role_title: 'Renewal Coordinator', team_name: 'New Member', active: false, setup_state: 'sent', direct_grants: { 'leads.view': 'assigned' } });
       return route.fulfill({ status: 201, json: { ok: true } });
     }
-    return route.fulfill({ json: { member: owner, members, enabled: true, can_invite: true, issues: [] } });
+    return route.fulfill({ json: teamResponse(members) });
   });
   await page.goto('/settings?tab=team');
-  await page.getByRole('button', { name: 'Invite member', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'Invite member', exact: true });
-  await dialog.getByLabel('Member email').fill('new-agent@example.invalid');
-  await expect(dialog.getByRole('button', { name: 'Send invitation' })).toBeDisabled();
-  await dialog.getByLabel('Give this member access to agency customer records.').check();
-  await dialog.getByRole('button', { name: 'Send invitation' }).click();
-  await expect(dialog.getByRole('alert')).toHaveText('Invitation service unavailable. Try again.');
-  await expect(dialog.getByLabel('Member email')).toHaveValue('new-agent@example.invalid');
-  page.once('dialog', (prompt) => void prompt.dismiss());
-  await page.keyboard.press('Escape');
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole('button', { name: 'Send invitation' }).click();
-  await expect(dialog).not.toBeVisible();
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('New Member');
+  await page.getByRole('textbox', { name: 'Email', exact: true }).fill('new-agent@example.invalid');
+  await page.getByRole('textbox', { name: 'Role title', exact: true }).fill('Renewal Coordinator');
+  const send = page.getByRole('button', { name: 'Send invite', exact: true });
+  await expect(page.getByRole('checkbox', { name: 'View leads', exact: true })).not.toBeChecked();
+  await page.getByRole('checkbox', { name: 'View leads', exact: true }).check();
+  await send.click();
+  await expect(page.getByText('Invitation service unavailable. Try again.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Email', exact: true })).toHaveValue('new-agent@example.invalid');
+  await send.click();
+  await expect(page.getByRole('textbox', { name: 'Email', exact: true })).toHaveValue('');
   await expect(page.getByText('new-agent@example.invalid', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Invite member', exact: true })).toBeFocused();
-  expect(invitations).toEqual(Array(2).fill({ email: 'new-agent@example.invalid', confirm_crm_access: true }));
+  const row = page.getByRole('listitem').filter({ hasText: 'new-agent@example.invalid' });
+  await row.getByRole('button', { name: 'Edit access' }).click();
+  await expect(page.getByRole('dialog', { name: 'Edit member access' })).toBeVisible();
+  expect(invitations).toEqual(Array(2).fill({ action: 'invite', full_name: 'New Member', email: 'new-agent@example.invalid',
+    role_title: 'Renewal Coordinator', grants: { 'leads.view': 'assigned' } }));
 });
 
-test('disabled invitations explain the actual setup and never issue an invitation', async ({ page, settingsOwner }) => {
+test('Team fits mobile and filters existing members without fetching the roster', async ({ page, settingsOwner }) => {
   void settingsOwner;
   let reads = 0;
-  let writes = 0;
   await page.route('**/api/agency?team=true', async (route) => {
     reads++;
-    await route.fulfill({ json: { member: owner, members: [owner], enabled: false, can_invite: false,
-      issues: ['Configure the CRM activation URL and allow it in the sign-in settings.'] } });
+    await route.abort();
   });
-  await page.route('**/api/agency', async (route) => { writes++; await route.fulfill({ status: 403, json: { message: 'Invitations disabled.' } }); });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/settings?tab=team');
-  await page.getByRole('button', { name: 'Invite member', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'Invite member', exact: true });
-  await expect(dialog).not.toContainText('Configure the CRM activation URL');
-  await expect(dialog.getByRole('button', { name: 'Send invitation' })).toHaveCount(0);
-  await dialog.getByRole('button', { name: 'Check setup again' }).click();
-  await expect.poll(() => reads).toBe(2);
-  await dialog.getByRole('button', { name: 'Resolve setup with Rashi' }).click();
-  await expect(dialog).not.toBeVisible();
-  await expect(page.getByText('Rashi Assistant', { exact: true })).toBeVisible();
-  await expect(page.getByText(/Configure the CRM activation URL/)).toBeVisible();
-  expect(writes).toBe(0);
+  const protectedAccess = page.getByText('Protected access', { exact: true });
+  await expect(protectedAccess.first()).toBeVisible();
+  await page.getByRole('searchbox', { name: 'Search team' }).fill('absent-browser-qa@example.invalid');
+  await expect(protectedAccess).toHaveCount(0);
+  await page.getByRole('searchbox', { name: 'Search team' }).clear();
+  await expect(protectedAccess.first()).toBeVisible();
+  expect(reads).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: test.info().outputPath('team-setup-mobile.png'), fullPage: true });
-});
-
-test('failed team loading has a working retry instead of an indefinite loading state', async ({ page, settingsOwner }) => {
-  void settingsOwner;
-  let attempts = 0;
-  await page.route('**/api/agency?team=true', async (route) => {
-    attempts++;
-    if (attempts === 1) return route.fulfill({ status: 503, json: { message: 'Team temporarily unavailable.' } });
-    await route.fulfill({ json: { member: owner, members: [owner], enabled: true, can_invite: true, issues: [] } });
-  });
-  await page.goto('/settings?tab=team');
-  await expect(page.getByRole('alert').filter({ hasText: 'Team temporarily unavailable.' })).toBeVisible();
-  await expect(page.getByText('Loading members...', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Retry team' }).click();
-  await expect(page.getByRole('button', { name: 'Invite member', exact: true })).toBeEnabled();
-  expect(attempts).toBe(2);
 });
 
 test('real owner team endpoint reports whether invitations are available and lists blockers without changing access', async ({ context, settingsOwner }) => {
   void settingsOwner;
   const response = await context.request.get('/api/agency?team=true');
   expect(response.status(), await response.text()).toBe(200);
-  const team: { can_invite: boolean; enabled: boolean; issues: string[]; members: unknown[] } = await response.json();
+  const team: { owner: boolean; invitationIssue: string | null; members: unknown[] } = await response.json();
   expect(Array.isArray(team.members)).toBe(true);
-  expect(team.can_invite).toBe(team.issues.length === 0);
-  console.log(`Invitation availability: ${team.can_invite ? 'ready' : 'blocked'}. Setup steps: ${team.issues.length}. ${team.issues.join(' ')}`);
+  expect(team.owner).toBe(true);
+  expect(team.invitationIssue === null || typeof team.invitationIssue === 'string').toBe(true);
 });
 
 test('automation drafts survive visiting another Settings tab without refetching or server navigation', async ({ page, data, settingsOwner }) => {

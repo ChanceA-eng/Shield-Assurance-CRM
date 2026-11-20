@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../lib/api-auth';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { isStaffRecordKind, staffRecordScope } from '../../../lib/staff-records';
-import { accountRecordScope, staffPolicyRequestScope } from '../../../lib/team-request-access';
+import { accountDocumentReadScope, accountRecordScope, staffPolicyRequestScope } from '../../../lib/team-request-access';
 import { databaseError, workspaceApiError } from '../../../lib/workspace-api';
 import { isRecord } from '../../../lib/workspace-validation';
 
@@ -28,6 +28,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const policy = kind === 'policies';
     const accountEdit = kind === 'accounts' ? accountRecordScope(session.teamAccess, 'accounts.edit') : null;
+    const documentRead = kind === 'accounts' ? accountDocumentReadScope(session.teamAccess) : null;
+    const documentEdit = kind === 'accounts' ? accountRecordScope(session.teamAccess, 'documents.edit') : null;
     const query = db.from(kind === 'accounts' ? 'clients' : kind).select(policy
       ? 'id,policy_number,carrier,line_of_business,status,effective_date,renewal_date,account:clients!policies_client_id_fkey!inner(full_name,agent_user_id)'
       : kind === 'leads' ? 'id,full_name,email,phone,status,line_of_business' : 'id,full_name,email,phone,account_type,agent_user_id');
@@ -46,7 +48,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       }
       if (kind !== 'accounts') return row;
       const { agent_user_id, ...account } = row;
-      return { ...account, canEdit: accountEdit === 'agency' || (accountEdit === 'assigned' && agent_user_id === session.user.id) };
+      const allows = (scope: 'assigned' | 'agency' | null): boolean =>
+        scope === 'agency' || (scope === 'assigned' && agent_user_id === session.user.id);
+      return { ...account, canEdit: allows(accountEdit), ...(allows(documentRead) ? {
+        canReadDocuments: true, canUploadDocuments: allows(documentEdit),
+      } : {}) };
     });
     return NextResponse.json({ rows, more: data.length > pageSize }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {

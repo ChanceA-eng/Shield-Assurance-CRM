@@ -13,3 +13,4 @@ export function readStaffWorkspace(value: string | null): StaffWorkspace {
   return value === 'full' || value === 'social-reader' || value === 'social-editor' ? value : 'account';
 }
 export const POLICY_ADMIN_HEADER = 'x-crm-policy-admin';
+export const TEAM_MANAGER_HEADER = 'x-crm-team-manager';

@@ -17,6 +17,8 @@ const supabase = createClient(url, serviceRoleKey, {
 });
 
 const checks = [
+  supabase.from('agency_members').select('team_name,role_title,direct_grants,setup_state,access_version').limit(0),
+  supabase.rpc('team_profile_manager', { p_actor: null }),
   supabase.from('email_signature_designs').select('user_id,document,rows').limit(0),
   supabase.from('scheduled_messages').select('body_document').limit(0),
   supabase.from('agent_email_attempts').select('email_formatting').limit(0),

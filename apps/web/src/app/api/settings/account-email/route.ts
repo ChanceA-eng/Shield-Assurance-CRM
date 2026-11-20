@@ -5,6 +5,7 @@ import { requireAgencyOwner } from '../../../../lib/agency-access';
 import { WorkspaceError } from '../../../../lib/record-scope';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
 import { isUuid } from '../../../../lib/workspace-validation';
+import { readPendingEmailChanges } from '../../../../lib/account-security';
 
 async function handle(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -14,10 +15,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     if (!db) throw new WorkspaceError('Account security is unavailable.', 503);
     await requireAgencyOwner(db, session.user.id);
     if (request.method === 'GET') {
-      const result = await db.from('account_email_changes').select('id,user_id,old_email,new_email,status,expires_at,created_at')
-        .eq('status', 'pending').gt('expires_at', new Date().toISOString()).order('created_at').limit(100);
-      if (result.error) throw databaseError(result.error);
-      return NextResponse.json({ requests: result.data }, { headers: { 'Cache-Control': 'private, no-store' } });
+      return NextResponse.json({ requests: await readPendingEmailChanges(db) }, { headers: { 'Cache-Control': 'private, no-store' } });
     }
     const body = await workspaceBody(request);
     if (!isUuid(body.id) || typeof body.approve !== 'boolean') throw new WorkspaceError('Choose a current email change request.', 400);

@@ -1,7 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createSupabaseBrowserAuthClient } from '../../../lib/supabase-auth-browser';
 import { workspaceFetch } from '../../../lib/workspace-fetch';
+import { inviteTokenHash } from '../../../lib/invite-token';
 
 export default function AcceptInvitation(): JSX.Element {
   const [password, setPassword] = useState('');
@@ -9,10 +10,10 @@ export default function AcceptInvitation(): JSX.Element {
   const [needsActivation, setNeedsActivation] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const activation = useRef<Promise<{ needsActivation: boolean }> | null>(null);
   useEffect(() => {
     let active = true;
-    const accept = async (): Promise<void> => {
-      try {
+    activation.current ??= (async () => {
         const client = createSupabaseBrowserAuthClient();
         const params = new URLSearchParams(window.location.hash.slice(1));
         if (params.get('error')) throw new Error('Invitation expired or was rejected. Ask your administrator for a new invitation.');
@@ -25,19 +26,24 @@ export default function AcceptInvitation(): JSX.Element {
         } else {
           const query = new URLSearchParams(window.location.search);
           const code = query.get('code');
-          const tokenHash = query.get('type') === 'invite' ? query.get('token_hash') : null;
-          const result = code ? await client.auth.exchangeCodeForSession(code)
-            : tokenHash ? await client.auth.verifyOtp({ type: 'invite', token_hash: tokenHash }) : null;
+          const tokenHash = inviteTokenHash(params, query);
+          if (tokenHash) window.history.replaceState(null, '', '/auth/accept');
+          const result = tokenHash ? await client.auth.verifyOtp({
+            type: params.get('type') === 'invite' && params.get('proof') === 'recovery' ? 'recovery' : 'invite', token_hash: tokenHash,
+          })
+            : code ? await client.auth.exchangeCodeForSession(code) : null;
           if (result) {
             window.history.replaceState(null, '', '/auth/accept');
             if (result.error) throw new Error('Invitation could not be accepted. Request a fresh invitation.');
           }
         }
-        const status = await workspaceFetch<{ needsActivation: boolean }>('/api/agency?activation=true');
+        return workspaceFetch<{ needsActivation: boolean }>('/api/agency?activation=true');
+    })();
+    void activation.current.then((status) => {
         if (active) { setNeedsActivation(status.needsActivation); setReady(true); }
-      } catch (failure) { if (active) setError(failure instanceof Error ? failure.message : 'Invitation could not be verified.'); }
-    };
-    void accept();
+    }).catch((failure: unknown) => {
+      if (active) setError(failure instanceof Error ? failure.message : 'Invitation could not be verified.');
+    });
     return () => { active = false; };
   }, []);
   return <main className="flex min-h-screen items-center justify-center bg-cui-body p-4"><section className="w-full max-w-md space-y-4 rounded border border-cui-border bg-white p-6">

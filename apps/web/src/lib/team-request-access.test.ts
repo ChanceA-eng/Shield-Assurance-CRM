@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { permitsTeamRequest, readTeamRequestAccess } from './team-request-access';
 
 describe('restricted team request authorization', () => {
+  it('admits delegated Team administrators only to the checked Team handler, not unrelated settings APIs', () => {
+    const manager = { mode: 'restricted' as const, grants: { 'team.manage': 'agency' } };
+    expect(permitsTeamRequest(manager, '/settings', 'GET')).toBe(true);
+    expect(permitsTeamRequest(manager, '/api/agency', 'POST')).toBe(true);
+    expect(permitsTeamRequest(manager, '/api/settings/outreach', 'POST')).toBe(false);
+    expect(permitsTeamRequest({ mode: 'restricted', grants: {} }, '/api/agency', 'POST')).toBe(false);
+  });
   const memberId = 'c71bc0f5-a3df-4b9c-9a7c-5d4f7c24a3ce';
   it('lets a reviewer read marketing content without editing, dispatching, or accessing customer data', () => {
     const reviewer = { mode: 'restricted' as const, grants: { 'social.view': 'agency' } };

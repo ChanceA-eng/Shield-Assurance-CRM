@@ -3,6 +3,13 @@ import { createClient, type SupabaseClient, type User } from '@supabase/supabase
 import { WorkspaceError } from './record-scope';
 import { databaseError } from './workspace-api';
 
+export async function readPendingEmailChanges(db: SupabaseClient): Promise<EmailChange[]> {
+  const result = await db.from('account_email_changes').select('id,user_id,old_email,new_email,status,expires_at,created_at')
+    .eq('status', 'pending').gt('expires_at', new Date().toISOString()).order('created_at').limit(100).returns<EmailChange[]>();
+  if (result.error) throw databaseError(result.error);
+  return result.data;
+}
+
 export interface EmailChange {
   id: string; user_id: string; old_email: string; new_email: string;
   status: 'pending' | 'approved' | 'rejected' | 'cancelled' | 'completed';

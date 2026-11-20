@@ -52,11 +52,13 @@ export function staffPolicyRequestScope(access: RequestAccess | undefined): 'age
 export function permitsTeamRequest(access: RequestAccess, pathname: string, method: string): boolean {
   if (access.mode === 'legacy') return true;
   if (!pathname.startsWith('/api/')) {
-    return pathname === '/account' || (pathname === '/communication/social' && access.grants['social.view'] === 'agency')
+    return pathname === '/account' || (pathname === '/settings' && access.grants['team.manage'] === 'agency')
+      || (pathname === '/communication/social' && access.grants['social.view'] === 'agency')
       || visibleStaffRecords(access).some((kind) => staffRecords[kind].href === pathname);
   }
   const policy = teamApiRoutePolicy(pathname, method);
   const read = method === 'GET' || method === 'HEAD';
+  if (pathname === '/api/agency') return (read || method === 'POST') && access.grants['team.manage'] === 'agency';
   if (pathname === '/api/staff-policy-requests') {
     return read || method === 'PATCH' ? access.policyAdmin === true : method === 'POST' && !!staffPolicyRequestScope(access);
   }
