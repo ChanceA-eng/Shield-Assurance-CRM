@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 const state = vi.hoisted(() => ({
   role: 'agent', revision: 1,
+  teamAccess: { mode: 'restricted' as const, grants: {} as Record<string, unknown> },
   rpc: vi.fn(async (_name: string, _values: object) => ({ data: { saved: true }, error: null })),
   filter: vi.fn((_table: string, _column: string, _value: string) => {}),
   publish: vi.fn(async () => 'published'), withdraw: vi.fn(async () => {}),
@@ -15,7 +16,9 @@ const input = {
   wording: 'This insurance does not apply to bodily injury expected or intended from the standpoint of the insured.',
   privacy_confirmed: true, rights_confirmed: true,
 };
-vi.mock('../../../lib/api-auth', () => ({ getApiSession: async () => ({ user: { id: actor }, error: null }) }));
+vi.mock('../../../lib/api-auth', () => ({ getApiSession: async () => ({
+  user: { id: actor }, error: null, teamAccess: state.teamAccess,
+}) }));
 vi.mock('../../../lib/rashi-server', () => ({
   publishReviewedPolicyWording: state.publish, withdrawReviewedPolicyWording: state.withdraw,
 }));
@@ -41,7 +44,10 @@ import { GET, POST, PATCH } from './route';
 function request(body: object, method = 'POST'): NextRequest {
   return new NextRequest('http://localhost/api/policy-knowledge', { method, body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
 }
-beforeEach(() => { vi.clearAllMocks(); state.role = 'agent'; state.revision = 1; });
+beforeEach(() => {
+  vi.clearAllMocks(); state.role = 'agent'; state.revision = 1;
+  state.teamAccess = { mode: 'restricted', grants: { 'knowledge.view': 'agency', 'knowledge.edit': 'agency' } };
+});
 describe('policy knowledge API authorization and privacy', () => {
   it('uses the authenticated actor and never indexes a submission', async () => {
     const response = await POST(request({ ...input, actor: id }));
@@ -60,6 +66,7 @@ describe('policy knowledge API authorization and privacy', () => {
     expect(state.rpc).not.toHaveBeenCalled(); expect(state.publish).not.toHaveBeenCalled();
   });
   it('denies agent approval, publication and withdrawal even when buttons are bypassed', async () => {
+    state.teamAccess = { mode: 'restricted', grants: { 'knowledge.view': 'agency' } };
     for (const action of ['approve', 'publish', 'withdraw']) {
       expect((await PATCH(request({ ...input, revision: 1, action }, 'PATCH'))).status).toBe(403);
     }
@@ -77,6 +84,7 @@ describe('policy knowledge API authorization and privacy', () => {
     expect(state.rpc).not.toHaveBeenCalled();
   });
   it('returns a private uncached list and owner capability from current membership', async () => {
+    state.teamAccess = { mode: 'restricted', grants: { 'knowledge.view': 'agency' } };
     const response = await GET(new NextRequest('http://localhost/api/policy-knowledge'));
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect((await response.json()).can_review).toBe(false);

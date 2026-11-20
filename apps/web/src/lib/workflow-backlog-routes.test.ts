@@ -16,6 +16,7 @@ let role: string;
 let rpcResponse: unknown;
 let rpcError: Record<string, unknown> | null;
 let calls: Array<{ path: string; method: string; body: unknown }>;
+let teamAccess: { mode: 'restricted'; grants: Record<string, unknown> };
 
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), {
   status, headers: { 'Content-Type': 'application/json', 'Content-Range': '0-0/1' },
@@ -38,7 +39,8 @@ const db = (): ReturnType<typeof createClient> => createClient('https://db.examp
 beforeEach(() => {
   vi.clearAllMocks(); role = 'owner'; rpcResponse = preview; rpcError = null; calls = [];
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  teamAccess = { mode: 'restricted', grants: { 'automation.view': 'agency', 'automation.manage': 'agency' } };
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   vi.mocked(getSupabaseServerClient).mockReturnValue(db());
 });
 afterEach(() => vi.restoreAllMocks());
@@ -48,33 +50,34 @@ const request = (url: string, method = 'GET', body?: unknown): NextRequest => ne
 });
 const applyBody = { rule_id: id, expected_revision: 3, eligible_count: 7, fingerprint: 'a'.repeat(32), confirmed: true };
 
-describe('owner-only custom rule backlog API', () => {
+describe('custom rule backlog API', () => {
   it('previews one rule privately without queueing or executing work', async () => {
     const response = await GET(request(`http://localhost/api/settings/automation/rules/backlog?rule=${id}`));
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toContain('no-store');
     expect(await response.json()).toEqual(preview);
-    expect(calls.map((call) => call.path)).toEqual(['/rest/v1/agency_members', '/rest/v1/rpc/preview_workflow_backlog']);
+    expect(calls.map((call) => call.path)).toEqual(['/rest/v1/rpc/preview_workflow_backlog']);
   });
-  it('blocks non-owners before exposing or applying a backlog', async () => {
+  it('blocks members without automation grants before exposing or applying a backlog', async () => {
     role = 'agent';
+    teamAccess.grants = {};
     expect((await GET(request(`http://localhost/api/settings/automation/rules/backlog?rule=${id}`))).status).toBe(403);
     expect((await POST(request('http://localhost/api/settings/automation/rules/backlog', 'POST', applyBody))).status).toBe(403);
-    expect(calls.every((call) => call.path.endsWith('/agency_members'))).toBe(true);
+    expect(calls).toEqual([]);
   });
   it('requires explicit confirmation and a bounded exact preview fingerprint', async () => {
     expect((await POST(request('http://localhost/api/settings/automation/rules/backlog', 'POST',
       { ...applyBody, confirmed: false }))).status).toBe(400);
     expect((await POST(request('http://localhost/api/settings/automation/rules/backlog', 'POST',
       { ...applyBody, fingerprint: 'invalid' }))).status).toBe(400);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(0);
   });
   it('queues only the current previewed version/count/fingerprint through the guarded RPC', async () => {
     rpcResponse = { queued_count: 7, skipped_count: 0, remaining_count: 0, rule_revision: 3, preview_only: false };
     const response = await POST(request('http://localhost/api/settings/automation/rules/backlog', 'POST', applyBody));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(rpcResponse);
-    expect(calls[1]).toMatchObject({ path: '/rest/v1/rpc/apply_workflow_backlog', method: 'POST',
+    expect(calls[0]).toMatchObject({ path: '/rest/v1/rpc/apply_workflow_backlog', method: 'POST',
       body: { p_actor: id, p_rule: id, p_expected_revision: 3, p_expected_count: 7, p_expected_fingerprint: 'a'.repeat(32) } });
   });
   it('retains the stale-preview conflict rather than treating it as success', async () => {

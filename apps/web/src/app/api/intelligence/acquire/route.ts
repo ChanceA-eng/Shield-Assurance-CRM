@@ -16,7 +16,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('Database unavailable.', 503);
-    await discoveryAccess(db, session.user.id);
+    discoveryAccess(session.teamAccess);
     const form = await request.formData();
     const source = form.get('source_id'), requestId = form.get('request_id'), file = form.get('file');
     if (!isUuid(source) || !isUuid(requestId) || !(file instanceof File)) throw new WorkspaceError('Choose a source and file with a valid upload identity.', 400);

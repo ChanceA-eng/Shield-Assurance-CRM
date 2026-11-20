@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../../../lib/api-auth';
-import { requireAgencyOwner } from '../../../../../lib/agency-access';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { workspaceBody, workspaceApiError, databaseError } from '../../../../../lib/workspace-api';
 import { WorkspaceError } from '../../../../../lib/record-scope';
+import { requireTeamPermission } from '../../../../../lib/team-request-access';
 
 async function handle(request: NextRequest, mutation: boolean): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -11,7 +11,7 @@ async function handle(request: NextRequest, mutation: boolean): Promise<NextResp
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, mutation ? 'automation.manage' : 'automation.view');
     const body = mutation ? await workspaceBody(request) : null;
     if (body && (typeof body.enabled !== 'boolean' || Object.keys(body).some((key) => key !== 'enabled'))) {
       throw new WorkspaceError('Choose whether background scheduling is enabled.', 400);

@@ -44,7 +44,7 @@ export function parseSalesTemplate(value: unknown): SalesTemplate {
 export async function salesFacts(db: SupabaseClient, actor: string, key: string): Promise<SalesFacts> {
   const ref = parseConversationKey(key);
   if (!ref) throw new WorkspaceError('Choose a contact or conversation.', 400);
-  const member = await activeAgencyMember(db, actor);
+  await activeAgencyMember(db, actor);
   const sender = agencyEnabled() ? await agentSender(db, actor) : await getOutreachSender(db);
   const facts: SalesFacts = { agent_name: sender.name, agency_name: sender.agency };
   if (ref.kind === 'unmatched') return facts;
@@ -52,7 +52,7 @@ export async function salesFacts(db: SupabaseClient, actor: string, key: string)
     ? await db.from('leads').select('id,full_name,business,form_payload,agent_user_id,archived_at').eq('id', ref.id).maybeSingle()
     : await db.from('clients').select('id,full_name,agent_user_id').eq('id', ref.id).maybeSingle();
   if (record.error) throw databaseError(record.error);
-  if (!record.data || (member.role === 'agent' && record.data.agent_user_id && record.data.agent_user_id !== actor)) {
+  if (!record.data) {
     throw new WorkspaceError('Contact not found or unavailable.', 404);
   }
   if ('archived_at' in record.data && record.data.archived_at) throw new WorkspaceError('Restore this lead before composing.', 409);

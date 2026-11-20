@@ -17,10 +17,12 @@ const row = { id, revision: 2, definition, updated_at: '2026-11-05T00:00:00Z' };
 let role: string;
 let saved: unknown;
 let calls: Array<{ url: URL; method: string; body: unknown }>;
+let teamAccess: { mode: 'restricted'; grants: Record<string, unknown> };
 beforeEach(() => {
   vi.clearAllMocks(); role = 'owner'; saved = row; calls = [];
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  teamAccess = { mode: 'restricted', grants: { 'automation.view': 'agency', 'automation.manage': 'agency' } };
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   vi.mocked(getSupabaseServerClient).mockReturnValue(createClient('https://db.example.invalid', 'test-key', {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { fetch: async (input, init) => {
@@ -40,16 +42,17 @@ afterEach(() => vi.restoreAllMocks());
 const post = (body: unknown): NextRequest => new NextRequest('http://localhost/api/settings/automation/rules', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 });
-describe('private owner workflow configuration API', () => {
-  it.each(['agent', 'admin'])('blocks %s without exposing rules or calling mutation RPCs', async (value) => {
+describe('private workflow configuration API', () => {
+  it.each(['agent', 'admin'])('blocks %s without automation grants', async (value) => {
     role = value;
+    teamAccess.grants = {};
     expect((await GET(new NextRequest('http://localhost/api/settings/automation/rules'))).status).toBe(403);
     expect((await POST(post({ rule_id: null, expected_revision: 0, definition }))).status).toBe(403);
-    expect(calls.every((call) => call.url.pathname.endsWith('/agency_members'))).toBe(true);
+    expect(calls).toEqual([]);
   });
   it.each(['page=-1', 'page=nan', 'rule=bad', 'event=deal.bound', 'active=maybe'])('rejects invalid filter %s', async (query) => {
     expect((await GET(new NextRequest(`http://localhost/api/settings/automation/rules?${query}`))).status).toBe(400);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
   it('returns paginated rules, actual member choices and selected history privately without executing work', async () => {
     const result = await GET(new NextRequest(`http://localhost/api/settings/automation/rules?page=1&rule=${id}&q=QA&event=lead.created&active=true`));
@@ -65,8 +68,8 @@ describe('private owner workflow configuration API', () => {
   it('saves the exact validated revision without changing tasks, notifications, enrollment or invoking AI', async () => {
     const result = await POST(post({ rule_id: id, expected_revision: 1, definition }));
     expect(result.status).toBe(200); expect(await result.json()).toEqual(row);
-    expect(calls.map((call) => call.url.pathname)).toEqual(['/rest/v1/agency_members', '/rest/v1/rpc/save_workflow_rule']);
-    expect(calls[1].body).toEqual({ p_actor: id, p_rule: id, p_expected_revision: 1, p_definition: definition });
+    expect(calls.map((call) => call.url.pathname)).toEqual(['/rest/v1/rpc/save_workflow_rule']);
+    expect(calls[0].body).toEqual({ p_actor: id, p_rule: id, p_expected_revision: 1, p_definition: definition });
   });
   it.each([
     { rule_id: id, expected_revision: -1, definition },
@@ -74,7 +77,7 @@ describe('private owner workflow configuration API', () => {
     { rule_id: id, expected_revision: 1, definition, send: true },
     { rule_id: id, expected_revision: 1, definition: { ...definition, action: { ...definition.action, type: 'send_email' } } },
   ])('rejects unsafe save payload %# before calling the RPC', async (body) => {
-    expect((await POST(post(body))).status).toBe(400); expect(calls).toHaveLength(1);
+    expect((await POST(post(body))).status).toBe(400); expect(calls).toHaveLength(0);
   });
   it('rejects malformed success-shaped saved rows', async () => {
     saved = { ok: true };

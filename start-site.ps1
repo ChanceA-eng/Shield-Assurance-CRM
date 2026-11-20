@@ -26,7 +26,7 @@ foreach ($port in $ports) {
     }
 
     if ($listening -and (Test-CrmLogin $port 15)) {
-        $url = "http://127.0.0.1:$port"
+        $url = "http://localhost:$port"
         Write-Host "The CRM is already running. Opening $url"
         Start-Process $url
         exit 0
@@ -53,7 +53,7 @@ if ($null -eq $available) { throw 'Both CRM ports (3000 and 3010) are in use. Cl
 
 $corepack = Get-Command corepack.cmd -ErrorAction Stop
 $env:NEXT_DIST_DIR = if ($available -eq 3000) { '.next-local' } else { '.next-local-alt' }
-$url = "http://127.0.0.1:$available"
+$url = "http://localhost:$available"
 Write-Host "Starting the CRM at $url"
 $watcher = Start-Job -ScriptBlock {
     param($Probe, $Port, $Url)

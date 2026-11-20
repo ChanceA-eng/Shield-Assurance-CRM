@@ -8,6 +8,7 @@ import type { EmailChange } from '../../../lib/account-security';
 import { signatureFormatting } from '../../../lib/email-formatting';
 import { emailDocumentText, parseEmailDocument, parseEmailRows } from '@crm/shared';
 import { databaseError } from '../../../lib/workspace-api';
+import { hasTeamPermission } from '../../../lib/team-request-access';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -27,7 +28,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       role: member?.active ? member.role : null,
       active: member?.active ?? false,
       email_verified: Boolean(session.user.email_confirmed_at),
-      can_change_email: Boolean(member?.active && (member.role === 'owner' || member.role === 'admin')),
+      can_change_email: Boolean(member?.active && hasTeamPermission(session.teamAccess, 'team.manage')),
       email_change: changes.data,
       ...await signatureFormatting(db, session.user.id),
     }, { headers: { 'Cache-Control': 'private, no-store' } });

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../../lib/api-auth';
-import { requireAgencyOwner } from '../../../../lib/agency-access';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { getAutomationSettings } from '../../../../lib/automation-settings';
 import { databaseError, workspaceApiError } from '../../../../lib/workspace-api';
@@ -8,6 +7,7 @@ import type { OutreachSender } from '@crm/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { parseOutreachSender } from '../../../../lib/marketing-profile';
 import { senderOptions } from '../../../../lib/sender-options';
+import { requireTeamPermission } from '../../../../lib/team-request-access';
 
 export { PATCH } from '../../outreach/route';
 
@@ -30,7 +30,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'agency.manage');
     const [current, profiles] = await Promise.all([getAutomationSettings(db), activeSenderProfiles(db)]);
     const settings = current.configuration.outreach;
     return NextResponse.json({

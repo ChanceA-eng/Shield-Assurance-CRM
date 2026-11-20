@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { Card, CardBody, CardHeader } from '../ui/Card';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 import type { ResearchCoverage, ResearchSource } from '@crm/shared';
-import AskRashi from './AskRashi';
 
 interface Configuration {
   settings: { enabled: boolean; tasks_enabled: boolean; task_capacity: number; task_due_days: number; refresh_days: number; revision: number };
@@ -49,7 +48,7 @@ export default function BusinessResearchSettings(): JSX.Element {
     {data?.partitions.some((partition) => partition.status === 'failed') ? <section aria-label="Source repairs"><h3 className="text-sm font-semibold">Sources needing attention</h3>
       <ul className="mt-3 space-y-2">{data.partitions.filter((partition) => partition.status === 'failed').map((partition) => <li key={`${partition.provider}:${partition.state}`} className="rounded-lg border border-cui-border p-3 text-sm">
         <p className="font-semibold">{labels[partition.provider]} - {partition.state}</p>
-        <AskRashi topic="research" label={`Help with ${labels[partition.provider]}`} detail={partition.error ?? 'Source refresh could not finish.'} />
+        {partition.error ? <p role="alert" className="mt-1 text-cui-danger">{partition.error}</p> : null}
         {partition.status === 'failed' ? <button type="button" disabled={busy} className="text-cui-primary underline" onClick={() => {
           setBusy(true); setError('');
           void workspaceFetch('/api/intelligence/business-research-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -61,10 +60,9 @@ export default function BusinessResearchSettings(): JSX.Element {
     {data?.incomplete_jobs.length ? <section aria-label="Research repairs"><h3 className="text-sm font-semibold">Research needing attention ({data.incomplete_jobs.length})</h3>
       <ul className="mt-3 space-y-3">{data.incomplete_jobs.map((job, index) => <li key={job.business_id} className="flex flex-wrap items-center gap-2 text-sm">
         <span>Business check {index + 1}</span>
-        <AskRashi topic="research" label={`Help with business check ${index + 1}`} detail={[
-          job.error ?? 'Some public sources were unavailable.',
-          ...(job.coverage?.filter((item) => item.state === 'unavailable').map((item) => `${item.source}: ${item.message}`) ?? []),
-        ].join('\n')} />
+        {job.error ? <span role="alert" className="text-cui-danger">{job.error}</span> : null}
+        {job.coverage?.filter((item) => item.state === 'unavailable').map((item) =>
+          <span key={item.source} role="alert" className="text-cui-danger">{item.source}: {item.message}</span>)}
         <button disabled={busy} className="text-cui-primary underline" onClick={() => {
           setBusy(true); setError('');
           void workspaceFetch('/api/intelligence/business-research-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },

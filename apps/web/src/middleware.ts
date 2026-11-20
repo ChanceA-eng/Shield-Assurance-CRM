@@ -2,7 +2,7 @@ import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { authenticatesInReadHandler, isTeamActivationRequest } from './lib/route-authentication';
 import { permitsTeamRequest, readTeamRequestAccess, teamLanding } from './lib/team-request-access';
-import { POLICY_ADMIN_HEADER, STAFF_WORKSPACE_HEADER, TEAM_MANAGER_HEADER, staffWorkspace } from './lib/staff-workspace';
+import { POLICY_ADMIN_HEADER, STAFF_TEAM_ACCESS_HEADER, STAFF_TRAINING_HEADER, STAFF_WORKSPACE_HEADER, TEAM_MANAGER_HEADER, staffWorkspace } from './lib/staff-workspace';
 import { STAFF_RECORDS_HEADER, visibleStaffRecords } from './lib/staff-records';
 
 const AUTH_REQUIRED = true;
@@ -101,9 +101,11 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 
   const forwarded = new Headers(request.headers);
   forwarded.delete(STAFF_WORKSPACE_HEADER);
+  forwarded.delete(STAFF_TEAM_ACCESS_HEADER);
   forwarded.delete(STAFF_RECORDS_HEADER);
   forwarded.delete(POLICY_ADMIN_HEADER);
   forwarded.delete(TEAM_MANAGER_HEADER);
+  forwarded.delete(STAFF_TRAINING_HEADER);
   let response = NextResponse.next({ request: { headers: forwarded } });
 
   const { url, anonKey } = getSupabaseAuthEnv();
@@ -166,13 +168,15 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
         response.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie));
         return redirect;
       }
-      if (!permitsTeamRequest(access, pathname, request.method)) {
+      if (!permitsTeamRequest(access, pathname, request.method, request.nextUrl.searchParams.toString())) {
         return NextResponse.json({ message: 'You do not have access to this feature.' }, { status: 403 });
       }
       if (!isApiRoute(pathname)) {
         forwarded.set(STAFF_WORKSPACE_HEADER, staffWorkspace(access));
+        if (access.mode === 'restricted') forwarded.set(STAFF_TEAM_ACCESS_HEADER, JSON.stringify(access));
         if (access.policyAdmin) forwarded.set(POLICY_ADMIN_HEADER, 'true');
         if (access.mode === 'restricted' && access.grants['team.manage'] === 'agency') forwarded.set(TEAM_MANAGER_HEADER, 'true');
+        if (access.mode === 'restricted' && access.grants['knowledge.view'] === 'agency') forwarded.set(STAFF_TRAINING_HEADER, 'true');
         if (access.mode === 'restricted') forwarded.set(STAFF_RECORDS_HEADER, visibleStaffRecords(access).join(','));
         const page = NextResponse.next({ request: { headers: forwarded } });
         response.cookies.getAll().forEach((cookie) => page.cookies.set(cookie));

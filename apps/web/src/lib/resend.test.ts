@@ -200,7 +200,7 @@ describe('Resend setup test', () => {
     vi.stubEnv('CRM_MULTI_AGENT_ENABLED', 'false');
     vi.mocked(getApiSession).mockResolvedValue({ error: null, user: {
       id, email: 'admin@example.invalid', aud: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString(),
-    } });
+    }, teamAccess: { mode: 'restricted', grants: { 'automation.manage': 'agency' } } });
     expect((await setupTest(request({ to: 'someone@example.invalid' }))).status).toBe(400);
     expect(requests).toHaveLength(0);
   });
@@ -211,7 +211,7 @@ describe('Resend setup test', () => {
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://db.example.invalid'); vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-key');
     vi.mocked(getApiSession).mockResolvedValue({ error: null, user: {
       id, email: 'admin@example.invalid', aud: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString(),
-    } });
+    }, teamAccess: { mode: 'restricted', grants: { 'automation.manage': 'agency' } } });
     const result = await setupTest(request({ request_id: 'setup:one', subject: 'Must not use arbitrary content' }));
     expect(result.status).toBe(200);
     expect(await result.json()).toMatchObject({ provider: 'resend', delivery: 'accepted_by_provider' });

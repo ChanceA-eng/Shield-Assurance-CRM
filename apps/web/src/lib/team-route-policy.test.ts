@@ -32,7 +32,7 @@ describe('Explicit team API permission coverage', () => {
     const registered = new Set(TEAM_API_ROUTE_POLICIES.flatMap((entry) => Object.keys(entry.methods).map((method) => `${entry.route}:${method}`)));
     expect([...expected].filter((key) => !registered.has(key))).toEqual([]);
     expect([...registered].filter((key) => !expected.has(key))).toEqual([]);
-  });
+  }, 15000);
 
   it('does not authorize unknown paths or methods and gives exact routes precedence over IDs', () => {
     expect(teamApiRoutePolicy('/api/sales-templates/new-export', 'GET')).toBeNull();

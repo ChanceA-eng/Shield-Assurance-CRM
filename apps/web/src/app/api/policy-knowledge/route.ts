@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../lib/api-auth';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
-import { activeAgencyMember } from '../../../lib/agency-membership';
-import { requireAgencyOwner } from '../../../lib/agency-access';
 import { WorkspaceError, resolveRecordScope } from '../../../lib/record-scope';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../lib/workspace-api';
 import { isUuid } from '../../../lib/workspace-validation';
 import { parsePolicyKnowledge, assertDeidentifiedPolicyKnowledge } from '../../../lib/policy-knowledge';
 import { publishReviewedPolicyWording, withdrawReviewedPolicyWording } from '../../../lib/rashi-server';
+import { hasTeamPermission, requireTeamPermission } from '../../../lib/team-request-access';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -17,8 +16,7 @@ async function access(request: NextRequest) {
   if (session.error) throw new WorkspaceError('Session verification failed. Sign in again or check authentication setup.', session.error.status);
   const db = getSupabaseServerClient();
   if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
-  const member = await activeAgencyMember(db, session.user.id);
-  return { db, actor: session.user.id, owner: member.role === 'owner' };
+  return { db, actor: session.user.id, access: session.teamAccess };
 }
 async function checkPrivateValues(db: NonNullable<ReturnType<typeof getSupabaseServerClient>>, input: ReturnType<typeof parsePolicyKnowledge>): Promise<void> {
   await resolveRecordScope(db, { type: 'client', id: input.account_id });
@@ -37,12 +35,14 @@ async function checkPrivateValues(db: NonNullable<ReturnType<typeof getSupabaseS
 }
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
-    const { db, actor, owner } = await access(request);
+    const { db, actor, access: teamAccess } = await access(request);
+    requireTeamPermission(teamAccess, 'knowledge.view');
     const page = Number(request.nextUrl.searchParams.get('page') ?? 0);
     if (!Number.isSafeInteger(page) || page < 0 || page > 100000) throw new WorkspaceError('Select a valid review page.', 400);
     let query = db.from('policy_knowledge_candidates').select('*').order('updated_at', { ascending: false }).order('id')
       .range(page * 100, page * 100 + 100);
-    if (!owner) query = query.eq('created_by', actor);
+    const canReview = hasTeamPermission(teamAccess, 'knowledge.edit');
+    if (!canReview) query = query.eq('created_by', actor);
     const result = await query;
     if (result.error) {
       if (result.error.code === '42P01' || result.error.code === 'PGRST205') {
@@ -50,12 +50,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       }
       throw databaseError(result.error);
     }
-    return NextResponse.json({ candidates: result.data.slice(0, 100), has_more: result.data.length > 100, can_review: owner }, { headers: { 'Cache-Control': 'private, no-store' } });
+    return NextResponse.json({ candidates: result.data.slice(0, 100), has_more: result.data.length > 100, can_review: canReview }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (failure) { return workspaceApiError(failure, 'policy-knowledge/list'); }
 }
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
-    const { db, actor } = await access(request);
+    const { db, actor, access: teamAccess } = await access(request);
+    requireTeamPermission(teamAccess, 'knowledge.edit');
     const body = await workspaceBody(request);
     const values = parsePolicyKnowledge(body);
     if (!isUuid(body.id) || !Number.isSafeInteger(body.revision) || Number(body.revision) < 0) {
@@ -71,8 +72,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 }
 export async function PATCH(request: NextRequest): Promise<NextResponse> {
   try {
-    const { db, actor } = await access(request);
-    await requireAgencyOwner(db, actor);
+    const { db, actor, access: teamAccess } = await access(request);
+    requireTeamPermission(teamAccess, 'knowledge.edit');
     const body = await workspaceBody(request);
     if (!isUuid(body.id) || !Number.isSafeInteger(body.revision) || Number(body.revision) < 1) {
       throw new WorkspaceError('Select a candidate and its saved revision.', 400);

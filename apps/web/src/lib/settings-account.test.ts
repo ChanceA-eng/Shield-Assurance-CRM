@@ -27,6 +27,7 @@ let savedSenderProfiles: Array<typeof DEFAULT_OUTREACH_SENDER> | null;
 let personalSignature: string;
 let authLookupFails: boolean;
 let signatureDesign: { document: EmailDocument } | null;
+let teamAccess: { mode: 'restricted'; grants: Record<string, unknown> };
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 const request = (path: string, method = 'GET', body?: unknown): NextRequest => new NextRequest(`http://localhost${path}`, {
   method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
@@ -35,6 +36,9 @@ const request = (path: string, method = 'GET', body?: unknown): NextRequest => n
 beforeEach(() => {
   vi.clearAllMocks(); vi.unstubAllEnvs(); vi.stubEnv('CRM_MULTI_AGENT_ENABLED', 'false');
   calls = []; role = 'owner'; active = true; rpcError = false; personalSender = { ...DEFAULT_OUTREACH_SENDER }; savedSenderProfiles = null;
+  teamAccess = { mode: 'restricted', grants: {
+    'agency.manage': 'agency', 'messages.send': 'agency', 'team.manage': 'agency',
+  } };
   personalSignature = ''; authLookupFails = false; signatureDesign = null;
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
@@ -61,7 +65,7 @@ beforeEach(() => {
   };
   db = createClient('https://example.supabase.co', 'test-key', { global: { fetch: fetcher }, auth: { persistSession: false, autoRefreshToken: false } });
   vi.mocked(getSupabaseServerClient).mockReturnValue(db);
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
 });
 
 describe('personal account boundary', () => {
@@ -174,6 +178,7 @@ describe('owner-only agency configuration', () => {
   });
   it.each(['admin', 'agent', null] as const)('rejects %s even with multi-agent mode disabled', async (value) => {
     role = value;
+    teamAccess.grants = {};
     await expect(requireAgencyOwner(db, userId)).rejects.toThrow('Only the agency owner');
     expect((await settings(request('/api/settings/outreach'))).status).toBe(403);
     expect((await updateSettings(request('/api/outreach', 'PATCH', { daily_send_cap: 25 }))).status).toBe(403);
@@ -181,6 +186,9 @@ describe('owner-only agency configuration', () => {
   });
   it('rejects inactive owners', async () => {
     active = false;
+    vi.mocked(getApiSession).mockResolvedValue({
+      user: null, error: NextResponse.json({ message: 'Inactive membership' }, { status: 403 }),
+    });
     expect((await settings(request('/api/settings/outreach'))).status).toBe(403);
   });
   it('persists owner settings through the audited database command, not direct updates', async () => {
@@ -198,18 +206,18 @@ describe('owner-only agency configuration', () => {
     expect((await updateSettings(request('/api/settings/outreach', 'PATCH', { daily_send_cap: 25 }))).status).toBe(403);
   });
   it('does not expose the team directory to an agent', async () => {
-    vi.stubEnv('CRM_MULTI_AGENT_ENABLED', 'true'); role = 'agent';
+    vi.stubEnv('CRM_MULTI_AGENT_ENABLED', 'true'); role = 'agent'; teamAccess.grants = {};
     const response = await agency(request('/api/agency'));
     expect((await response.json()).members).toEqual([]);
     expect(calls.filter((call) => call.path.endsWith('/agency_members')).every((call) => call.url.searchParams.has('user_id'))).toBe(true);
   });
   it('does not let an admin invite agents without owner authority', async () => {
-    vi.stubEnv('CRM_MULTI_AGENT_ENABLED', 'true'); role = 'admin';
+    vi.stubEnv('CRM_MULTI_AGENT_ENABLED', 'true'); role = 'admin'; teamAccess.grants = {};
     expect((await invite(request('/api/agency', 'POST', { email: 'invited@example.invalid' }))).status).toBe(403);
     expect(calls.some((call) => call.path.includes('/auth/'))).toBe(false);
   });
   it('prevents a personal profile from replacing agency-approved claims', async () => {
-    vi.stubEnv('CRM_MULTI_AGENT_ENABLED', 'true'); role = 'agent';
+    vi.stubEnv('CRM_MULTI_AGENT_ENABLED', 'true'); role = 'agent'; teamAccess.grants = {};
     const response = await updateSender(request('/api/agency', 'PUT', {
       sender_profile: { ...DEFAULT_OUTREACH_SENDER, approved_claims: 'Unauthorized agency promise' }, gmail_ai_opt_in: false,
     }));

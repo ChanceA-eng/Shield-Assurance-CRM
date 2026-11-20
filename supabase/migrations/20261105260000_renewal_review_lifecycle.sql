@@ -136,7 +136,7 @@ create or replace view public.renewals
 with (security_invoker = true) as
 select
   p.id,p.client_id,p.insured_name,p.phone,p.email,p.address,p.carrier,p.line_of_business,p.premium,p.policy_number,
-  p.effective_date,p.renewal_date,p.status,p.created_at,p.account_id,p.sub_type,p.expiration_date,p.billing_type,p.prior_policy_id,p.source,
+  p.effective_date,p.renewal_date,p.status,p.created_at,p.account_id,p.sub_type,p.expiration_date,p.billing_type,p.source,p.prior_policy_id,
   case
     when coalesce(p.renewal_date,p.expiration_date) < current_date then 'overdue'
     when coalesce(p.renewal_date,p.expiration_date) <= current_date + interval '30 days' then '0-30'

@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AUTOMATION_EXECUTION_POLICY, AUTOMATION_RULE_INVENTORY, validateAutomationConfiguration } from '@crm/shared';
 import { getApiSession } from '../../../../lib/api-auth';
-import { requireAgencyOwner } from '../../../../lib/agency-access';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { getAutomationSettings, parseAutomationSnapshot } from '../../../../lib/automation-settings';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
 import { WorkspaceError } from '../../../../lib/record-scope';
+import { requireTeamPermission } from '../../../../lib/team-request-access';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -13,7 +13,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'automation.view');
     const rawBefore = request.nextUrl.searchParams.get('before');
     const before = rawBefore === null ? null : Number(rawBefore);
     if (before !== null && (!/^[1-9]\d*$/.test(rawBefore ?? '') || !Number.isSafeInteger(before) || before > 2147483647)) {
@@ -40,7 +40,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'automation.manage');
     const body = await workspaceBody(request);
     if (Object.keys(body).some((key) => !['configuration', 'expected_revision'].includes(key))
       || typeof body.expected_revision !== 'number' || !Number.isInteger(body.expected_revision)

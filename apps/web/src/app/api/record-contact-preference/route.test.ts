@@ -41,6 +41,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getApiSession).mockResolvedValue({
     user: { id: actor, aud: 'authenticated', created_at: '', app_metadata: {}, user_metadata: {} }, error: null,
+    teamAccess: { mode: 'restricted', grants: {
+      'leads.view': 'assigned', 'leads.edit': 'assigned', 'accounts.view': 'assigned', 'accounts.edit': 'assigned',
+    } },
   });
   vi.mocked(activeAgencyMember).mockResolvedValue({
     user_id: actor, email: 'synthetic@example.invalid', role: 'agent', active: true, sender_profile: null, gmail_ai_opt_in: false,

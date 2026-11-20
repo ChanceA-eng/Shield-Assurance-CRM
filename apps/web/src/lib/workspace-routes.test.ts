@@ -26,6 +26,9 @@ const leadId = '039d0052-4587-4bb9-9f0b-d5b92407f58c';
 const itemId = '168413e9-a6a4-4dff-a8bf-8f8df83dace6';
 const now = '2026-10-31T16:30:00.000Z';
 const user: User = { id: itemId, app_metadata: {}, user_metadata: {}, aud: 'authenticated', created_at: now };
+const teamAccess = { mode: 'restricted' as const, grants: {
+  'tasks.view': 'agency', 'tasks.edit': 'agency',
+} };
 const calls: Array<{ url: URL; method: string; body: Record<string, unknown> | null }> = [];
 let respond: (url: URL, method: string, body: Record<string, unknown> | null) => Response;
 
@@ -54,7 +57,7 @@ beforeEach(() => {
   vi.mocked(getSupabaseServerClient).mockReturnValue(createClient('https://example.supabase.co', 'test-key', {
     global: { fetch: fetcher }, auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   }));
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   vi.mocked(requireApiSession).mockResolvedValue(null);
 });
 

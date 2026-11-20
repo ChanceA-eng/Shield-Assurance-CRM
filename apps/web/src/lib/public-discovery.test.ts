@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createClient } from '@supabase/supabase-js';
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import type { User } from '@supabase/supabase-js';
 import { GET, POST } from '../app/api/intelligence/public-records/route';
 import { getSupabaseServerClient } from './supabase-server';
+import { getApiSession } from './api-auth';
 import { fmcsaSearchByName } from './enrichment';
 
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
-vi.mock('./api-auth', () => ({ getApiSession: vi.fn().mockResolvedValue({ user: { id: 'actor' }, error: null }) }));
+vi.mock('./api-auth', () => ({ getApiSession: vi.fn() }));
+const user: User = { id: 'actor', aud: 'authenticated', created_at: '', app_metadata: {}, user_metadata: {} };
+const teamAccess = { mode: 'restricted' as const, grants: { 'leads.prospect': 'agency' } };
 const source = '168413e9-a6a4-4dff-a8bf-8f8df83dace6', requestId = '168413e9-a6a4-4dff-a8bf-8f8df83dace7';
 const batch = '168413e9-a6a4-4dff-a8bf-8f8df83dace8';
 const carrier = () => ({ dotNumber: 12345, legalName: 'Synthetic Transport', telephone: '520-555-0101',
@@ -17,6 +21,7 @@ let rows: unknown[], selected: Record<string, unknown>, previous: Record<string,
 let active: boolean, sourceActive: boolean, provider: string, loseResponse: boolean, invalidPayload: boolean;
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubEnv('FMCSA_WEBKEY', 'synthetic-key');
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   calls = []; providerCalls = []; rows = [{ carrier: carrier() }]; selected = carrier(); previous = null;
   active = true; sourceActive = true; provider = 'fmcsa'; loseResponse = false; invalidPayload = false;
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -133,8 +138,12 @@ describe('reviewed public-record acquisition', () => {
   });
   it('requires active membership and correct current source approval before every provider lookup or replay', async () => {
     active = false;
+    vi.mocked(getApiSession).mockResolvedValue({
+      user: null, error: NextResponse.json({ message: 'Inactive membership' }, { status: 403 }),
+    });
     expect((await get()).status).toBe(403);
     active = true; provider = 'file';
+    vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
     expect((await post()).status).toBe(403);
     provider = 'fmcsa'; sourceActive = false;
     expect((await post()).status).toBe(403);

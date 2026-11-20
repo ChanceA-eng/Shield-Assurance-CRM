@@ -7,6 +7,7 @@ import { accountOrigin, reauthenticate, securityLimit, type EmailChange } from '
 import { sendAccountMail } from '../../../../lib/account-mail';
 import { WorkspaceError } from '../../../../lib/record-scope';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
+import { hasTeamPermission } from '../../../../lib/team-request-access';
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -51,8 +52,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     await securityLimit(db, 'email-request', session.user.id);
     const result = await db.rpc('request_account_email', { p_actor: session.user.id, p_email: body.email });
     if (result.error) throw databaseError(result.error);
-    return NextResponse.json({ message: member.role === 'agent'
-      ? 'Request sent to the owner. After approval, return here to verify both addresses.'
+    return NextResponse.json({ message: !hasTeamPermission(session.teamAccess, 'team.manage')
+      ? 'Request sent for administrator approval. After approval, return here to verify both addresses.'
       : 'Request saved. Send verification links to confirm both addresses.' });
   } catch (error) { return workspaceApiError(error, 'account/email'); }
 }

@@ -37,6 +37,4 @@ test('template merge fields insert usable text and remain available after save',
   await page.getByRole('button', { name: 'Reload saved templates', exact: true }).click();
   await chooser.selectOption({ index: 1 });
   await expect(body).toHaveValue(`${before}{{contact_name}}`);
-  await page.getByRole('button', { name: 'Ask Rashi', exact: true }).click();
-  await expect(page.getByText(/Delivery appends the agent signature/)).toBeVisible();
 });

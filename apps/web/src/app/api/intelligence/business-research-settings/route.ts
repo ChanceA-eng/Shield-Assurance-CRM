@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../../lib/api-auth';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
-import { requireAgencyOwner } from '../../../../lib/agency-access';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
 import { WorkspaceError } from '../../../../lib/record-scope';
 import { isRecord, isUuid } from '../../../../lib/workspace-validation';
+import { requireTeamPermission } from '../../../../lib/team-request-access';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('Database unavailable.', 503);
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'automation.view');
     const [settings, sources, jobs, partial, partitions] = await Promise.all([
       db.from('business_research_settings').select('*').eq('id', 1).single(),
       db.from('business_research_sources').select('provider,enabled,retained_rights,reference,revision').order('provider'),
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('Database unavailable.', 503);
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'automation.manage');
     const body = await workspaceBody(request);
     if (body.action === 'retry_index') {
       if (!['irs', 'dol_5500', 'osm'].includes(String(body.provider)) || typeof body.state !== 'string' || !/^[A-Z]{2}$/.test(body.state)) throw new WorkspaceError('Choose a failed directory index.', 400);

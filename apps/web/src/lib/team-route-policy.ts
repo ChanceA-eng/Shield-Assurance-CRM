@@ -49,13 +49,15 @@ routes(['/clients/[clientId]/tags'], { GET: permission('accounts.view'), POST: p
 routes(['/communication/inbox', '/communication-log/delivery', '/communication-log/unread', '/communication-log/unread-by-lead'], { GET: permission('messages.view') });
 routes(['/communication-log/mark-read'], { POST: permission('messages.view') });
 routes(['/communication-log'], { GET: permission('messages.view'), POST: permission('messages.send'), PATCH: permission('messages.view') });
-routes(['/communication/scheduled', '/leads/[id]/scheduled-messages'], { GET: permission('messages.view'), POST: permission('messages.send'), DELETE: permission('messages.send') });
+routes(['/communication/scheduled', '/leads/[id]/scheduled-messages'], {
+  GET: permission('messages.view', false), POST: permission('messages.send', false), DELETE: permission('messages.send', false),
+});
 routes(['/scheduled-messages'], { GET: permission('messages.view'), POST: permission('messages.send'), PATCH: permission('messages.send'), DELETE: permission('messages.send') });
-routes(['/email/consent'], { POST: handler('records') });
+routes(['/email/consent'], { POST: permission('campaigns.send', false) });
 routes(['/events'], { GET: handler('calendar'), POST: handler('calendar'), PATCH: handler('calendar') });
 routes(['/events/[eventId]/confirmation', '/events/[eventId]/sync'], { POST: handler('calendar') });
 routes(['/gmail'], { GET: handler('personal'), DELETE: handler('personal') });
-routes(['/gmail/connect', '/gmail/sync'], { POST: permission('messages.view') });
+routes(['/gmail/connect', '/gmail/sync'], { POST: { kind: 'permission', permissions: ['messages.view', 'integrations.manage'], recordScoped: true } });
 routes(['/gmail/callback'], { GET: handler('personal') });
 routes(['/gmail/threads'], { GET: permission('messages.view'), POST: permission('messages.view') });
 routes(['/google-calendar', '/zoom'], { GET: handler('personal'), DELETE: handler('personal') });
@@ -93,7 +95,8 @@ routes(['/learning/blocks/create', '/learning/blocks/delete', '/learning/blocks/
   '/learning/modules/create', '/learning/modules/delete', '/learning/modules/duplicate', '/learning/modules/update',
   '/learning/quizzes/create', '/learning/quizzes/delete', '/learning/quizzes/update',
   '/learning/snapshots/create', '/learning/snapshots/restore'], { POST: permission('knowledge.edit', false) });
-routes(['/learning/courses/list', '/learning/lessons/get', '/learning/progress/get', '/learning/snapshots/list'], { GET: permission('knowledge.view', false) });
+routes(['/learning/courses/list', '/learning/lessons/get', '/learning/progress/get'], { GET: permission('knowledge.view', false) });
+routes(['/learning/snapshots/list'], { GET: permission('knowledge.edit', false) });
 routes(['/learning/progress/update', '/learning/quizzes/submit'], { POST: permission('knowledge.view', false) });
 routes(['/learning/static-assessments/[moduleNumber]'], { GET: permission('knowledge.view', false), POST: permission('knowledge.view', false) });
 routes(['/metrics/tasks'], { GET: handler('tasks') });
@@ -101,13 +104,13 @@ routes(['/notifications'], { GET: handler('shell'), PATCH: handler('shell'), POS
 routes(['/outreach/enroll'], { GET: permission('campaigns.view'), POST: permission('campaigns.send') });
 routes(['/outreach/enrollments/[id]', '/outreach/outbox/[id]'], { PATCH: permission('campaigns.send') });
 routes(['/outreach/outbox/[id]/rewrite', '/outreach/run'], { POST: permission('campaigns.send') });
-routes(['/outreach/profile'], { GET: handler('personal'), PUT: handler('personal') });
+routes(['/outreach/profile'], { GET: handler('records'), PUT: handler('records') });
 const outreachSettingsPolicy: TeamRoutePolicy = { kind: 'permission', permissions: ['automation.manage', 'agency.manage'], recordScoped: false };
 routes(['/outreach'], { GET: permission('campaigns.view'), PATCH: outreachSettingsPolicy });
 routes(['/placement-documents', '/policy-change-requests/documents'], { GET: permission('documents.view'), POST: permission('documents.edit') });
 routes(['/policies/history', '/policies/identity', '/policies/insured-assets', '/policies/prefill', '/renewals'], { GET: permission('policies.view') });
 routes(['/policy-knowledge'], { GET: permission('knowledge.view'), POST: permission('knowledge.edit'), PATCH: permission('knowledge.edit') });
-routes(['/questionnaires/files/[fileId]'], { GET: permission('documents.view') });
+routes(['/questionnaires/files/[fileId]'], { GET: handler('records') });
 routes(['/questionnaires'], { GET: permission('intake.manage'), POST: permission('intake.manage') });
 routes(['/quote-options'], { GET: permission('policies.view'), POST: permission('policies.edit'), PATCH: permission('policies.edit') });
 routes(['/rashi/analyze', '/rashi/chat', '/rashi/extract', '/rashi/query'], { POST: handler('records') });
@@ -128,7 +131,7 @@ routes(['/sales-sequences'], { GET: permission('campaigns.view', false), POST: p
 routes(['/sales-templates'], { GET: handler('templates'), PATCH: handler('templates'), POST: handler('templates') });
 routes(['/sales-templates/banner'], { POST: handler('templates') });
 routes(['/account/signature-image'], { POST: handler('personal') });
-routes(['/settings/account-email'], { GET: handler('personal'), POST: handler('personal') });
+routes(['/settings/account-email'], { GET: permission('team.manage', false), POST: permission('team.manage', false) });
 routes(['/settings/automation', '/settings/automation/scheduler'], { GET: permission('automation.view', false), PATCH: permission('automation.manage', false) });
 routes(['/settings/automation/rules', '/settings/automation/rules/backlog'], { GET: permission('automation.view', false), POST: permission('automation.manage', false) });
 routes(['/settings/email'], { GET: permission('integrations.manage', false), POST: permission('integrations.manage', false) });

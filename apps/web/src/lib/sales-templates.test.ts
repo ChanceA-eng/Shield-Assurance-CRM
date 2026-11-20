@@ -17,11 +17,14 @@ import { getOwnGmailConnection } from './gmail-provider';
 
 const actor = '168413e9-a6a4-4dff-a8bf-8f8df83dace6', leadId = '168413e9-a6a4-4dff-a8bf-8f8df83dace7';
 let role = 'owner', saved: Record<string, unknown> | null, revisionConflict = false;
+let grants: Record<string, string>;
 let schemaError = false;
 let stage = 'new', reply = false, overlap = false;
 let enrollment: Record<string, unknown> | null, rpcCalls: Array<{ name: string; input: Record<string, unknown> }>;
 const sender = { ...DEFAULT_OUTREACH_SENDER, name: 'Taylor', signature: 'Taylor\nTest Agency', agency: 'Test Agency' };
-vi.mock('./api-auth', () => ({ getApiSession: vi.fn(async () => ({ user: { id: actor }, error: null })) }));
+vi.mock('./api-auth', () => ({ getApiSession: vi.fn(async () => ({
+  user: { id: actor }, error: null, teamAccess: { mode: 'restricted', grants },
+})) }));
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
 vi.mock('./agency-membership', () => ({
   activeAgencyMember: vi.fn(async () => ({ role, active: true })), agencyEnabled: () => false,
@@ -40,7 +43,10 @@ vi.mock('./gmail-provider', () => ({ getOwnGmailConnection: vi.fn(async () => nu
 vi.mock('./lead-outreach-context', () => ({ recordOutreachContext: vi.fn(async () => ({ recent_conversation: [], outreach_sender: sender })) }));
 
 beforeEach(() => {
-  vi.clearAllMocks(); role = 'owner'; saved = null; enrollment = null; rpcCalls = []; stage = 'new'; reply = false; overlap = false; revisionConflict = false; schemaError = false;
+  vi.clearAllMocks(); role = 'owner'; grants = {
+    'content.view': 'agency', 'content.edit': 'agency', 'campaigns.view': 'agency', 'campaigns.send': 'agency',
+    'leads.view': 'agency', 'messages.view': 'agency', 'messages.send': 'agency', 'automation.manage': 'agency',
+  }; saved = null; enrollment = null; rpcCalls = []; stage = 'new'; reply = false; overlap = false; revisionConflict = false; schemaError = false;
   vi.mocked(getOwnGmailConnection).mockResolvedValue(null);
   vi.mocked(getSupabaseServerClient).mockReturnValue(createClient('https://db.example.invalid', 'test-key', {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -211,12 +217,13 @@ describe('persistent template APIs', () => {
     expect((await read.json()).templates).toContainEqual(expect.objectContaining({ id: template.id, revision: 1, email_body: 'Saved agency content for {{contact_name}}.' }));
     expect(rpcCalls[0]?.input.p_actor).toBe(actor);
   });
-  it('agents can browse but cannot save, and admins can save', async () => {
+  it('uses the selected template grants independently of the membership title', async () => {
     role = 'agent';
+    grants = { 'content.view': 'agency' };
     expect((await GET(request('GET'))).status).toBe(200);
     expect((await PATCH(request('PATCH', SALES_TEMPLATES[0]))).status).toBe(403);
     expect(rpcCalls).toHaveLength(0);
-    role = 'admin';
+    grants = { 'content.view': 'agency', 'content.edit': 'agency' };
     expect((await PATCH(request('PATCH', SALES_TEMPLATES[0]))).status).toBe(200);
   });
   it('returns a visible conflict rather than overwriting simultaneous edits', async () => {

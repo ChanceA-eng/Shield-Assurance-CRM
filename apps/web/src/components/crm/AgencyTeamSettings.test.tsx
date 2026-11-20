@@ -21,6 +21,11 @@ it('server-renders the website-style roster with a freeform title, unchecked per
   expect(html).toContain('Type any role title');
   expect(html).toContain('Renewal Coordinator');
   expect(html).toContain('Starting permissions');
+  expect(html).toContain('Leads permissions');
+  expect(html).toContain('Tasks and calendar permissions');
+  expect(html).toContain('Reports permissions');
+  expect(html).toContain('Publish without review using checklist');
+  expect(html).not.toContain('Not available yet');
   expect(html).toContain('type="checkbox"');
   expect(html).not.toContain('checked=""');
   expect(html).not.toContain('Producer');

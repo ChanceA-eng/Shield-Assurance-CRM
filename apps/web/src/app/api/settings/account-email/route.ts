@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../../lib/api-auth';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
-import { requireAgencyOwner } from '../../../../lib/agency-access';
 import { WorkspaceError } from '../../../../lib/record-scope';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
 import { isUuid } from '../../../../lib/workspace-validation';
 import { readPendingEmailChanges } from '../../../../lib/account-security';
+import { requireTeamPermission } from '../../../../lib/team-request-access';
 
 async function handle(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -13,7 +13,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
   try {
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('Account security is unavailable.', 503);
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'team.manage');
     if (request.method === 'GET') {
       return NextResponse.json({ requests: await readPendingEmailChanges(db) }, { headers: { 'Cache-Control': 'private, no-store' } });
     }

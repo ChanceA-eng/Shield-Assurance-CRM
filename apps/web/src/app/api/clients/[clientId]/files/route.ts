@@ -5,7 +5,8 @@ import { apiActorName, getApiSession } from '../../../../../lib/api-auth';
 import { operationErrorStatus } from '../../../../../lib/policy-identity';
 import { isRecord } from '../../../../../lib/workspace-validation';
 import { validateReviewedIntakeFields } from '../../../../../lib/policy-document-intake';
-import { accountDocumentReadScope } from '../../../../../lib/team-request-access';
+import { accountDocumentReadScope, accountRecordScope } from '../../../../../lib/team-request-access';
+import { checkAccountUploadAccess } from '../../../../../lib/account-upload-access';
 import {
   CLIENT_FILE_COLUMNS,
   classifyClientFile,
@@ -100,6 +101,10 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
 
   const { clientId } = await context.params;
   if (!isUuid(clientId)) return NextResponse.json({ message: 'A valid account id is required.' }, { status: 400 });
+  const editScope = accountRecordScope(session.teamAccess, 'documents.edit');
+  if (!editScope) return NextResponse.json({ message: 'You do not have access to upload account documents.' }, { status: 403 });
+  const accessDenied = await checkAccountUploadAccess(supabase, session.teamAccess, session.user.id, clientId);
+  if (accessDenied) return accessDenied;
 
   const payload = await readJson<LinkPayload>(request);
   if (!payload) return NextResponse.json({ message: 'Invalid JSON body.' }, { status: 400 });
@@ -139,6 +144,9 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const { clientId } = await context.params;
+  if (!isUuid(clientId)) return NextResponse.json({ message: 'A valid account id is required.' }, { status: 400 });
+  const accessDenied = await checkAccountUploadAccess(supabase, session.teamAccess, session.user.id, clientId);
+  if (accessDenied) return accessDenied;
   const payload = await readJson<LinkPayload>(request);
   if (!payload) return NextResponse.json({ message: 'Invalid JSON body.' }, { status: 400 });
   const fileId = payload.id;
@@ -205,6 +213,11 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   const { clientId } = await context.params;
+  if (!isUuid(clientId)) return NextResponse.json({ message: 'A valid account id is required.' }, { status: 400 });
+  const deleteScope = accountRecordScope(session.teamAccess, 'documents.delete');
+  if (!deleteScope) return NextResponse.json({ message: 'You do not have access to remove account documents.' }, { status: 403 });
+  const accessDenied = await checkAccountUploadAccess(supabase, session.teamAccess, session.user.id, clientId, 'documents.delete');
+  if (accessDenied) return accessDenied;
   const payload = await readJson<{ id?: string }>(request);
   const fileId = payload?.id;
   if (!isUuid(clientId) || !isUuid(fileId)) return NextResponse.json({ message: 'id is required.' }, { status: 400 });

@@ -21,8 +21,8 @@ import {
 import { navigationCategories, activeNavigationHref, type NavCategory } from '../../config/navigation';
 import { useNav } from '../../context/NavContext';
 import { useNotifications } from '../../context/NotificationContext';
-import { useStaffRecords, useStaffWorkspace, useTeamManager } from '../../context/StaffWorkspaceContext';
-import { staffRecords } from '../../lib/staff-records';
+import { useStaffAccess, useStaffWorkspace } from '../../context/StaffWorkspaceContext';
+import { canAccessTeamPage } from '../../lib/team-page-access';
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   LayoutGrid,
@@ -61,8 +61,7 @@ function SidebarNavigation(): JSX.Element {
   const activeHref = activeNavigationHref(pathname, search);
   const { isNavOpen, closeNav } = useNav();
   const workspace = useStaffWorkspace();
-  const records = useStaffRecords();
-  const teamManager = useTeamManager();
+  const access = useStaffAccess();
   const { dueTodayCount, unreadMessages } = useNotifications();
   const messageCount = unreadMessages.total;
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
@@ -101,26 +100,40 @@ function SidebarNavigation(): JSX.Element {
 
   const sidebarBody = workspace !== 'full' ? (
     <nav aria-label="Main navigation" className="flex-1 overflow-y-auto py-2">
-      {records.map((kind) => {
-        const { href, label } = staffRecords[kind];
-        const Icon = kind === 'policies' ? FileStack : Users;
-        return <a key={kind} href={href} aria-current={pathname === href ? 'page' : undefined}
-          onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
-          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />{label}
-        </a>;
-      })}
-      {workspace !== 'account' ? <a href="/communication/social" aria-current={pathname === '/communication/social' ? 'page' : undefined}
-        onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
-        <Network className="h-4 w-4 shrink-0" aria-hidden="true" />Social Marketing
-      </a> : null}
-      <a href="/account" aria-current={pathname === '/account' ? 'page' : undefined}
-        onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
-        <User className="h-4 w-4 shrink-0" aria-hidden="true" />My Account
-      </a>
-      {teamManager && <a href="/settings?tab=team" aria-current={pathname === '/settings' ? 'page' : undefined}
-        onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
-        <Settings className="h-4 w-4 shrink-0" aria-hidden="true" />Team access
+      {canAccessTeamPage(access, '/') && <a href="/" onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item">
+        <LayoutGrid className="h-4 w-4 shrink-0" aria-hidden="true" />Dashboard
       </a>}
+      {navigationCategories.filter((category) => category.id !== 'settings').map((category) => {
+        const links = category.sections?.flatMap((section) => section.items) ?? (category.href ? [{ label: category.label, href: category.href }] : []);
+        const visible = links.filter((item) => {
+          const target = new URL(item.href, 'https://crm.local');
+          return canAccessTeamPage(access, target.pathname, target.searchParams.toString());
+        });
+        if (!visible.length) return null;
+        const Icon = iconMap[category.icon] ?? LayoutGrid;
+        return <section key={category.id} aria-label={category.label} className="pb-2">
+          <p className="px-4 pb-1 pt-3 text-[11px] font-bold uppercase tracking-wider text-cui-muted">{category.label}</p>
+          {visible.map((item) => <Link key={item.href} href={item.href as Route} aria-current={item.href === activeHref ? 'page' : undefined}
+            onClick={closeMobileNav} className="flex items-center gap-3 px-4 py-2 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />{item.label}
+          </Link>)}
+        </section>;
+      })}
+      {(['team', 'email', 'automation', 'intelligence', 'permissions', 'integrations'] as const).map((tab) => {
+        const href = `/settings?tab=${tab}`;
+        if (!canAccessTeamPage(access, '/settings', `tab=${tab}`)) return null;
+        const label = tab === 'team' ? 'Team access' : tab === 'email' ? 'Email'
+          : tab === 'automation' ? 'Automation' : tab === 'intelligence' ? 'Lead discovery'
+            : tab === 'permissions' ? 'Marketing permission' : 'Integrations';
+        return <Link key={tab} href={href as Route} onClick={closeMobileNav}
+          className="flex items-center gap-3 px-4 py-2 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item">
+          <Settings className="h-4 w-4 shrink-0" aria-hidden="true" />{label}
+        </Link>;
+      })}
+      <Link href="/account" aria-current={pathname === '/account' ? 'page' : undefined} onClick={closeMobileNav}
+        className="flex items-center gap-3 px-4 py-2.5 text-sm text-cui-sidebar-text hover:bg-cui-sidebar-item aria-[current=page]:bg-cui-sidebar-item aria-[current=page]:text-white">
+        <User className="h-4 w-4 shrink-0" aria-hidden="true" />My Account
+      </Link>
     </nav>
   ) : (
     <nav aria-label="Main navigation" className="flex-1 overflow-y-auto py-2">

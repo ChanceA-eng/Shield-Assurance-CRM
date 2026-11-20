@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../../lib/api-auth';
-import { activeAgencyMember, agencyEnabled } from '../../../../lib/agency-membership';
+import { agencyEnabled } from '../../../../lib/agency-membership';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
 import { WorkspaceError } from '../../../../lib/record-scope';
+import { requireTeamPermission } from '../../../../lib/team-request-access';
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -11,9 +12,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
-    if (agencyEnabled() && (await activeAgencyMember(db, session.user.id)).role === 'agent') {
-      throw new WorkspaceError('Only administrators can record agency marketing permission.', 403);
-    }
+    if (agencyEnabled()) requireTeamPermission(session.teamAccess, 'campaigns.send');
     const body = await workspaceBody(request);
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const source = typeof body.source === 'string' ? body.source.trim() : '';

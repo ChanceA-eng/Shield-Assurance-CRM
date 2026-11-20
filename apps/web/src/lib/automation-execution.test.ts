@@ -26,10 +26,12 @@ const json = (data: unknown, status = 200): Response => new Response(JSON.string
 let role: string;
 let gmailCursor: string | null;
 let calls: Array<{ path: string; method: string; body: unknown }>;
+let teamAccess: { mode: 'restricted'; grants: Record<string, unknown> };
 afterEach(() => vi.unstubAllEnvs());
 beforeEach(() => {
   vi.clearAllMocks(); vi.unstubAllEnvs(); role = 'owner'; calls = []; gmailCursor = null;
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  teamAccess = { mode: 'restricted', grants: { 'automation.view': 'agency', 'automation.manage': 'agency' } };
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   vi.mocked(processDueEnrollments).mockResolvedValue({ drafted: 0, autoSent: 0, skipped: 0 });
   vi.mocked(processAgentScheduled).mockResolvedValue({ sent: 0, blocked: 0 });
   vi.mocked(runWorkflowAutomation).mockResolvedValue({ status: 'succeeded', summary: { succeeded: 1, failed: 0, skipped: 0 } });
@@ -61,12 +63,12 @@ describe('scoped automation execution', () => {
     const response = await preview(new NextRequest('http://localhost/api/automation/run?job=follow-up-routine'));
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ records: 3, preview_only: true });
-    expect(calls.map((call) => call.path)).toEqual(['/rest/v1/agency_members', '/rest/v1/rpc/preview_automation_job']);
+    expect(calls.map((call) => call.path)).toEqual(['/rest/v1/rpc/preview_automation_job']);
     expect(processDueEnrollments).not.toHaveBeenCalled();
   });
   it.each(['unknown', 'all', 'website-intake'])('rejects unsupported bundled job %s', async (job) => {
     expect((await preview(new NextRequest(`http://localhost/api/automation/run?job=${job}`))).status).toBe(400);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
   it('rejects unconfirmed runs and stale previews before execution', async () => {
     expect((await run(post({ job: 'follow-up-routine', expected_revision: 2 }))).status).toBe(400);
@@ -97,6 +99,7 @@ describe('scoped automation execution', () => {
   });
   it.each(['admin', 'agent'])('blocks %s previews, execution and scheduler mutation', async (value) => {
     role = value;
+    teamAccess.grants = {};
     expect((await preview(new NextRequest('http://localhost/api/automation/run?job=outreach'))).status).toBe(403);
     expect((await run(post({ job: 'outreach', expected_revision: 2, confirmed: true }))).status).toBe(403);
     expect((await changeScheduler(new NextRequest('http://localhost/api/settings/automation/scheduler', {
@@ -112,7 +115,7 @@ describe('scoped automation execution', () => {
     expect((await changeScheduler(new NextRequest('http://localhost/api/settings/automation/scheduler', {
       method: 'PATCH', body: JSON.stringify({ enabled: 'false' }),
     }))).status).toBe(400);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
 });
 describe('server heartbeat authorization', () => {

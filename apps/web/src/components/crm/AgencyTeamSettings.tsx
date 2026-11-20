@@ -2,7 +2,7 @@
 
 import * as Dialog from '@radix-ui/react-dialog';
 import { useState } from 'react';
-import { TEAM_PERMISSIONS, teamScopeIncludes, type TeamAccess, type TeamScope } from '@crm/shared';
+import { TEAM_PERMISSIONS, teamScopeIncludes, type TeamAccess, type TeamPermission, type TeamScope } from '@crm/shared';
 import { useUnsavedChanges } from '../../context/WorkspaceNavigationContext';
 import { TEAM_PROFILE_PERMISSIONS } from '../../lib/team-profile-permissions';
 import type { TeamMember, TeamSettingsData } from '../../lib/team-settings';
@@ -19,7 +19,8 @@ const labels = {
   team_setup_email_unconfirmed: 'Email acceptance unconfirmed',
   team_profile_revoked: 'Invitation revoked',
 } as const;
-const permissionKeys = Object.keys(TEAM_PROFILE_PERMISSIONS) as (keyof typeof TEAM_PROFILE_PERMISSIONS)[];
+const permissionKeys = Object.keys(TEAM_PERMISSIONS) as TeamPermission[];
+const permissionGroups = [...new Set(permissionKeys.map((key) => TEAM_PERMISSIONS[key].group))];
 const setupPending = (member: TeamMember): boolean => member.setup_state === 'pending' || member.setup_state === 'delivery_failed' || member.setup_state === 'sent';
 const accessLabel = (member: TeamMember): string => {
   if (member.active) return 'Active access';
@@ -35,8 +36,11 @@ function PermissionGrid({ value, onChange, heading, disabled, ceiling }: {
 }): JSX.Element {
   return <fieldset disabled={disabled}>
     <legend className="mb-3 text-sm font-bold">{heading}</legend>
-    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-      {permissionKeys.map((key) => {
+    <div className="space-y-5">
+      {permissionGroups.map((group) => <section key={group} aria-label={`${group} permissions`}>
+        <h4 className="mb-2 text-sm font-bold text-cui-text">{group}</h4>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {permissionKeys.filter((key) => TEAM_PERMISSIONS[key].group === group).map((key) => {
         const scopes: readonly TeamScope[] = TEAM_PERMISSIONS[key].scopes.filter((scope) =>
           !ceiling || Boolean(ceiling[key] && teamScopeIncludes(ceiling[key]!, scope)));
         const label = TEAM_PROFILE_PERMISSIONS[key];
@@ -56,6 +60,8 @@ function PermissionGrid({ value, onChange, heading, disabled, ceiling }: {
           </select>}
         </div>;
       })}
+        </div>
+      </section>)}
     </div>
   </fieldset>;
 }

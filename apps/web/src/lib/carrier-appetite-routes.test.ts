@@ -23,12 +23,14 @@ const calls: Array<{ url: URL; method: string; body: Record<string, unknown> }> 
 let missing = false;
 let stored = true;
 let concurrent = false;
+let teamAccess: { mode: 'restricted'; grants: Record<string, unknown> };
 const request = (body: object): NextRequest => new NextRequest('http://localhost/api/carrier-appetite', { method: 'POST', body: JSON.stringify(body) });
 beforeEach(() => {
   vi.clearAllMocks(); calls.length = 0; missing = false; stored = true; concurrent = false;
+  teamAccess = { mode: 'restricted', grants: { 'knowledge.view': 'agency', 'knowledge.edit': 'agency' } };
   vi.mocked(interpretCarrierGuide).mockResolvedValue({ ...values,
     interpretation: { source_hash: 'a'.repeat(64), version: 'guide-ai-v1', summary: 'Synthetic cited reading.' } });
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   vi.mocked(activeAgencyMember).mockResolvedValue({ user_id: actor, email: 'synthetic@example.test', role: 'owner', active: true, sender_profile: null, gmail_ai_opt_in: false });
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
@@ -55,6 +57,7 @@ it('denies unauthenticated access before reading storage or documents', async ()
   expect(calls).toEqual([]);
 });
 it('allows agents to read only active guidance and denies all appetite writes', async () => {
+  teamAccess.grants = { 'knowledge.view': 'agency' };
   vi.mocked(activeAgencyMember).mockResolvedValue({ user_id: actor, email: 'synthetic@example.test', role: 'agent', active: true, sender_profile: null, gmail_ai_opt_in: false });
   const response = await GET(new NextRequest('http://localhost/api/carrier-appetite'));
   expect(response.status).toBe(200);

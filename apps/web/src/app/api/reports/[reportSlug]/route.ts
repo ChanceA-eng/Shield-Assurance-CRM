@@ -173,7 +173,7 @@ export async function GET(
   const supabase = getSupabaseServerClient();
   if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
-    await requireAgencyReportsAccess(supabase, session.user.id);
+    requireAgencyReportsAccess(session.teamAccess);
   } catch (error) {
     return workspaceApiError(error, 'reports/access');
   }

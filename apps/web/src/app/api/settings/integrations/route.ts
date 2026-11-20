@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../../lib/api-auth';
-import { requireAgencyOwner } from '../../../../lib/agency-access';
 import { gmailSetupIssues } from '../../../../lib/agency-membership';
 import { emailConnectionStatus } from '../../../../lib/email-setup';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { databaseError, friendlyErrorMessage, workspaceApiError } from '../../../../lib/workspace-api';
 import { WorkspaceError } from '../../../../lib/record-scope';
+import { requireTeamPermission } from '../../../../lib/team-request-access';
 
 type IntegrationState = 'missing' | 'configured' | 'healthy' | 'failed';
 
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   try {
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'integrations.manage');
     const databaseCheck = await db.from('agency_members').select('user_id', { head: true, count: 'exact' });
     if (databaseCheck.error) throw databaseError(databaseCheck.error);
 

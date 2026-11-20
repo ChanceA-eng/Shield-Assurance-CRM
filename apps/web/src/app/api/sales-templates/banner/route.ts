@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isEmailDesignUrl } from '@crm/shared';
 import { getApiSession } from '../../../../lib/api-auth';
-import { activeAgencyMember } from '../../../../lib/agency-membership';
 import { WorkspaceError } from '../../../../lib/record-scope';
 import { processSocialImage, readSocialUploadForm } from '../../../../lib/social-image';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { workspaceApiError } from '../../../../lib/workspace-api';
+import { requireTeamPermission } from '../../../../lib/team-request-access';
 
 export const runtime = 'nodejs';
 const bucketName = 'email-branding-images';
@@ -14,15 +14,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
   const signature = request.nextUrl.pathname === '/api/account/signature-image';
-  if ((!signature && session.teamAccess?.mode !== 'legacy') || ['cross-site', 'same-site'].includes(request.headers.get('sec-fetch-site') ?? '')) {
+  if (['cross-site', 'same-site'].includes(request.headers.get('sec-fetch-site') ?? '')) {
     return NextResponse.json({ message: 'Upload the banner from Templates and Branding.' }, { status: 403 });
   }
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'Image storage is not connected.' }, { status: 503 });
 
   try {
-    const member = await activeAgencyMember(db, session.user.id);
-    if (!signature && member.role !== 'owner' && member.role !== 'admin') throw new WorkspaceError('Only owners and admins can upload template banners.', 403);
+    if (!signature) requireTeamPermission(session.teamAccess, 'content.edit');
     const form = await readSocialUploadForm(request);
     const file = form.get('file');
     if ([...form.keys()].length !== 1 || !(file instanceof File)) throw new WorkspaceError('Choose one banner image.', 400);

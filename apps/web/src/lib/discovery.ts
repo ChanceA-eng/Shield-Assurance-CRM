@@ -3,10 +3,10 @@ import { EMPTY_DISCOVERY_FILTERS, validEvidenceDate, type DiscoveryFilters } fro
 import { isRecord, isUuid } from './workspace-validation';
 import { WorkspaceError } from './record-scope';
 import { databaseError } from './workspace-api';
-import { activeAgencyMember } from './agency-membership';
+import { requireTeamPermission, type RequestAccess } from './team-request-access';
 
-export async function discoveryAccess(db: SupabaseClient, actorId: string): Promise<boolean> {
-  return (await activeAgencyMember(db, actorId)).role === 'owner';
+export function discoveryAccess(access: RequestAccess | undefined): void {
+  requireTeamPermission(access, 'leads.prospect');
 }
 
 export function discoveryFilters(value: unknown): DiscoveryFilters {

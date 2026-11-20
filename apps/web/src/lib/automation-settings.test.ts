@@ -25,9 +25,11 @@ let revision: unknown;
 let active: boolean;
 let historyCount: number;
 let conflict: boolean;
+let teamAccess: { mode: 'restricted'; grants: Record<string, unknown> };
 beforeEach(() => {
   vi.clearAllMocks(); calls = []; role = 'owner'; fail = false; revision = 2; active = true; historyCount = 1; conflict = false;
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  teamAccess = { mode: 'restricted', grants: { 'automation.view': 'agency', 'automation.manage': 'agency' } };
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   vi.mocked(getSupabaseServerClient).mockReturnValue(createClient('https://example.supabase.co', 'test-key', {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { fetch: async (input) => {
@@ -120,7 +122,7 @@ describe('versioned automation contract', () => {
   ])('rejects malformed, unsupported or unwired configuration %#', (value) => {
     expect(() => parseAutomationSnapshot(value)).toThrow();
   });
-  it('returns owner-only current configuration and bounded history without running automation', async () => {
+  it('returns current configuration to an explicitly authorized member without running automation', async () => {
     const response = await GET(new NextRequest('http://localhost/api/settings/automation?before=3'));
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toContain('no-store');
@@ -138,13 +140,17 @@ describe('versioned automation contract', () => {
   });
   it.each(['admin', 'agent', null])('does not let %s read agency settings through editable metadata', async (value) => {
     role = value;
+    teamAccess.grants = {};
     expect((await GET(new NextRequest('http://localhost/api/settings/automation'))).status).toBe(403);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
   it('rejects inactive owners', async () => {
     active = false;
+    vi.mocked(getApiSession).mockResolvedValue({
+      user: null, error: NextResponse.json({ message: 'Inactive membership' }, { status: 403 }),
+    });
     expect((await GET(new NextRequest('http://localhost/api/settings/automation'))).status).toBe(403);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
   it.each([null, 0, -1, '2', 1.5, 2147483648])('reports invalid saved revision %s instead of inventing a configuration', async (value) => {
     revision = value;
@@ -170,15 +176,15 @@ describe('versioned automation contract', () => {
   });
   it.each(['', '0', '-1', '1.5', '2147483648', '1e2'])('rejects invalid history cursor %s', async (before) => {
     expect((await GET(new NextRequest(`http://localhost/api/settings/automation?before=${before}`))).status).toBe(400);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
-  it('saves valid controls through the owner-checked revision RPC only', async () => {
+  it('saves valid controls through the permission-checked revision RPC only', async () => {
     const configuration = { ...snapshot.automation, reply: { ...snapshot.automation.reply, due_minutes: 45 } };
     const response = await PATCH(new NextRequest('http://localhost/api/settings/automation', { method: 'PATCH',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ configuration, expected_revision: 2 }) }));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ revision: 3 });
-    expect(calls.map((call) => call.pathname)).toEqual(['/rest/v1/agency_members', '/rest/v1/rpc/save_agency_automation_settings']);
+    expect(calls.map((call) => call.pathname)).toEqual(['/rest/v1/rpc/save_agency_automation_settings']);
   });
   it('propagates a stale settings conflict without running any automation', async () => {
     conflict = true;
@@ -189,9 +195,10 @@ describe('versioned automation contract', () => {
   });
   it.each(['admin', 'agent', null])('rejects a %s automation write', async (value) => {
     role = value;
+    teamAccess.grants = {};
     expect((await PATCH(new NextRequest('http://localhost/api/settings/automation', { method: 'PATCH',
       body: JSON.stringify({ configuration: snapshot.automation, expected_revision: 2 }) }))).status).toBe(403);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
   it.each([
     { expected_revision: null }, { expected_revision: 0 }, { expected_revision: 2, unsafe_script: 'bad' },
@@ -200,7 +207,7 @@ describe('versioned automation contract', () => {
     const response = await PATCH(new NextRequest('http://localhost/api/settings/automation', { method: 'PATCH',
       body: JSON.stringify({ configuration: snapshot.automation, ...body }) }));
     expect(response.status).toBe(400);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
   it.each([0, 24, 2.5])('rejects invalid intake hour %s', (hour) => {
     if (hour === 0) expect(validateAutomationConfiguration({ ...snapshot.automation, intake: { ...snapshot.automation.intake, due_hour: hour } }).intake.due_hour).toBe(0);

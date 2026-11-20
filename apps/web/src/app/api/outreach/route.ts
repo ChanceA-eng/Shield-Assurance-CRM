@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { requireApiSession, getApiSession } from '../../../lib/api-auth';
 import { agencyEnabled } from '../../../lib/agency-membership';
-import { requireAgencyOwner } from '../../../lib/agency-access';
 import { getOutreachSettings, sentTodayCount } from '../../../lib/outreach-engine';
 import { isUuid } from '../../../lib/workspace-validation';
 import { parseOutreachSender } from '../../../lib/marketing-profile';
 import { workspaceApiError, workspaceBody, databaseError } from '../../../lib/workspace-api';
 import { isAgencyTimeZone } from '../../../lib/agency-time';
+import { hasTeamPermission } from '../../../lib/team-request-access';
 
 /** Outreach command center payload: settings, pending approvals, enrollments, counters. */
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -103,7 +103,10 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   if (!supabase) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
 
   try {
-  await requireAgencyOwner(supabase, session.user.id);
+  if (!hasTeamPermission(session.teamAccess, 'automation.manage')
+    && !hasTeamPermission(session.teamAccess, 'agency.manage')) {
+    return NextResponse.json({ message: 'You do not have permission to change outreach settings.' }, { status: 403 });
+  }
   const payload = await workspaceBody(request);
   const allowed = ['approval_mode', 'daily_send_cap', 'send_window_start', 'send_window_end', 'timezone', 'sender_profile', 'confirm_automatic_sending', 'expected_revision'];
   if (Object.keys(payload).some((key) => !allowed.includes(key))) return NextResponse.json({ message: 'An unsupported setting was supplied.' }, { status: 400 });

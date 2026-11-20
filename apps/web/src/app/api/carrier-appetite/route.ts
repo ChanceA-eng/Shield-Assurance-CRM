@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../lib/api-auth';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
-import { activeAgencyMember } from '../../../lib/agency-membership';
 import { WorkspaceError } from '../../../lib/record-scope';
 import { workspaceBody, workspaceApiError, databaseError } from '../../../lib/workspace-api';
 import { isUuid } from '../../../lib/workspace-validation';
@@ -9,6 +8,7 @@ import { ACCOUNT_DOCUMENT_BUCKET, validateUploadRequest, sanitizeDocumentName, v
 import { parseAppetitePages, parseCarrierAppetite } from '../../../lib/carrier-appetite';
 import { interpretCarrierGuide } from '../../../lib/carrier-appetite-ai';
 import type { CarrierAppetiteDocument } from '@crm/shared';
+import { hasTeamPermission, requireTeamPermission } from '../../../lib/team-request-access';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -18,8 +18,7 @@ async function access(request: NextRequest) {
   if (session.error) throw new WorkspaceError('Sign in before accessing carrier appetite.', session.error.status);
   const db = getSupabaseServerClient();
   if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
-  const member = await activeAgencyMember(db, session.user.id);
-  return { db, actor: session.user.id, owner: member.role === 'owner' };
+  return { db, actor: session.user.id, teamAccess: session.teamAccess };
 }
 function installed(error: { code?: string; message: string }): never {
   if (['42P01', 'PGRST205', 'PGRST202'].includes(error.code ?? '')) {
@@ -29,14 +28,15 @@ function installed(error: { code?: string; message: string }): never {
 }
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
-    const { db, owner } = await access(request);
+    const { db, teamAccess } = await access(request);
+    const canManage = hasTeamPermission(teamAccess, 'knowledge.edit');
     const overlaps = await db.rpc('carrier_appetite_source_overlaps');
     if (overlaps.error) installed(overlaps.error);
     const id = request.nextUrl.searchParams.get('id');
     if (id) {
       if (!isUuid(id)) throw new WorkspaceError('Select a valid carrier document.', 400);
       let query = db.from('carrier_appetite_documents').select('*').eq('id', id);
-      if (!owner) query = query.eq('state', 'active');
+      if (!canManage) query = query.eq('state', 'active');
       const current = await query.maybeSingle<CarrierAppetiteDocument>();
       if (current.error) installed(current.error);
       if (!current.data) throw new WorkspaceError('Carrier document not found.', 404);
@@ -46,22 +46,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         return new NextResponse(result.blob, { headers: { ...headers, 'Content-Type': 'application/octet-stream',
           'Content-Disposition': contentDisposition(current.data.file_name, 'attachment') } });
       }
-      return NextResponse.json({ document: current.data, can_manage: owner, overlapping_sources: overlaps.data }, { headers });
+      return NextResponse.json({ document: current.data, can_manage: canManage, overlapping_sources: overlaps.data }, { headers });
     }
     const page = Number(request.nextUrl.searchParams.get('page') ?? 0);
     if (!Number.isSafeInteger(page) || page < 0) throw new WorkspaceError('Select a valid page.', 400);
     let query = db.from('carrier_appetite_documents').select('id,revision,state,values,file_name,approved_at,updated_at')
       .gt('revision', 0).order('updated_at', { ascending: false }).order('id').range(page * 20, page * 20 + 20);
-    if (!owner) query = query.eq('state', 'active');
+    if (!canManage) query = query.eq('state', 'active');
     const result = await query;
     if (result.error) installed(result.error);
-    return NextResponse.json({ documents: result.data.slice(0, 20), has_more: result.data.length > 20, can_manage: owner, overlapping_sources: overlaps.data }, { headers });
+    return NextResponse.json({ documents: result.data.slice(0, 20), has_more: result.data.length > 20, can_manage: canManage, overlapping_sources: overlaps.data }, { headers });
   } catch (failure) { return workspaceApiError(failure, 'carrier-appetite/get'); }
 }
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
-    const { db, actor, owner } = await access(request);
-    if (!owner) throw new WorkspaceError('Only the agency owner can upload or change carrier appetite.', 403);
+    const { db, actor, teamAccess } = await access(request);
+    requireTeamPermission(teamAccess, 'knowledge.edit');
     const body = await workspaceBody(request);
     if (!isUuid(body.id) || !Number.isSafeInteger(body.revision) || Number(body.revision) < 0) throw new WorkspaceError('Provide the document ID and saved revision.', 400);
     if (body.action === 'reserve') {

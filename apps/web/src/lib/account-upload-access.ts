@@ -32,10 +32,12 @@ export function verifyUploadConfirmation(key: string, value: unknown, upload: Up
 
 export async function checkAccountUploadAccess(
   db: SupabaseClient, access: RequestAccess | undefined, actor: string, clientId: string,
+  action: 'documents.edit' | 'documents.delete' = 'documents.edit',
 ): Promise<NextResponse | null> {
-  const write = accountRecordScope(access, 'documents.edit');
+  const write = accountRecordScope(access, action);
   const read = accountDocumentReadScope(access);
-  if (!write || !read) return NextResponse.json({ message: 'You do not have access to upload account documents.' }, { status: 403 });
+  if (!write || !read) return NextResponse.json({ message: action === 'documents.delete'
+    ? 'You do not have access to remove account documents.' : 'You do not have access to upload account documents.' }, { status: 403 });
   const query = db.from('clients').select('id').eq('id', clientId);
   if (write === 'assigned' || read === 'assigned') query.eq('agent_user_id', actor);
   const { data, error } = await query.maybeSingle<{ id: string }>();

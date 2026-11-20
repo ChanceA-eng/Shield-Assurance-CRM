@@ -10,6 +10,8 @@ import SalesTemplateSettings from '../../components/crm/SalesTemplateSettings';
 import { readTeamSettings } from '../../lib/team-settings';
 import { readPendingEmailChanges } from '../../lib/account-security';
 import AgencyTeamSettings from '../../components/crm/AgencyTeamSettings';
+import { readTeamRequestAccess } from '../../lib/team-request-access';
+import type { SettingsTab } from '../../components/crm/SettingsTabs';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +21,25 @@ export default async function SettingsPage(): Promise<JSX.Element> {
   if (error || !user) redirect('/login');
   const db = getSupabaseServerClient();
   if (!db) return <SectionLayout title="Settings"><p role="alert" className="text-sm text-cui-danger">Database unavailable. Contact support.</p></SectionLayout>;
+  const access = await readTeamRequestAccess(auth, user.id);
+  if (access.mode === 'restricted') {
+    const tabs: ReadonlyArray<{ id: SettingsTab; permission: string }> = [
+      { id: 'team', permission: 'team.manage' },
+      { id: 'email', permission: 'integrations.manage' },
+      { id: 'automation', permission: 'automation.view' },
+      { id: 'intelligence', permission: 'leads.prospect' },
+      { id: 'permissions', permission: 'agency.manage' },
+      { id: 'integrations', permission: 'integrations.manage' },
+    ];
+    const allowedTabs = tabs.filter(({ permission }) => access.grants[permission] === 'agency').map(({ id }) => id);
+    const team = allowedTabs.includes('team') ? await readTeamSettings(db, user.id).catch((failure: unknown) => {
+      console.error('[settings/team]', failure);
+      return null;
+    }) : null;
+    return <SectionLayout title="Settings">
+      <SettingsWorkspace team={team} emailRequests={null} restricted allowedTabs={allowedTabs} />
+    </SectionLayout>;
+  }
   const member = await accountMembership(db, user.id);
   if (member?.active && member.role === 'admin') {
     const team = await readTeamSettings(db, user.id).catch((failure: unknown) => {

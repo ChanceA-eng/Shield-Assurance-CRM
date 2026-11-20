@@ -19,7 +19,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('Database unavailable.', 503);
-    await discoveryAccess(db, session.user.id);
+    discoveryAccess(session.teamAccess);
     const params = request.nextUrl.searchParams;
     const source = params.get('source_id'), query = params.get('query')?.trim() ?? '', state = params.get('state')?.trim().toUpperCase() ?? '';
     const startText = params.get('start') ?? '0', start = Number(startText);
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('Database unavailable.', 503);
-    await discoveryAccess(db, session.user.id);
+    discoveryAccess(session.teamAccess);
     const input = await workspaceBody(request);
     if (!isUuid(input.source_id) || !isUuid(input.request_id) || typeof input.dot_number !== 'string'
       || !/^[1-9]\d{0,8}$/.test(input.dot_number)) {

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import SectionLayout from '../../components/crm/SectionLayout';
 import { CONTRACTOR_MASTER_COURSE_TITLE } from '../../lib/learning/catalog/contractor-liability-course';
 import { useWorkspaceNavigation } from '../../context/WorkspaceNavigationContext';
+import { useStaffWorkspace } from '../../context/StaffWorkspaceContext';
 
 interface ProgressItem {
   lessonId: string;
@@ -26,6 +27,7 @@ interface CourseListItem {
 
 export default function LearningCenterPage(): JSX.Element {
   const { navigate } = useWorkspaceNavigation();
+  const canEdit = useStaffWorkspace() === 'full';
   const [courses, setCourses] = useState<CourseListItem[]>([]);
   const [progress, setProgress] = useState<ProgressItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -149,9 +151,9 @@ export default function LearningCenterPage(): JSX.Element {
               <h2 className="text-lg font-bold text-cui-text">Interactive Learning Platform</h2>
               <p className="text-sm text-[#514f4d]">Courses, modules, quizzes, simulations, and Rashi coaching are now wired as a foundation layer.</p>
             </div>
-            <a href="/learning/course-builder" className="rounded-md bg-cui-text px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]">
+            {canEdit && <a href="/learning/course-builder" className="rounded-md bg-cui-text px-3 py-2 text-xs font-semibold text-white hover:bg-[#133a6b]">
               Open Learning Studio
-            </a>
+            </a>}
           </div>
         </div>
 
@@ -171,11 +173,11 @@ export default function LearningCenterPage(): JSX.Element {
                 >
                   Start Learning
                 </a>
-                <a href={`/learning/course-builder/${flagshipCourse.id}`} className="rounded-md border border-cui-primary-strong px-3 py-2 text-xs font-semibold text-cui-primary-strong hover:bg-[#eef5ff]">
+                {canEdit && <a href={`/learning/course-builder/${flagshipCourse.id}`} className="rounded-md border border-cui-primary-strong px-3 py-2 text-xs font-semibold text-cui-primary-strong hover:bg-[#eef5ff]">
                   Open in Studio
-                </a>
+                </a>}
               </div>
-            ) : (
+            ) : canEdit ? (
               <button
                 type="button"
                 disabled={installing}
@@ -186,7 +188,7 @@ export default function LearningCenterPage(): JSX.Element {
               >
                 {installing ? 'Starting...' : 'Start Course'}
               </button>
-            )}
+            ) : <p className="text-sm text-cui-muted">The course has not been installed by an administrator.</p>}
           </div>
           {startError ? (
             <p className="mt-2 text-xs font-semibold text-[#a61b1b]">{startError}</p>
@@ -213,9 +215,9 @@ export default function LearningCenterPage(): JSX.Element {
               </div>
 
               <div className="mt-3 flex flex-wrap gap-2">
-                <a href={`/learning/course-builder/${course.id}`} className="rounded-md border border-cui-border px-2.5 py-1 text-xs font-semibold text-cui-text hover:bg-cui-light">
+                {canEdit && <a href={`/learning/course-builder/${course.id}`} className="rounded-md border border-cui-border px-2.5 py-1 text-xs font-semibold text-cui-text hover:bg-cui-light">
                   Edit Course
-                </a>
+                </a>}
                 {course.resumeLessonId ? (
                   <a href={`/learning/course/${course.id}/overview`} className="rounded-md bg-cui-primary-strong px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#0c4e8a]">
                     Open Course

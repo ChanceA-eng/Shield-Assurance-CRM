@@ -2,7 +2,7 @@
 
 import { useRef, useState, type MouseEvent } from 'react';
 import { useSearchParams } from 'next/navigation';
-import SettingsTabs, { type SettingsTab } from './SettingsTabs';
+import SettingsTabs, { SETTINGS_TABS, type SettingsTab } from './SettingsTabs';
 import EmailConnectionSettings from './EmailConnectionSettings';
 import AgencyTeamSettings from './AgencyTeamSettings';
 import AccountEmailApprovals from './AccountEmailApprovals';
@@ -12,7 +12,6 @@ import IntegrationStatusWorkspace from './IntegrationStatusWorkspace';
 import BusinessResearchSettings from './BusinessResearchSettings';
 import OpportunitySettings from './OpportunitySettings';
 import DiscoverySourceSettings from './DiscoverySourceSettings';
-import AskRashi from './AskRashi';
 import type { TeamSettingsData } from '../../lib/team-settings';
 import type { EmailChange } from '../../lib/account-security';
 
@@ -42,11 +41,15 @@ function DiscoverySettings({ active }: { active: boolean }): JSX.Element {
   </div>;
 }
 
-export default function SettingsWorkspace({ team, emailRequests }: {
-  team: TeamSettingsData | null; emailRequests: EmailChange[] | null;
+export default function SettingsWorkspace({ team, emailRequests, restricted = false, allowedTabs }: {
+  team: TeamSettingsData | null; emailRequests: EmailChange[] | null; restricted?: boolean; allowedTabs?: readonly SettingsTab[];
 }): JSX.Element {
   const params = useSearchParams();
-  const tab = currentTab(params.get('tab'));
+  const visibleTabs = restricted
+    ? SETTINGS_TABS.filter(([id]) => allowedTabs?.includes(id) ?? false)
+    : SETTINGS_TABS;
+  const requestedTab = currentTab(params.get('tab'));
+  const tab = visibleTabs.some(([id]) => id === requestedTab) ? requestedTab : visibleTabs[0]?.[0] ?? 'team';
   const requestedSection = params.get('section');
   const section: AutomationSection = requestedSection === 'sequences' || requestedSection === 'sender'
     || requestedSection === 'runs' || requestedSection === 'templates' ? requestedSection
@@ -70,16 +73,10 @@ export default function SettingsWorkspace({ team, emailRequests }: {
     window.history.pushState(null, '', `${target.pathname}${target.search}`);
   };
   return <div onClick={followSettingsLink}>
-    <div className="flex flex-wrap items-start justify-between gap-2">
-      <SettingsTabs active={tab} onSelect={select} />
-      <AskRashi topic={tab === 'intelligence'
-        ? params.get('tool') === 'targeting' ? 'targeting' : params.get('tool') === 'sources' ? 'sources' : 'research'
-        : tab === 'automation' ? section === 'templates' || section === 'sender' ? 'templates'
-          : section === 'rules' && params.get('rules') === 'custom' ? 'workflows' : 'automation' : tab} />
-    </div>
+    <SettingsTabs active={tab} onSelect={select} visibleTabs={visibleTabs} />
     {visited.map((id) => <div key={id} role="tabpanel" hidden={tab !== id} id={`panel-${id}`}
       aria-labelledby={`tab-${id}`} tabIndex={0} className="space-y-5 focus:outline-none">
-      {id === 'team' ? <><AgencyTeamSettings initial={team} /><AccountEmailApprovals initial={emailRequests} /></> : null}
+      {id === 'team' ? <><AgencyTeamSettings initial={team} />{!restricted ? <AccountEmailApprovals initial={emailRequests} /> : null}</> : null}
       {id === 'email' ? <EmailConnectionSettings /> : null}
       {id === 'automation' ? <AutomationWorkspace section={section} active={tab === id} /> : null}
       {id === 'intelligence' ? <DiscoverySettings active={tab === id} /> : null}

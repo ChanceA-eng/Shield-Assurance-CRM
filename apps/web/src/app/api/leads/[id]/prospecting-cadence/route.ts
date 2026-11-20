@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { activeAgencyMember, agencyEnabled, agentSender } from '../../../../../lib/agency-membership';
+import { agencyEnabled, agentSender } from '../../../../../lib/agency-membership';
 import { getApiSession } from '../../../../../lib/api-auth';
 import { getOwnGmailConnection } from '../../../../../lib/gmail-provider';
 import { prospectingSchedule } from '../../../../../lib/prospecting-schedule';
@@ -13,6 +13,8 @@ import { isUuid } from '../../../../../lib/workspace-validation';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { WorkspaceError } from '../../../../../lib/record-scope';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../../lib/workspace-api';
+import { hasTeamPermission, requireTeamPermission, type RequestAccess } from '../../../../../lib/team-request-access';
+import { staffRecordScope } from '../../../../../lib/staff-records';
 
 const MIGRATION = '20261113020000_prospecting_cadence';
 interface RouteContext { params: Promise<{ id: string }> }
@@ -78,14 +80,16 @@ async function verifyLeadAccess(
   db: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
   actorId: string,
   leadId: string,
-) {
-  const member = await activeAgencyMember(db, actorId);
+  access: RequestAccess | undefined,
+) : Promise<{ agent_user_id: string | null }> {
+  requireTeamPermission(access, 'leads.view', 'assigned');
   const { data: lead, error } = await db.from('leads').select('id,agent_user_id').eq('id', leadId).maybeSingle();
   if (error) throw databaseError(error);
-  if (!lead || (member.role === 'agent' && lead.agent_user_id && lead.agent_user_id !== actorId)) {
+  const scope = access?.mode === 'legacy' ? 'agency' : staffRecordScope(access, 'leads');
+  if (!lead || !scope || (scope === 'assigned' && lead.agent_user_id !== actorId)) {
     throw new WorkspaceError('Lead not found or unavailable.', 404);
   }
-  return member;
+  return lead;
 }
 
 async function readiness(db: NonNullable<ReturnType<typeof getSupabaseServerClient>>, actor: string, leadId: string) {
@@ -108,13 +112,13 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
     const { id } = await context.params;
     if (!isUuid(id)) throw new WorkspaceError('Choose a valid lead.', 400);
-    const member = await verifyLeadAccess(db, session.user.id, id);
+    await verifyLeadAccess(db, session.user.id, id, session.teamAccess);
     const [cadence, summary] = await Promise.all([loadCadence(db, id), readiness(db, session.user.id, id)]);
     return NextResponse.json({
       cadence,
       readiness: summary,
-      can_manage: Boolean(cadence && cadence.agent_user_id === session.user.id),
-      can_cancel: Boolean(cadence && (cadence.agent_user_id === session.user.id || member.role !== 'agent')),
+      can_manage: Boolean(cadence && hasTeamPermission(session.teamAccess, 'campaigns.send')),
+      can_cancel: Boolean(cadence && hasTeamPermission(session.teamAccess, 'campaigns.send')),
     }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {
     return workspaceApiError(error, 'prospecting-cadence/read');
@@ -135,7 +139,8 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
       throw new WorkspaceError('Confirm that you want to start the eight-touch prospecting plan.', 400);
     }
 
-    await verifyLeadAccess(db, session.user.id, id);
+    requireTeamPermission(session.teamAccess, 'campaigns.send');
+    await verifyLeadAccess(db, session.user.id, id, session.teamAccess);
     const contact = await resolveOutboundEmailRecipient(db, { leadId: id });
     if (!contact.ok) throw new WorkspaceError(contact.message, contact.status);
     const settings = await getOutreachSettings(db);
@@ -177,7 +182,8 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
     const { id } = await context.params;
     if (!isUuid(id)) throw new WorkspaceError('Choose a valid lead.', 400);
-    const member = await verifyLeadAccess(db, session.user.id, id);
+    requireTeamPermission(session.teamAccess, 'campaigns.send');
+    await verifyLeadAccess(db, session.user.id, id, session.teamAccess);
     const body = await workspaceBody(request);
     if (body.action === 'nurture_reminder' && Object.keys(body).length === 1) {
       const summary = await readiness(db, session.user.id, id);
@@ -192,15 +198,12 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     if (!cadence) throw new WorkspaceError('No prospecting plan exists for this lead.', 404);
 
     if (body.action === 'prepare_drafts' && Object.keys(body).length === 1) {
-      if (cadence.agent_user_id !== session.user.id || cadence.status !== 'active') {
-        throw new WorkspaceError('Only the owner of an active plan can prepare its drafts.', 403);
+      if (cadence.status !== 'active') {
+        throw new WorkspaceError('Only an active plan can prepare drafts.', 403);
       }
       await processDueProspectingEmailDrafts(db, 4, cadence.id);
     } else if (body.action === 'cancel' && Object.keys(body).length === 1) {
       if (cadence.status !== 'active') throw new WorkspaceError('This prospecting plan is no longer active.', 409);
-      if (cadence.agent_user_id !== session.user.id && member.role === 'agent') {
-        throw new WorkspaceError('Only the assigned plan owner can cancel it.', 403);
-      }
       const stopped = await db.rpc('stop_prospecting_cadence', {
         p_cadence: cadence.id, p_status: 'cancelled', p_reason: 'Cancelled by the agent.',
       });
@@ -221,8 +224,8 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     const saved = await loadCadence(db, id);
     return NextResponse.json({
       cadence: saved,
-      can_manage: saved?.agent_user_id === session.user.id,
-      can_cancel: saved?.agent_user_id === session.user.id || member.role !== 'agent',
+      can_manage: Boolean(saved && hasTeamPermission(session.teamAccess, 'campaigns.send')),
+      can_cancel: Boolean(saved && hasTeamPermission(session.teamAccess, 'campaigns.send')),
     });
   } catch (error) {
     return workspaceApiError(error, 'prospecting-cadence/update');

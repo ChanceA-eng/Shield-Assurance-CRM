@@ -161,6 +161,7 @@ export interface WorkspaceTask {
   account_id: string | null;
   note_id: string | null;
   completed_at: string | null;
+  created_by_user_id?: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -41,10 +41,21 @@ test or enable the separate Team rollout based on these editor checks.
 
 Apply `20261119231000_direct_team_access.sql` and
 `20261119232000_team_setup_reauthorization.sql` before deploying this workspace.
+Apply `20261120010000_team_training_access.sql`,
+`20261120020000_complete_team_permissions.sql`, and
+`20261120030000_apply_custom_team_permissions.sql` before deploying this
+workspace. The November 20 permission migrations were applied to the production
+database after a dry run containing only those two pending versions; older
+migration-history gaps were intentionally not replayed.
 The owner and existing administrators see the roster in the first authenticated
 response. A role title is freeform and has no authorization effect. Invites
 start with no CRM workspace grants unless the sender selects them explicitly.
 The new per-person access mode does not turn on the old role-bundle rollout.
+The permission picker groups the shared CRM catalog by section. Access is
+evaluated through page requirements, API route policies, record scopes, and
+database authorization; the role title itself never grants access.
+Training access covers learning pages, quizzes and the member's own progress;
+it does not grant the course editor or other knowledge-management features.
 Existing non-owner legacy members retain their current access until an authorized
 manager saves their new permission set. The owner cannot be edited or deactivated.
 
@@ -141,13 +152,11 @@ https://shield-assurance-crm.vercel.app. Selective source extends
 branding changes were not included. Release source is the current session's
 `files/tools-cleanup-release` folder.
 
-Settings retain save, connect, test, retry and access controls. Passive guidance
-and deployment diagnostics now open through contextual **Ask Rashi** actions.
-Team setup closes its modal before opening help. The selected Settings tool
-determines its help topic, including targeting, source approvals, custom rules
-and templates. Template merge fields are now an insertion selector rather than
-a long list. Workers' comp retains its resource links, document tools and
-recorded facts; background explanations are available through Rashi.
+Settings retain save, connect, test, retry and access controls. Integration
+diagnostics and source issues appear inline beside their controls. The persistent
+Rashi assistant remains available from the lower-right corner. Template merge
+fields are an insertion selector rather than a long list. Workers' comp retains
+its resource links, document tools and recorded facts.
 
 Known CRM tool questions have grounded answers without an AI-provider call.
 Document/carrier-scoped questions retain the existing underwriting retrieval

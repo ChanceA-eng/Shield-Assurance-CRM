@@ -35,13 +35,22 @@ Chance
 Shield Assurance`;
 const validDraft = { subject: 'Your commercial auto request', body, cited_signals: ['Stated insurance interests: Commercial auto'] };
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
+const teamAccess: { mode: 'restricted'; grants: Record<string, unknown> } = { mode: 'restricted', grants: {
+  'automation.manage': 'agency', 'leads.view': 'assigned', 'leads.edit': 'assigned',
+  'accounts.view': 'assigned', 'accounts.edit': 'assigned',
+} };
 
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 beforeEach(() => {
   vi.clearAllMocks();
+  teamAccess.grants = {
+    'automation.manage': 'agency', 'leads.view': 'assigned', 'leads.edit': 'assigned',
+    'accounts.view': 'assigned', 'accounts.edit': 'assigned',
+  };
   vi.mocked(requireApiSession).mockResolvedValue(null);
   vi.mocked(getApiSession).mockResolvedValue({
-    user: { id: leadId, aud: 'authenticated', created_at: '2026-11-01T00:00:00Z', app_metadata: {}, user_metadata: {} }, error: null,
+    user: { id: leadId, aud: 'authenticated', created_at: '2026-11-01T00:00:00Z', app_metadata: {}, user_metadata: {} },
+    error: null, teamAccess,
   });
 });
 
@@ -271,8 +280,9 @@ describe('profile, settings and canonical context persistence APIs', () => {
   let sender: unknown;
   let linked: boolean;
   let failContext: boolean;
+  let assignedTo: string;
   beforeEach(() => {
-    calls = []; savedProfile = profile; sender = DEFAULT_OUTREACH_SENDER; linked = false; failContext = false;
+    calls = []; savedProfile = profile; sender = DEFAULT_OUTREACH_SENDER; linked = false; failContext = false; assignedTo = leadId;
     const fetcher: typeof fetch = async (input, init) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
       const call: Call = { url, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null };
@@ -284,9 +294,10 @@ describe('profile, settings and canonical context persistence APIs', () => {
         return json(null);
       }
       if (url.pathname.endsWith('/leads')) {
-        return url.searchParams.has('account_id') ? json([{ id: leadId }]) : json({ id: leadId, full_name: 'Leo', account_id: linked ? clientId : null });
+        return url.searchParams.has('account_id') ? json([{ id: leadId }]) : json({ id: leadId, full_name: 'Leo',
+          account_id: linked ? clientId : null, agent_user_id: assignedTo });
       }
-      if (url.pathname.endsWith('/clients')) return json({ id: clientId, full_name: 'Leo' });
+      if (url.pathname.endsWith('/clients')) return json({ id: clientId, full_name: 'Leo', agent_user_id: assignedTo });
       if (url.pathname.endsWith('/outreach_settings')) {
         if (call.method === 'PATCH') { sender = call.body?.sender_profile ?? sender; return json({ id: 1 }); }
         return json({ sender_profile: sender, daily_send_cap: 20 });
@@ -314,6 +325,15 @@ describe('profile, settings and canonical context persistence APIs', () => {
     expect(calls.find((call) => call.method === 'POST')?.body).toMatchObject({ lead_id: leadId, profile: updated });
     expect(calls.every((call) => call.url.hostname === 'example.supabase.co')).toBe(true);
   });
+  it('requires explicit record permission and prevents assigned members from reading another member’s profile', async () => {
+    teamAccess.grants = {};
+    expect((await GET(request('GET'))).status).toBe(403);
+    expect(calls).toHaveLength(0);
+    teamAccess.grants = { 'leads.view': 'assigned' };
+    assignedTo = 'another-agent';
+    expect((await GET(request('GET'))).status).toBe(404);
+    expect(calls).toHaveLength(1);
+  });
   it('writes to the linked account and reads canonical account history', async () => {
     linked = true;
     expect((await PUT(request('PUT', profile))).status).toBe(200);
@@ -337,7 +357,7 @@ describe('profile, settings and canonical context persistence APIs', () => {
   it('rejects invalid profiles, malformed bodies and unauthenticated writes', async () => {
     expect((await PUT(request('PUT', { ...profile, source: '' }))).status).toBe(400);
     expect((await PUT(new NextRequest(`http://localhost/api/outreach/profile?record_type=lead&record_id=${leadId}`, { method: 'PUT', body: '{' }))).status).toBe(400);
-    vi.mocked(requireApiSession).mockResolvedValue(new NextResponse(null, { status: 401 }));
+    vi.mocked(getApiSession).mockResolvedValue({ user: null, error: new NextResponse(null, { status: 401 }) });
     expect((await PUT(request('PUT', profile))).status).toBe(401);
     expect(calls).toHaveLength(0);
   });

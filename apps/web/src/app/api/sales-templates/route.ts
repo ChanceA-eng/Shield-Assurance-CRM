@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../lib/api-auth';
 import { getSupabaseServerClient } from '../../../lib/supabase-server';
-import { activeAgencyMember } from '../../../lib/agency-membership';
 import { workspaceApiError, workspaceBody, databaseError } from '../../../lib/workspace-api';
 import { WorkspaceError } from '../../../lib/record-scope';
 import { listSalesTemplates, parseSalesTemplate, salesFacts, mergeSalesFacts, renderSalesTemplate, suggestedSalesTemplates } from '../../../lib/sales-templates';
@@ -9,14 +8,14 @@ import { draftOutreach } from '../../../lib/outreach-ai';
 import { recordOutreachContext } from '../../../lib/lead-outreach-context';
 import { parseConversationKey } from '../../../lib/conversations';
 import { conversationAppointments } from '../../../lib/appointment-confirmation';
+import { hasTeamPermission } from '../../../lib/team-request-access';
 
 async function access(request: NextRequest) {
   const session = await getApiSession(request);
   if (session.error) throw new WorkspaceError('Sign in before using templates.', 401);
   const db = getSupabaseServerClient();
   if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
-  const member = await activeAgencyMember(db, session.user.id);
-  return { db, actor: session.user.id, canManage: member.role === 'owner' || member.role === 'admin' };
+  return { db, actor: session.user.id, canManage: hasTeamPermission(session.teamAccess, 'content.edit') };
 }
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {

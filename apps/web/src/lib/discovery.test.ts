@@ -8,16 +8,19 @@ import { GET as candidates, PATCH as review } from '../app/api/intelligence/cand
 import { POST as saveSource } from '../app/api/intelligence/sources/route';
 import { GET as searches, POST as saveSearch, DELETE as deleteSearch } from '../app/api/intelligence/searches/route';
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
-vi.mock('./api-auth', () => ({ getApiSession: vi.fn().mockResolvedValue({ user: { id: 'actor' }, error: null }) }));
+vi.mock('./api-auth', () => ({ getApiSession: vi.fn(async () => ({
+  user: { id: 'actor' }, error: null, teamAccess: { mode: 'restricted', grants },
+})) }));
 const sourceId = '168413e9-a6a4-4dff-a8bf-8f8df83dace6';
 const batchId = '168413e9-a6a4-4dff-a8bf-8f8df83dace7';
 let role: string;
 let active: boolean;
+let grants: Record<string, string>;
 let sourceActive: boolean;
 let conflict: boolean;
 let calls: Array<{ path: string; url: URL; body: Record<string, unknown> }>;
 beforeEach(() => {
-  vi.clearAllMocks(); role = 'owner'; active = true; sourceActive = true; conflict = false; calls = [];
+  vi.clearAllMocks(); role = 'owner'; active = true; grants = { 'leads.prospect': 'agency', 'automation.manage': 'agency' }; sourceActive = true; conflict = false; calls = [];
   const db = createClient('https://example.invalid', 'test', { auth: { persistSession: false }, global: {
     fetch: async (input, init) => {
       const url = new URL(String(input));
@@ -78,10 +81,10 @@ describe('approved-file acquisition', () => {
     expect((await acquire(fileRequest())).status).toBe(403);
     expect(calls.some((call) => call.path === 'intelligence_import_matches')).toBe(false);
   });
-  it('requires active membership even while the multi-agent flag is off', async () => {
-    active = false;
+  it('requires prospecting access before database work', async () => {
+    grants = {};
     expect((await acquire(fileRequest())).status).toBe(403);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
   it('retains reviewer identity and stale-review conflict status', async () => {
     conflict = true;
@@ -90,8 +93,9 @@ describe('approved-file acquisition', () => {
   });
 });
 describe('owner approvals and personal saved searches', () => {
-  it('does not let admins approve sources', async () => {
+  it('does not let membership titles substitute for source-management grants', async () => {
     role = 'admin';
+    grants = { 'leads.prospect': 'agency' };
     expect((await saveSource(jsonRequest('sources', { config: {} }))).status).toBe(403);
     expect(calls.some((call) => call.path === 'save_discovery_source')).toBe(false);
   });

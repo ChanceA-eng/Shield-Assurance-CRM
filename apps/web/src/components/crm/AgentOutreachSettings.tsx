@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { OUTREACH_TEMPLATES, isOutreachTemplate, type OutreachTemplate } from '@crm/shared';
 import { workspaceFetch } from '../../lib/workspace-fetch';
-import AskRashi from './AskRashi';
 interface Enrollment { id: string; lead_id: string; template: OutreachTemplate; auto_send_enabled: boolean; leads: { full_name: string; email: string } }
 export default function AgentOutreachSettings(): JSX.Element {
   const [rows, setRows] = useState<Enrollment[]>([]);
@@ -28,7 +27,6 @@ export default function AgentOutreachSettings(): JSX.Element {
   };
   const input = 'crm-input mt-1';
   return <section className="space-y-3 border-t border-cui-border pt-4"><h3 className="text-sm font-bold">My sequence sending permissions</h3>
-    <AskRashi topic="permissions" />
     {error ? <p role="alert" className="text-sm text-cui-danger">{error}</p> : null}
     {notice ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
     <form className="grid gap-3 sm:grid-cols-2" onSubmit={(event) => { event.preventDefault(); void save({ enrollment_id: selected, template: purpose, enabled }); }}>

@@ -14,11 +14,13 @@ const user: User = { id: '04865539-8320-4031-93de-8047f715f748', aud: 'authentic
 const fetcher = vi.fn<typeof fetch>();
 let role: 'owner' | 'admin' | 'agent';
 let stored: Array<{ url: URL; bytes: Buffer }>;
+let teamAccess: { mode: 'restricted'; grants: Record<string, unknown> };
 
 beforeEach(() => {
   role = 'owner';
+  teamAccess = { mode: 'restricted', grants: { 'content.edit': 'agency' } };
   stored = [];
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'legacy' } });
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   fetcher.mockReset();
   fetcher.mockImplementation(async (input, init) => {
     const url = new URL(String(input));
@@ -54,8 +56,10 @@ it('stores a sanitized JPEG in the branding-only bucket and returns its recipien
 
 it('rejects unauthorized users and files that are not decodable banners without writing to storage', async () => {
   role = 'agent';
+  teamAccess.grants = {};
   expect((await POST(upload(Buffer.from('not an image')))).status).toBe(403);
   role = 'admin';
+  teamAccess.grants = { 'content.edit': 'agency' };
   expect((await POST(upload(Buffer.from('not an image')))).status).toBe(400);
   expect(stored).toHaveLength(0);
 });

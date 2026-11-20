@@ -18,11 +18,15 @@ interface Call { url: URL; method: string; body: Record<string, unknown> | null 
 let calls: Call[];
 let db: SupabaseClient;
 let respond: (call: Call) => Response;
+const teamAccess: { mode: 'restricted'; grants: Record<string, unknown> } = {
+  mode: 'restricted', grants: { 'integrations.manage': 'agency' },
+};
 const json = (value: unknown, status = 200): Response => Response.json(value, { status });
 const request = (body: unknown): NextRequest => new NextRequest('https://crm.example.invalid/api/settings/email', { method: 'POST', body: JSON.stringify(body) });
 
 beforeEach(() => {
   vi.clearAllMocks(); vi.unstubAllEnvs();
+  teamAccess.grants = { 'integrations.manage': 'agency' };
   for (const [key, value] of Object.entries({
     RESEND_API_KEY: 'test-key', RESEND_FROM_EMAIL: 'sender@example.invalid', RESEND_REPLY_TO: 'owner@example.invalid',
     RESEND_INBOUND_ADDRESS: 'inbox@example.resend.app', RESEND_WEBHOOK_SECRET: 'test-secret',
@@ -44,7 +48,7 @@ beforeEach(() => {
   }));
   db = createClient('https://db.example.invalid', 'test-key', { global: { fetch }, auth: { persistSession: false, autoRefreshToken: false } });
   vi.mocked(getSupabaseServerClient).mockReturnValue(db);
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   vi.mocked(sendOutboundEmail).mockResolvedValue('resend');
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
@@ -86,7 +90,8 @@ describe('actionable email status', () => {
     respond = (call) => call.url.hostname === 'api.resend.com' ? json({ message: 'Not authorized' }, 403) : previous(call);
     await expect(emailConnectionStatus(db, actor)).rejects.toThrow('Could not check Resend');
   });
-  it('requires owner authority before reading provider status or sending a test', async () => {
+  it('requires the integration grant before reading provider status or sending a test', async () => {
+    teamAccess.grants = {};
     const previous = respond;
     respond = (call) => call.url.pathname.endsWith('/agency_members') ? json({ role: 'admin', active: true }) : previous(call);
     expect((await GET(new NextRequest('https://crm.example.invalid/api/settings/email'))).status).toBe(403);

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../../../../lib/api-auth';
-import { requireAgencyOwner } from '../../../../../../lib/agency-access';
 import { getSupabaseServerClient } from '../../../../../../lib/supabase-server';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../../../lib/workspace-api';
 import { WorkspaceError } from '../../../../../../lib/record-scope';
 import { isRecord, isUuid } from '../../../../../../lib/workspace-validation';
+import { requireTeamPermission } from '../../../../../../lib/team-request-access';
 
 function validPreview(value: unknown): value is {
   rule_id: string; rule_revision: number; event: string; action_type: string;
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected.' }, { status: 503 });
   try {
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'automation.view');
     const rule = request.nextUrl.searchParams.get('rule');
     if (!rule || !isUuid(rule)) throw new WorkspaceError('Choose a valid workflow rule.', 400);
     const result = await db.rpc('preview_workflow_backlog', { p_rule: rule });
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected.' }, { status: 503 });
   try {
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'automation.manage');
     const body = await workspaceBody(request);
     if (Object.keys(body).some((key) => !['rule_id', 'expected_revision', 'eligible_count', 'fingerprint', 'confirmed'].includes(key))
       || typeof body.rule_id !== 'string' || !isUuid(body.rule_id)

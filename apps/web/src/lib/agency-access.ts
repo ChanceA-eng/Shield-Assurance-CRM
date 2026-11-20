@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AgencyMember } from './agency-membership';
 import { WorkspaceError } from './record-scope';
 import { databaseError } from './workspace-api';
+import { requireTeamPermission, type RequestAccess } from './team-request-access';
 
 export async function accountMembership(db: SupabaseClient, userId: string): Promise<AgencyMember | null> {
   const { data, error } = await db.from('agency_members')
@@ -19,10 +20,6 @@ export async function requireAgencyOwner(db: SupabaseClient, userId: string): Pr
   return member;
 }
 
-export async function requireAgencyReportsAccess(db: SupabaseClient, userId: string): Promise<AgencyMember> {
-  const member = await accountMembership(db, userId);
-  if (!member?.active || (member.role !== 'owner' && member.role !== 'admin')) {
-    throw new WorkspaceError('Agency-wide reports are restricted to active owners and administrators.', 403);
-  }
-  return member;
+export function requireAgencyReportsAccess(access: RequestAccess | undefined): void {
+  requireTeamPermission(access, 'reports.view');
 }

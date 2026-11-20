@@ -15,7 +15,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (session.error) return session.error;
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
-    await discoveryAccess(db, session.user.id);
+    discoveryAccess(session.teamAccess);
     const body = await workspaceBody(request);
     if (!isUuid(body.source_id) || !isUuid(body.request_id) || body.rights_confirmed !== true
       || typeof body.name !== 'string' || !body.name.trim() || body.name.length > 255

@@ -10,6 +10,7 @@ import {
 } from '../../lib/learning/lesson-structure';
 import { normalizeQuizOptions } from '../../lib/learning/quiz-options';
 import { useWorkspaceNavigation } from '../../context/WorkspaceNavigationContext';
+import { useStaffWorkspace } from '../../context/StaffWorkspaceContext';
 
 interface LessonQuiz {
   id: string;
@@ -85,6 +86,7 @@ function asString(value: unknown): string {
 
 export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.Element {
   const { navigate } = useWorkspaceNavigation();
+  const canEdit = useStaffWorkspace() === 'full';
   const [lesson, setLesson] = useState<LessonDetail | null>(null);
   const [savedProgress, setSavedProgress] = useState<ProgressSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -357,7 +359,7 @@ export default function LessonPlayer({ lessonId }: { lessonId: string }): JSX.El
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <a href="/learning" className="rounded-md border border-cui-border px-3 py-1 text-xs font-semibold text-cui-text hover:bg-cui-light">Exit to Learning Center</a>
-          <a href={`/learning/course-builder/${lesson.module.course.id}`} className="rounded-md border border-cui-border px-3 py-1 text-xs font-semibold text-cui-text hover:bg-cui-light">Open Course in Studio</a>
+          {canEdit && <a href={`/learning/course-builder/${lesson.module.course.id}`} className="rounded-md border border-cui-border px-3 py-1 text-xs font-semibold text-cui-text hover:bg-cui-light">Open Course in Studio</a>}
           {navigation.previousLesson ? (
             <button
               type="button"

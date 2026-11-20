@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import type { DiscoverySource } from '@crm/shared';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 import { Card, CardBody, CardHeader } from '../ui/Card';
-import AskRashi from './AskRashi';
 
 const control = 'crm-input mt-1';
 export default function DiscoverySourceSettings(): JSX.Element {
@@ -32,11 +31,9 @@ export default function DiscoverySourceSettings(): JSX.Element {
     {error ? <p role="alert" className="text-sm text-cui-danger">{error}</p> : null}
     {notice ? <p role="status" className="text-sm text-green-800">{notice}</p> : null}
     <Card><CardHeader>Lead discovery sources</CardHeader><CardBody>
-      <div className="mb-3 space-y-2 text-sm">
-        <AskRashi topic="sources" label="Source setup help" detail={availability
-          ? `DOT connection: ${availability.fmcsa_configured ? 'configured' : 'unavailable'}. OSHA connection: ${availability.osha_configured ? 'configured' : 'unavailable'}.`
-          : 'Source connections have not been checked.'} />
-      </div>
+      {availability ? <p className="mb-3 text-sm text-cui-muted">
+        FMCSA {availability.fmcsa_configured ? 'connected' : 'unavailable'}; OSHA {availability.osha_configured ? 'connected' : 'unavailable'}.
+      </p> : null}
       <form onSubmit={(event) => { event.preventDefault(); void save({ config: {
         name, permission_reference: reference, acquisition_until: until, retained_crm_rights: rights, ...(provider === 'file' ? {} : { provider }),
       } }); }} className="space-y-3">

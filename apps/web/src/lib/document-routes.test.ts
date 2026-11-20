@@ -182,7 +182,9 @@ it('retains placement evidence bytes when the database rejects deletion', async 
   vi.mocked(getSupabaseServerClient).mockReturnValue(createClient('https://example.supabase.co', 'test-key', { global: { fetch: fetcher }, auth: { persistSession: false } }));
   const response = await deleteDocument(new NextRequest('http://localhost/files', { method: 'DELETE', body: JSON.stringify({ id: file }) }), context);
   expect(response.status).toBe(409);
-  expect(calls).toHaveLength(2);
+  expect(calls.map((url) => url.pathname)).toEqual([
+    '/rest/v1/clients', '/rest/v1/client_files', '/rest/v1/rpc/claim_document_deletion',
+  ]);
   expect(calls.some((url) => url.pathname.startsWith('/storage/'))).toBe(false);
 });
 

@@ -4,7 +4,7 @@ import type { RecordTarget } from '@crm/shared';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 
 export default function AgentAssignment({ target }: { target: RecordTarget }): JSX.Element | null {
-  const [team, setTeam] = useState<{ member: { role: string }; members: Array<{ user_id: string; email: string; active: boolean }> } | null>(null);
+  const [team, setTeam] = useState<{ can_assign: boolean; members: Array<{ user_id: string; email: string; active: boolean }> } | null>(null);
   const [assigned, setAssigned] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -17,7 +17,7 @@ export default function AgentAssignment({ target }: { target: RecordTarget }): J
   }, [target.id, target.type]);
   if (!team) return error ? <p className="text-xs text-cui-danger">{error}</p> : null;
   return <label className="block text-xs font-semibold text-cui-muted">Assigned agent
-    <select value={assigned} disabled={busy || team.member.role === 'agent'} className="ml-2 rounded border border-cui-border p-1.5 text-sm" onChange={(event) => {
+    <select value={assigned} disabled={busy || !team.can_assign} className="ml-2 rounded border border-cui-border p-1.5 text-sm" onChange={(event) => {
       const userId = event.target.value; setBusy(true); setError('');
       void workspaceFetch('/api/agency', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'assign', record_type: target.type, record_id: target.id, user_id: userId || null }) })

@@ -154,7 +154,7 @@ test('discovery loads one tool at a time, retains edits and shows repairs rather
   await expect(page.getByText('Source and processing availability', { exact: true })).toHaveCount(0);
 });
 
-test('integrations keep working controls and move setup details into Rashi', async ({ page, settingsOwner }) => {
+test('integrations keep working controls and show actionable setup details inline', async ({ page, settingsOwner }) => {
   void settingsOwner;
   await page.route('**/api/settings/integrations', async (route) => route.fulfill({ json: { integrations: [
     { id: 'database', name: 'CRM database', state: 'healthy', detail: 'Connected and responding.' },
@@ -163,11 +163,8 @@ test('integrations keep working controls and move setup details into Rashi', asy
     { id: 'resend', name: 'Email delivery', state: 'configured', detail: 'Verify the sending domain before sending.' },
   ] } }));
   await page.goto('/settings?tab=integrations');
-  await expect(page.getByText(/Configure GMAIL_PUBSUB_TOPIC/)).toHaveCount(0);
-  await page.getByRole('button', { name: 'Help with Agent Gmail' }).click();
-  await expect(page.getByText('Rashi Assistant', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Help with Agent Gmail' })).toHaveCount(0);
   await expect(page.getByText(/Configure GMAIL_PUBSUB_TOPIC/)).toBeVisible();
-  await page.getByRole('button', { name: 'Hide Rashi', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Manage Gmail', exact: true })).toHaveAttribute('href', '/account?tab=signature');
   await page.getByRole('link', { name: 'Manage email', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'Email', exact: true })).toHaveAttribute('aria-selected', 'true');

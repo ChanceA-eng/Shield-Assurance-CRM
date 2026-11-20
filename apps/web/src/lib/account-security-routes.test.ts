@@ -50,15 +50,23 @@ beforeEach(() => {
     } },
   });
   vi.mocked(getSupabaseServerClient).mockReturnValue(db);
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted', grants: {} } });
 });
 describe('verified own-account email changes', () => {
-  it('reauthenticates and derives agent approval behavior from trusted membership', async () => {
+  it('requires administrator approval unless Team access is explicitly granted', async () => {
     const response = await changeEmail(request('/api/account/email', { action: 'request', email: 'new@example.invalid', current_password: 'password' }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ message: expect.stringContaining('owner') });
+    expect(await response.json()).toMatchObject({ message: expect.stringContaining('administrator') });
     expect(reauthenticate).toHaveBeenCalledWith(db, user, 'password');
     expect(calls.find((call) => call.path.endsWith('/request_account_email'))?.body).toEqual({ p_actor: user.id, p_email: 'new@example.invalid' });
+  });
+  it('uses the administrator permission, not the legacy membership role, for self-approval messaging', async () => {
+    vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: {
+      mode: 'restricted', grants: { 'team.manage': 'agency' },
+    } });
+    const response = await changeEmail(request('/api/account/email', { action: 'request', email: 'new@example.invalid', current_password: 'password' }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ message: expect.stringContaining('Request saved') });
   });
   it('sends independent proofs to both addresses, retaining only hashes', async () => {
     expect((await changeEmail(request('/api/account/email', { action: 'verify', current_password: 'password' }))).status).toBe(200);

@@ -27,7 +27,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     const batch = await db.from('import_batches').select('*').eq('id', batchId).maybeSingle();
     if (batch.error) throw databaseError(batch.error);
     if (!batch.data) throw new WorkspaceError('Batch not found.', 404);
-    if (batch.data.discovery_source_id) await discoveryAccess(db, session.user.id);
+    if (batch.data.discovery_source_id) discoveryAccess(session.teamAccess);
     const settings = await getAutomationSettings(db);
     const rows: Array<Record<string, unknown>> = [];
     for (let offset = 0; ; offset += 500) {

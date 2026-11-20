@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 import { Card, CardBody, CardHeader } from '../ui/Card';
-import AskRashi from './AskRashi';
 
 type IntegrationState = 'missing' | 'configured' | 'healthy' | 'failed';
 interface Integration {
@@ -85,9 +84,8 @@ export default function IntegrationStatusWorkspace(): JSX.Element {
               {integration.id === 'gmail' ? <Link href="/account?tab=signature" className="crm-button mt-3">Manage Gmail</Link> : null}
               {integration.id === 'resend' ? <a href="/settings?tab=email" className="crm-button mt-3">Manage email</a> : null}
               {integration.id === 'openai' && integration.state !== 'missing' ? <Link href="/communication" className="crm-button mt-3">Open conversations</Link> : null}
-                <AskRashi topic="integrations" label={`Help with ${integration.name}`}
-                  detail={`${integration.name}: ${stateLabels[integration.state]}. ${integration.detail}`} />
               </div>
+              <p className="mt-2 text-sm text-cui-muted">{integration.detail}</p>
               {integration.connections?.length ? <ul className="mt-3 divide-y divide-cui-border rounded border border-cui-border">
                 {integration.connections.map((connection) => (
                   <li key={connection.email} className="flex flex-wrap justify-between gap-2 p-3 text-xs">

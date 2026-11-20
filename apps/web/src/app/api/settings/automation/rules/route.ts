@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { CRM_WORKFLOW_EVENTS, parseWorkflowRule, validateWorkflowDefinition } from '@crm/shared';
 import { getApiSession } from '../../../../../lib/api-auth';
-import { requireAgencyOwner } from '../../../../../lib/agency-access';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../../lib/workspace-api';
 import { WorkspaceError } from '../../../../../lib/record-scope';
 import { isUuid } from '../../../../../lib/workspace-validation';
+import { requireTeamPermission } from '../../../../../lib/team-request-access';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -13,7 +13,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected.' }, { status: 503 });
   try {
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'automation.view');
     const rawPage = request.nextUrl.searchParams.get('page') ?? '0';
     if (!/^\d{1,6}$/.test(rawPage)) throw new WorkspaceError('Choose a valid rule page.', 400);
     const page = Number(rawPage);
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected.' }, { status: 503 });
   try {
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'automation.manage');
     const body = await workspaceBody(request);
     if (Object.keys(body).some((key) => !['rule_id', 'expected_revision', 'definition'].includes(key))
       || (body.rule_id !== null && !isUuid(body.rule_id)) || typeof body.expected_revision !== 'number'

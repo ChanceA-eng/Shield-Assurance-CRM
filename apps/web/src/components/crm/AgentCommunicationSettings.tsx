@@ -5,7 +5,6 @@ import type { OutreachSender, GmailConnectionStatus } from '@crm/shared';
 import { Card, CardBody, CardHeader } from '../ui/Card';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 import { useUnsavedChanges, useWorkspaceNavigation } from '../../context/WorkspaceNavigationContext';
-import AskRashi from './AskRashi';
 
 interface Member {
   user_id: string; email: string; role: 'owner' | 'admin' | 'agent'; active: boolean;
@@ -51,7 +50,7 @@ export default function AgentCommunicationSettings(): JSX.Element {
     try { await operation(); } catch (failure) { setError(failure instanceof Error ? failure.message : 'Action could not be completed.'); }
     finally { setBusy(false); }
   };
-  return <Card><CardHeader actions={<AskRashi topic="integrations" detail={mailbox?.last_error ?? undefined} />}>My agent account &amp; Gmail</CardHeader><CardBody className="space-y-4">
+  return <Card><CardHeader>My agent account &amp; Gmail</CardHeader><CardBody className="space-y-4">
     {error ? <p role="alert" className="text-sm text-cui-danger">{error}</p> : null}
     {notice ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
     {!team ? <button type="button" onClick={() => void load()} className="text-sm text-cui-primary underline">Reload account settings</button> : <>

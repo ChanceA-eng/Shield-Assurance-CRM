@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { activeAgencyMember } from '../../../lib/agency-membership';
 import { getApiSession } from '../../../lib/api-auth';
 import { isRecordType } from '@crm/shared';
 import { isUuid } from '../../../lib/workspace-validation';
@@ -7,6 +6,8 @@ import { getSupabaseServerClient } from '../../../lib/supabase-server';
 import { WorkspaceError } from '../../../lib/record-scope';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../lib/workspace-api';
 import { leadContactRestrictions } from '../../../lib/message-delivery';
+import { accountRecordScope, requireTeamPermission, type RequestAccess } from '../../../lib/team-request-access';
+import { staffRecordScope } from '../../../lib/staff-records';
 
 const MIGRATION = '20261113015000_record_contact_preferences';
 
@@ -20,13 +21,33 @@ function contactPreferenceError(error: { message: string; code?: string }): Work
   return new WorkspaceError('Contact preferences are temporarily unavailable. Please try again.', 503);
 }
 
-async function accessRecord(db: NonNullable<ReturnType<typeof getSupabaseServerClient>>, actor: string, type: 'lead' | 'client', id: string) {
-  const member = await activeAgencyMember(db, actor);
+async function accessRecord(
+  db: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
+  actor: string,
+  access: RequestAccess | undefined,
+  type: 'lead' | 'client',
+  id: string,
+  write: boolean,
+) {
+  const viewScope = type === 'lead'
+    ? staffRecordScope(access, 'leads')
+    : accountRecordScope(access, 'accounts.view');
+  const editScope = type === 'lead'
+    ? access?.mode === 'legacy' ? 'agency'
+      : access?.grants['leads.edit'] === 'agency' || access?.grants['leads.edit'] === 'assigned'
+        ? access.grants['leads.edit'] : null
+    : accountRecordScope(access, 'accounts.edit');
+  const scope = write && viewScope && editScope
+    ? viewScope === 'assigned' || editScope === 'assigned' ? 'assigned' : 'agency'
+    : write ? null : viewScope;
+  if (!scope) {
+    throw new WorkspaceError('You do not have access to this contact preference.', 403);
+  }
   const table = type === 'lead' ? 'leads' : 'clients';
   const record = await db.from(table).select(type === 'lead' ? 'id,agent_user_id,account_id' : 'id,agent_user_id')
     .eq('id', id).maybeSingle<{ id: string; agent_user_id: string | null; account_id?: string | null }>();
   if (record.error) throw databaseError(record.error);
-  if (!record.data || (member.role === 'agent' && record.data.agent_user_id && record.data.agent_user_id !== actor)) {
+  if (!record.data || (scope === 'assigned' && record.data.agent_user_id !== actor)) {
     throw new WorkspaceError('Contact not found or unavailable.', 404);
   }
   return record.data;
@@ -77,7 +98,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const type = request.nextUrl.searchParams.get('type');
     const id = request.nextUrl.searchParams.get('id');
     if (!isRecordType(type) || !isUuid(id)) throw new WorkspaceError('Choose a valid lead or account.', 400);
-    const record = await accessRecord(db, session.user.id, type, id);
+    const record = await accessRecord(db, session.user.id, session.teamAccess, type, id, false);
     return NextResponse.json(await preferenceState(db, type, id, record.account_id),
       { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {
@@ -96,7 +117,9 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
       || (body.reason !== undefined && (typeof body.reason !== 'string' || body.reason.length > 500))) {
       throw new WorkspaceError('Choose a valid contact preference.', 400);
     }
-    const record = await accessRecord(db, session.user.id, body.type, body.id);
+    if (body.type === 'lead') requireTeamPermission(session.teamAccess, 'leads.edit', 'assigned');
+    else requireTeamPermission(session.teamAccess, 'accounts.edit', 'assigned');
+    const record = await accessRecord(db, session.user.id, session.teamAccess, body.type, body.id, true);
     const result = await db.rpc('set_record_contact_preference', {
       p_actor: session.user.id, p_type: body.type, p_id: body.id, p_do_not_contact: body.do_not_contact,
       p_reason: typeof body.reason === 'string' ? body.reason.trim() : '',

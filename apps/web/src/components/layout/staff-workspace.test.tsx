@@ -22,8 +22,11 @@ beforeEach(() => vi.stubGlobal('React', React));
 afterEach(() => vi.unstubAllGlobals());
 
 it.each(['social-reader', 'social-editor'] as const)('renders only the supported %s controls', (workspace) => {
+  const access = { mode: 'restricted' as const, grants: {
+    'social.view': 'agency', ...(workspace === 'social-editor' ? { 'social.edit': 'agency' } : {}),
+  } };
   const html = renderToStaticMarkup(
-    <StaffWorkspaceProvider workspace={workspace}>
+    <StaffWorkspaceProvider workspace={workspace} access={access}>
       <NotificationProvider enabled={false}>
         <NavProvider><AppSidebar /><SocialMarketingPage /></NavProvider>
       </NotificationProvider>
@@ -41,7 +44,9 @@ it.each(['social-reader', 'social-editor'] as const)('renders only the supported
 
 it('combines permitted record and marketing navigation without rendering the Owner account workspace', () => {
   const html = renderToStaticMarkup(
-    <StaffWorkspaceProvider workspace="social-editor" records={['accounts', 'policies']}>
+    <StaffWorkspaceProvider workspace="social-editor" records={['accounts', 'policies']} access={{ mode: 'restricted', grants: {
+      'social.view': 'agency', 'social.edit': 'agency', 'accounts.view': 'assigned', 'policies.view': 'assigned',
+    } }}>
       <NotificationProvider enabled={false}>
         <NavProvider><AppSidebar /><ClientsPage /></NavProvider>
       </NotificationProvider>

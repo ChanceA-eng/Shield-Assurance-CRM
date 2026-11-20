@@ -17,9 +17,10 @@ const id = '039d0052-4587-4bb9-9f0b-d5b92407f58c', actor = '168413e9-a6a4-4dff-a
 const user: User = { id: actor, aud: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01' };
 const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
 let denied = false;
+const teamAccess = { mode: 'restricted' as const, grants: { 'leads.prospect': 'agency' } };
 beforeEach(() => {
   vi.clearAllMocks(); calls.length = 0; denied = false;
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
   vi.mocked(activeAgencyMember).mockResolvedValue({ user_id: actor, email: 'qa@example.test', role: 'owner', active: true, sender_profile: null, gmail_ai_opt_in: false });
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input)), name = url.pathname.split('/').pop() ?? '';

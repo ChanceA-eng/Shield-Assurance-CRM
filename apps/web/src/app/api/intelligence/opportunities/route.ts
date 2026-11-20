@@ -12,6 +12,7 @@ import { parseOpportunityProfile } from '../../../../lib/opportunity-matching';
 import { currentDossierDraftFacts } from '../../../../lib/dossier';
 import { draftOutreach } from '../../../../lib/outreach-ai';
 import { eligibleAiMessages, type OutreachConversation } from '../../../../lib/lead-outreach-context';
+import { hasTeamPermission } from '../../../../lib/team-request-access';
 const headers = { 'Cache-Control': 'private, no-store' };
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -25,11 +26,11 @@ async function access(request: NextRequest) {
   const db = getSupabaseServerClient();
   if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
   const member = await activeAgencyMember(db, session.user.id);
-  return { db, actor: session.user.id, member };
+  return { db, actor: session.user.id, member, teamAccess: session.teamAccess };
 }
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
-    const { db, actor, member } = await access(request), params = request.nextUrl.searchParams;
+    const { db, actor, member, teamAccess } = await access(request), params = request.nextUrl.searchParams;
     if (params.get('id')) {
       const selected = target(params.get('type'), params.get('id'));
       const context = await opportunityContext(db, actor, selected);
@@ -37,7 +38,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         .eq('scope_key', context.dossier.scope_key).eq('actor_id', actor).order('updated_at', { ascending: false }).order('id').limit(1).returns<OpportunityDraft[]>();
       if (drafts.error) opportunityDatabaseError(drafts.error);
       let agents = [{ user_id: actor, email: member.email }];
-      if (member.role !== 'agent') {
+      if (hasTeamPermission(teamAccess, 'tasks.assign')) {
         const result = await db.from('agency_members').select('user_id,email').eq('active', true).order('email');
         if (result.error) opportunityDatabaseError(result.error);
         agents = result.data;

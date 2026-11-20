@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { getApiSession } from '../../../../lib/api-auth';
-import { requireAgencyOwner } from '../../../../lib/agency-access';
+import { requireTeamPermission } from '../../../../lib/team-request-access';
 import { processDueEnrollments } from '../../../../lib/outreach-engine';
 import { processDueProspectingEmailDrafts } from '../../../../lib/prospecting-cadence';
 import { runRenewalRadar } from '../../../../lib/renewal-automation';
@@ -265,8 +265,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (!isAuthorizedCron(request)) {
     const session = await getApiSession(request);
     if (session.error) return session.error;
-    try { await requireAgencyOwner(supabase, session.user.id); }
-    catch (error) { return NextResponse.json({ message: error instanceof Error ? error.message : 'Agency owner access is required.' }, { status: 403 }); }
+    try { requireTeamPermission(session.teamAccess, 'automation.manage'); }
+    catch (error) { return NextResponse.json({ message: error instanceof Error ? error.message : 'Automation management permission is required.' }, { status: 403 }); }
   }
   const job = request.nextUrl.searchParams.get('job');
   const jobs = ['follow-up-routine', 'outreach', 'renewal-radar', 'website-intake', 'internal-actions', 'due-reminders', 'custom-workflows'];

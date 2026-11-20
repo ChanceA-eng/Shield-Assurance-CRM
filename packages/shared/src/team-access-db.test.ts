@@ -53,6 +53,44 @@ beforeEach(async () => {
   await db.exec(await readFile(new URL('../../../supabase/migrations/20261119123000_staff_policy_inbox.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../../../supabase/migrations/20261119231000_direct_team_access.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../../../supabase/migrations/20261119232000_team_setup_reauthorization.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261120010000_team_training_access.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261120020000_complete_team_permissions.sql', import.meta.url), 'utf8'));
+  await db.exec(`
+    create function public.intelligence_dossier_scope(p_actor uuid,p_type text,p_id uuid)
+    returns jsonb language plpgsql security definer set search_path=public as $$
+    declare member agency_members; client clients; lead leads;
+    begin
+      select * into member from agency_members where user_id=p_actor and active;
+      if not found then raise exception 'Active agency access is required' using errcode='42501'; end if;
+      if p_type='lead' then
+        select * into lead from leads where id=p_id;
+        if member.role='agent' and lead.agent_user_id is not null and lead.agent_user_id<>p_actor then
+          raise exception 'This dossier is assigned to another agent.' using errcode='42501';
+        end if;
+      elsif p_type='client' then
+        select * into client from clients where id=p_id;
+        if member.role='agent' and client.agent_user_id is not null and client.agent_user_id<>p_actor then
+          raise exception 'This dossier is assigned to another agent.' using errcode='42501';
+        end if;
+      end if;
+      return '{}'::jsonb;
+    end;
+    $$;
+    create function public.create_prospecting_nurture(p_actor uuid,p_lead uuid,p_due date)
+    returns uuid language plpgsql security definer set search_path=public as $$
+    declare member_row agency_members; lead_row leads;
+    begin
+      select * into member_row from agency_members where user_id=p_actor and active;
+      select * into lead_row from leads where id=p_lead;
+      if member_row.user_id is null or lead_row.id is null
+        or (member_row.role='agent' and lead_row.agent_user_id is not null and lead_row.agent_user_id<>p_actor) then
+        raise exception 'Lead not found or unavailable' using errcode='42501';
+      end if;
+      return null;
+    end;
+    $$;
+  `);
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261120030000_apply_custom_team_permissions.sql', import.meta.url), 'utf8'));
 }, 30000);
 afterEach(async () => { await db.close(); });
 
@@ -68,6 +106,63 @@ const delivery = (version: number, user: string | null, error: string | null = n
 const accept = () => db.query('select public.accept_team_invitation($1,$2) as saved', [invitee, invitation]);
 
 describe('Team access migration in isolated PostgreSQL', () => {
+  it('enforces custom grants and record scopes in the SQL permission helper', async () => {
+    await db.query(`update agency_members set direct_grants='{"automation.manage":"agency","leads.view":"assigned"}'::jsonb,
+      setup_state='accepted' where user_id=$1`, [producer]);
+    const result = await db.query(`select
+      team_has_permission($1,'automation.manage','agency') as can_manage_automation,
+      team_has_permission($1,'leads.view','assigned') as can_view_assigned_leads,
+      team_has_permission($1,'leads.view','agency') as can_view_all_leads,
+      team_has_permission($1,'team.manage','agency') as can_manage_team`, [producer]);
+    expect(result.rows).toEqual([{
+      can_manage_automation: true, can_view_assigned_leads: true,
+      can_view_all_leads: false, can_manage_team: false,
+    }]);
+  });
+  it('uses explicit campaign and record grants instead of membership titles in prospecting RPCs', async () => {
+    const definition = (await db.query<{ definition: string }>(
+      `select pg_get_functiondef('public.create_prospecting_nurture(uuid,uuid,date)'::regprocedure) as definition`,
+    )).rows[0].definition;
+    expect(definition).toContain(`team_has_permission(p_actor,'campaigns.send','agency')`);
+    expect(definition).toContain(`team_has_permission(p_actor,'leads.view','assigned')`);
+    expect(definition).not.toContain(`member_row.role='agent'`);
+
+    await db.query(`insert into public.leads(id,agent_user_id) values($1,$2)`, [invitee, admin]);
+    await db.query(`update agency_members set direct_grants='{"campaigns.send":"agency","leads.view":"agency"}'::jsonb,
+      setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query('select public.create_prospecting_nurture($1,$2,current_date+1)', [producer, invitee]);
+    await db.query(`update agency_members set direct_grants='{"leads.view":"agency"}'::jsonb where user_id=$1`, [producer]);
+    await expect(db.query('select public.create_prospecting_nurture($1,$2,current_date+1)', [producer, invitee]))
+      .rejects.toMatchObject({ code: '42501' });
+  });
+  it('lets explicit agency record grants cross legacy agent assignment fences in the dossier RPC', async () => {
+    const definition = (await db.query<{ definition: string }>(
+      `select pg_get_functiondef('public.intelligence_dossier_scope(uuid,text,uuid)'::regprocedure) as definition`,
+    )).rows[0].definition;
+    expect(definition).toContain(`team_has_permission(p_actor,'leads.view','agency')`);
+    expect(definition).toContain(`team_has_permission(p_actor,'accounts.view','agency')`);
+    expect(definition).not.toContain(`member.role='agent'`);
+
+    await db.query(`insert into public.leads(id,agent_user_id) values($1,$2)`, [invitee, admin]);
+    await db.query(`update agency_members set direct_grants='{"leads.view":"agency"}'::jsonb,
+      setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query('select public.intelligence_dossier_scope($1,$2,$3)', [producer, 'lead', invitee]);
+    await db.query(`update agency_members set direct_grants='{"leads.view":"assigned"}'::jsonb where user_id=$1`, [producer]);
+    await expect(db.query('select public.intelligence_dossier_scope($1,$2,$3)', [producer, 'lead', invitee]))
+      .rejects.toMatchObject({ code: '42501' });
+  });
+  it('allows profile managers to assign every catalog permission', async () => {
+    await db.query(`select save_team_profile($1,$2,null,null,'Trainee','{"knowledge.view":"agency"}',true,1)`, [owner, producer]);
+    expect((await db.query('select direct_grants from agency_members where user_id=$1', [producer])).rows)
+      .toEqual([{ direct_grants: { 'knowledge.view': 'agency' } }]);
+    const allPermissions = Object.fromEntries(Object.keys(TEAM_PERMISSIONS).map((permission) => [permission, 'agency']));
+    await db.query('select save_team_profile($1,$2,null,null,$3,$4,true,2)', [owner, producer, 'Trainee', allPermissions]);
+    const saved = await db.query<{ direct_grants: Record<string, unknown> }>(
+      'select direct_grants from agency_members where user_id=$1', [producer],
+    );
+    expect(Object.keys(saved.rows[0].direct_grants))
+      .toHaveLength(Object.keys(TEAM_PERMISSIONS).length);
+  });
   it('scopes a custom-titled invitee independently of the rollout and never grants authority from the title', async () => {
     await db.query(`insert into auth.users(id,email) values ($1,'custom@example.test')`, [invitee]);
     const save = (actor: string, target: string, grants: Record<string, string>, version: number | null, active = false) =>

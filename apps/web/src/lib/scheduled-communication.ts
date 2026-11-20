@@ -12,6 +12,7 @@ import { hasUnresolvedSalesFields, emailDesignErrors, parseEmailDesign, parseEma
 import { templateSnapshot } from './sales-templates';
 import { getOutreachSender } from './marketing-profile';
 import { messageDocument } from './email-formatting';
+import { requireTeamPermission } from './team-request-access';
 
 export interface ScheduleContext { params: Promise<{ id: string; type?: 'lead' | 'client' | 'unmatched' }> }
 
@@ -22,16 +23,26 @@ async function scheduleAccess(request: NextRequest, context: ScheduleContext) {
   if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
   const { id, type = 'lead' } = await context.params;
   if (type !== 'unmatched' && !isUuid(id)) throw new WorkspaceError('Choose a valid contact.', 400);
-  const member = await activeAgencyMember(db, session.user.id);
+  await activeAgencyMember(db, session.user.id);
+  const permission = request.method === 'GET' ? 'messages.view' : 'messages.send';
+  requireTeamPermission(session.teamAccess, permission, 'assigned');
   if (type === 'unmatched') {
+    requireTeamPermission(session.teamAccess, permission, 'agency');
     if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(id)) throw new WorkspaceError('Choose an email conversation.', 400);
     return { db, id: id.toLowerCase(), actor: session.user.id, column: 'approved_recipient' as const, type };
   }
+  const recordPermission = type === 'lead' ? 'leads.view' : 'accounts.view';
+  requireTeamPermission(session.teamAccess, recordPermission, 'assigned');
   const lead = type === 'lead'
     ? await db.from('leads').select('id,agent_user_id,archived_at').eq('id', id).maybeSingle()
     : await db.from('clients').select('id,agent_user_id').eq('id', id).maybeSingle();
   if (lead.error) throw databaseError(lead.error);
-  if (!lead.data || (lead.data.agent_user_id && lead.data.agent_user_id !== session.user.id && member.role === 'agent')) {
+  if (!lead.data) {
+    throw new WorkspaceError('Contact not found or unavailable.', 404);
+  }
+  if (session.teamAccess?.mode === 'restricted'
+    && (session.teamAccess.grants[permission] === 'assigned' || session.teamAccess.grants[recordPermission] === 'assigned')
+    && lead.data.agent_user_id !== session.user.id) {
     throw new WorkspaceError('Contact not found or unavailable.', 404);
   }
   if ('archived_at' in lead.data && lead.data.archived_at) throw new WorkspaceError('Restore this lead before scheduling email.', 409);

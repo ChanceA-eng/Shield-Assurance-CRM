@@ -45,7 +45,7 @@ export async function getApiSession(request: NextRequest, options?: { teamActiva
         if (!membership.data) throw new WorkspaceError('An active agency invitation is required.', 403);
       }
       const teamAccess = await readTeamRequestAccess(authClient, data.user.id);
-      if (!permitsTeamRequest(teamAccess, request.nextUrl.pathname, request.method)) {
+      if (!permitsTeamRequest(teamAccess, request.nextUrl.pathname, request.method, request.nextUrl.searchParams.toString())) {
         throw new WorkspaceError('You do not have access to this feature.', 403);
       }
       return { user: data.user, error: null, teamAccess };

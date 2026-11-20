@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../../../lib/api-auth';
-import { requireAgencyOwner } from '../../../../../lib/agency-access';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
 import { activateInstantlyCampaign, InstantlyApiError, pauseInstantlyCampaign } from '../../../../../lib/instantly';
 import { assertSameOriginJson, databaseError, workspaceApiError, workspaceBody } from '../../../../../lib/workspace-api';
 import { WorkspaceError } from '../../../../../lib/record-scope';
+import { requireTeamPermission } from '../../../../../lib/team-request-access';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
 
   try {
     assertSameOriginJson(request);
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'campaigns.send');
     const body = await workspaceBody(request);
     const actionValue = isRecord(body) ? body.action : null;
     if (actionValue !== 'activate' && actionValue !== 'pause') {

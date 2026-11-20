@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiSession } from '../../../../lib/api-auth';
-import { requireAgencyOwner } from '../../../../lib/agency-access';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { leadDeclinedContact } from '../../../../lib/message-delivery';
 import { ACTIVE_LEAD_STATUSES } from '../../../../lib/lead-pipeline';
@@ -16,6 +15,7 @@ import {
 } from '../../../../lib/instantly';
 import { assertSameOriginJson, databaseError, workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
 import { WorkspaceError } from '../../../../lib/record-scope';
+import { hasTeamPermission, requireTeamPermission } from '../../../../lib/team-request-access';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -131,16 +131,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const db = getSupabaseServerClient();
   if (!db) return NextResponse.json({ message: 'The CRM database is not connected. Contact your administrator.' }, { status: 503 });
   try {
-    await requireAgencyOwner(db, session.user.id);
-    const [campaignResult, leadResult] = await Promise.all([
-      db.from('instantly_campaigns')
+    requireTeamPermission(session.teamAccess, 'campaigns.view');
+    const canViewLeads = hasTeamPermission(session.teamAccess, 'leads.view', 'assigned');
+    const campaignResult = await db.from('instantly_campaigns')
         .select('id,name,status,daily_limit,sender_accounts,last_error,created_at,instantly_campaign_leads(count)')
-        .order('created_at', { ascending: false }).limit(100),
-      db.from('leads').select('id,full_name,email,business,industry,status,account_id,form_payload')
+        .order('created_at', { ascending: false }).limit(100);
+    const leadResult = canViewLeads ? await db.from('leads').select('id,full_name,email,business,industry,status,account_id,form_payload')
         .is('archived_at', null).in('status', [...ACTIVE_LEAD_STATUSES])
         .order('created_at', { ascending: false }).limit(1000)
-        .returns<Array<Pick<CampaignLead, 'id' | 'full_name' | 'email' | 'business' | 'industry' | 'status' | 'account_id' | 'form_payload'>>>(),
-    ]);
+        .returns<Array<Pick<CampaignLead, 'id' | 'full_name' | 'email' | 'business' | 'industry' | 'status' | 'account_id' | 'form_payload'>>>()
+      : { data: [], error: null };
     if (campaignResult.error) throw databaseError(campaignResult.error);
     if (leadResult.error) throw databaseError(leadResult.error);
     const addresses = (leadResult.data ?? []).map((lead) => lead.email?.trim().toLowerCase())
@@ -180,7 +180,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   let campaignId: string | null = null;
   try {
     assertSameOriginJson(request);
-    await requireAgencyOwner(db, session.user.id);
+    requireTeamPermission(session.teamAccess, 'campaigns.send');
     const body = await workspaceBody(request);
     if (!isRecord(body)) throw new WorkspaceError('Send campaign settings and reviewed drafts.', 400);
     const input = parseCampaignInput(body);

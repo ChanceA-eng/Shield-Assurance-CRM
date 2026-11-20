@@ -18,6 +18,9 @@ vi.mock('./automation-health', () => ({
 let calls: Array<{ path: string; body: Record<string, unknown> }>;
 let lookup: (payloads: Record<string, unknown>[]) => Response;
 let role: string;
+const teamAccess: { mode: 'restricted'; grants: Record<string, unknown> } = {
+  mode: 'restricted', grants: { 'automation.manage': 'agency' },
+};
 const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const leadId = 'c5b14c2b-5527-4a2d-b395-e0a04a4f6dd2';
 const user: User = { id: leadId, aud: 'authenticated', created_at: '2026-11-05T00:00:00Z', app_metadata: {}, user_metadata: {} };
@@ -35,8 +38,9 @@ function db() {
 }
 beforeEach(() => {
   vi.clearAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals();
+  teamAccess.grants = { 'automation.manage': 'agency' };
   calls = []; role = 'owner'; lookup = () => json([]); vi.mocked(getSupabaseServerClient).mockReturnValue(db());
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess });
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 describe('durable website receipt lookup', () => {
@@ -55,21 +59,19 @@ describe('durable website receipt lookup', () => {
     expect(await response.json()).toMatchObject({ runs: expect.arrayContaining([
       expect.objectContaining({ job: 'website-intake', summary: { ok: true, pulled: 4, inserted: 0, resubmissions: 0, skippedExisting: 4 } }),
     ]) });
-    expect(calls.map((call) => call.path)).toEqual([
-      ...(authorization === 'owner' ? ['/rest/v1/agency_members'] : []),
-      '/rest/v1/rpc/website_submission_receipts_for',
-    ]);
+    expect(calls.map((call) => call.path)).toEqual(['/rest/v1/rpc/website_submission_receipts_for']);
     expect(getApiSession).toHaveBeenCalledTimes(authorization === 'owner' ? 1 : 0);
   });
   it.each(['admin', 'agent'])('rejects %s full-history pulls before fetching submissions or generating work', async (memberRole) => {
     role = memberRole;
+    teamAccess.grants = {};
     vi.stubEnv('CRON_SECRET', 'test-cron-secret');
     const fetchExport = vi.fn();
     vi.stubGlobal('fetch', fetchExport);
     const response = await syncLeads(new NextRequest('http://localhost/api/cron/sync-leads'));
     expect(response.status).toBe(403);
     expect(fetchExport).not.toHaveBeenCalled();
-    expect(calls.map((call) => call.path)).toEqual(['/rest/v1/agency_members']);
+    expect(calls).toEqual([]);
   });
   it('distinguishes a purged receipt from an unseen request and batches beyond 100', async () => {
     lookup = (payloads) => json(payloads.map((_, position) => ({ position, lead_id: position === 0 ? null : leadId })));

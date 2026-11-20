@@ -6,7 +6,6 @@ import { workspaceFetch } from '../../lib/workspace-fetch';
 import { WC_FIELDS, WC_KINDS, WC_OFFICIAL_URL, parseWcEvidence, suggestWcFields, wcEntryStatus, wcFieldsFor,
   type WcEvidence, type WcField, type WcWorkspace } from '../../lib/workers-comp';
 import { useUnsavedChanges } from '../../context/WorkspaceNavigationContext';
-import AskRashi from './AskRashi';
 
 const today = (): string => new Date().toISOString().slice(0, 10);
 const empty = (name: string, address: string): WcEvidence => ({
@@ -93,7 +92,6 @@ export default function WorkersCompPanel({ target, businessName = '', address = 
           void navigator.clipboard.writeText(workspace?.record_name || businessName).then(() => setNotice('Business name copied.'))
             .catch(() => setError('Copy was unavailable. Select and copy the business name above.'));
         }} disabled={!(workspace?.record_name || businessName)}>Copy business name</button>
-        <AskRashi topic="workers_comp" />
       </div>
       {!target && error ? <p role="alert" className="text-sm text-cui-danger">{error}</p> : null}
       {!target && notice ? <p role="status" className="text-xs">{notice}</p> : null}

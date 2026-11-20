@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EmailConnectionStatus } from '../../lib/email-setup';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 import { Card, CardBody, CardHeader } from '../ui/Card';
-import AskRashi from './AskRashi';
 
 export default function EmailConnectionSettings(): JSX.Element {
   const [status, setStatus] = useState<EmailConnectionStatus | null>(null);
@@ -43,6 +42,9 @@ export default function EmailConnectionSettings(): JSX.Element {
     {error ? <p role="alert" className="text-sm text-cui-danger">{error}</p> : null}
     {notice ? <p role="status" className="text-sm text-green-800">{notice}</p> : null}
     {status ? <>
+      {status.issues.length ? <ul role="alert" className="list-disc space-y-1 rounded border border-cui-warning/40 bg-cui-warning/10 p-3 pl-7 text-sm text-cui-text">
+        {status.issues.map((issue) => <li key={issue}>{issue}</li>)}
+      </ul> : null}
       <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[10rem_1fr]">
         <dt className="font-semibold">From</dt><dd className="break-all">{status.sender || 'Not set'}</dd>
         <dt className="font-semibold">Reply-to</dt><dd className="break-all">{status.replyTo || 'Not set'}</dd>
@@ -57,8 +59,6 @@ export default function EmailConnectionSettings(): JSX.Element {
           onClick={() => void sendTest()} className="crm-button-primary">
           {busy ? 'Sending test...' : 'Send test & verify replies'}
         </button>
-        <AskRashi topic="email" label={status.issues.length ? 'Resolve email setup with Rashi' : 'Email help'}
-          detail={status.issues.length ? status.issues.join('\n') : undefined} />
       </div>
       {!status.replyReady && ready && status.inboundAddress ? <div className="space-y-2 rounded border border-cui-border p-3 text-sm">
         <p>Reply to the test email from your mailbox, then select <strong>Refresh status</strong>.</p>

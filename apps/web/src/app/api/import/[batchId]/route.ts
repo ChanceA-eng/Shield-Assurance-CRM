@@ -31,7 +31,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   if (batchRes.error) return NextResponse.json({ message: friendlyErrorMessage(batchRes.error) }, { status: 500 });
   if (!batchRes.data) return NextResponse.json({ message: 'Batch not found.' }, { status: 404 });
   if (batchRes.data.discovery_source_id) {
-    try { await discoveryAccess(supabase, session.user.id); } catch (error) { return workspaceApiError(error, 'discovery/import-read'); }
+    try { discoveryAccess(session.teamAccess); } catch (error) { return workspaceApiError(error, 'discovery/import-read'); }
   }
   const prospects: Array<Record<string, unknown>> = [];
   for (let offset = 0; ; offset += 500) {
@@ -60,7 +60,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   if (batchAccess.error) return NextResponse.json({ message: friendlyErrorMessage(batchAccess.error) }, { status: 500 });
   if (!batchAccess.data) return NextResponse.json({ message: 'Batch not found.' }, { status: 404 });
   if (batchAccess.data.discovery_source_id) {
-    try { await discoveryAccess(supabase, session.user.id); } catch (error) { return workspaceApiError(error, 'discovery/import-review'); }
+    try { discoveryAccess(session.teamAccess); } catch (error) { return workspaceApiError(error, 'discovery/import-review'); }
   }
   let body: Record<string, unknown>;
   try { body = await workspaceBody(request); } catch (failure) { return workspaceApiError(failure, 'import/review'); }
@@ -172,7 +172,7 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   if (batchAccess.error) return NextResponse.json({ message: friendlyErrorMessage(batchAccess.error) }, { status: 500 });
   if (!batchAccess.data) return NextResponse.json({ message: 'Batch not found.' }, { status: 404 });
   if (batchAccess.data.discovery_source_id) {
-    try { await discoveryAccess(supabase, session.user.id); } catch (error) { return workspaceApiError(error, 'discovery/import-delete'); }
+    try { discoveryAccess(session.teamAccess); } catch (error) { return workspaceApiError(error, 'discovery/import-delete'); }
   }
   const { error } = await supabase.from('import_batches').delete().eq('id', batchId);
   if (error) return NextResponse.json({ message: friendlyErrorMessage(error) }, { status: 500 });

@@ -4,13 +4,11 @@ import { NextRequest } from 'next/server';
 const mocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   session: vi.fn(),
-  owner: vi.fn(),
   activate: vi.fn(),
   pause: vi.fn(),
 }));
 
 vi.mock('../../../../../lib/api-auth', () => ({ getApiSession: mocks.session }));
-vi.mock('../../../../../lib/agency-access', () => ({ requireAgencyOwner: mocks.owner }));
 vi.mock('../../../../../lib/supabase-server', () => ({ getSupabaseServerClient: mocks.getDb }));
 vi.mock('../../../../../lib/instantly', async (original) => ({
   ...await original<typeof import('../../../../../lib/instantly')>(),
@@ -67,8 +65,7 @@ function request(action: string): NextRequest {
 const context = { params: Promise.resolve({ id: 'campaign' }) };
 
 beforeEach(() => {
-  mocks.session.mockResolvedValue({ user: { id: 'owner' } });
-  mocks.owner.mockResolvedValue(undefined);
+  mocks.session.mockResolvedValue({ user: { id: 'owner' }, teamAccess: { mode: 'legacy' } });
   mocks.activate.mockResolvedValue(undefined);
   mocks.pause.mockResolvedValue(undefined);
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -83,7 +80,6 @@ afterEach(() => {
 it('activates a ready campaign only after claiming the operation', async () => {
   const response = await POST(request('activate'), context);
   expect(response.status).toBe(200);
-  expect(mocks.owner).toHaveBeenCalled();
   expect(updates).toHaveBeenNthCalledWith(1, expect.objectContaining({ status: 'starting' }));
   expect(updates.mock.invocationCallOrder[0]).toBeLessThan(mocks.activate.mock.invocationCallOrder[0]);
   expect(mocks.activate).toHaveBeenCalledWith('provider-campaign');

@@ -12,7 +12,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('Database unavailable.', 503);
-    await discoveryAccess(db, session.user.id);
+    discoveryAccess(session.teamAccess);
     const params = request.nextUrl.searchParams;
     const filters = discoveryFilters({
       ...Object.fromEntries(params), employees_min: params.get('employees_min') ? Number(params.get('employees_min')) : null,
@@ -33,7 +33,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   try {
     const db = getSupabaseServerClient();
     if (!db) throw new WorkspaceError('Database unavailable.', 503);
-    await discoveryAccess(db, session.user.id);
+    discoveryAccess(session.teamAccess);
     const body = await workspaceBody(request);
     if (!isUuid(body.id) || typeof body.expected_updated_at !== 'string' || !Number.isFinite(Date.parse(body.expected_updated_at))) throw new WorkspaceError('Refresh this candidate before reviewing.', 400);
     const result = await db.rpc('review_discovery_candidate', { p_actor: session.user.id, p_candidate: body.id,

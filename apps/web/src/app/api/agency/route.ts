@@ -6,11 +6,11 @@ import { WorkspaceError } from '../../../lib/record-scope';
 import { workspaceApiError, workspaceBody, databaseError } from '../../../lib/workspace-api';
 import { parseOutreachSender } from '../../../lib/marketing-profile';
 import { isUuid } from '../../../lib/workspace-validation';
-import { requireAgencyOwner } from '../../../lib/agency-access';
 import { getOutreachSender } from '../../../lib/marketing-profile';
 import { activateTeamMember } from '../../../lib/team-management';
 import { isTeamActivationRequest } from '../../../lib/route-authentication';
 import { readTeamSettings, writeTeamSettings } from '../../../lib/team-settings';
+import { hasTeamPermission, requireTeamPermission } from '../../../lib/team-request-access';
 
 async function handle(request: NextRequest): Promise<NextResponse> {
   const activating = isTeamActivationRequest(request.nextUrl.pathname, request.method, request.nextUrl.searchParams);
@@ -39,7 +39,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       throw new WorkspaceError('Personal sender profiles are not enabled.', 503);
     }
     if (request.method === 'GET') {
-      const members = member.role === 'owner'
+      const members = hasTeamPermission(session.teamAccess, 'team.manage')
         ? await db.from('agency_members').select('user_id,email,role,active').order('email')
         : { data: [], error: null };
       if (members.error) throw databaseError(members.error);
@@ -66,16 +66,16 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       if (error) throw databaseError(error);
       return NextResponse.json({ ok: true });
     }
-    if (member.role === 'agent') throw new WorkspaceError('Administrator access is required.', 403);
     if (request.method === 'PATCH' && body.action === 'assign') {
       if (!agencyEnabled()) throw new WorkspaceError('Per-agent record assignment is not enabled.', 503);
       const type = body.record_type;
       if ((type !== 'client' && type !== 'lead') || !isUuid(body.record_id) || (body.user_id !== null && !isUuid(body.user_id))) throw new WorkspaceError('Choose valid record and agent IDs.', 400);
+      requireTeamPermission(session.teamAccess, type === 'client' ? 'accounts.assign' : 'leads.assign');
       if (body.user_id) await activeAgencyMember(db, body.user_id);
       const saved = await db.rpc('assign_agency_agent', { p_actor: member.user_id, p_type: type, p_record: body.record_id, p_user: body.user_id });
       if (saved.error) throw databaseError(saved.error);
     } else {
-      await requireAgencyOwner(db, session.user.id);
+      requireTeamPermission(session.teamAccess, 'team.manage');
       throw new WorkspaceError('Use Team access to invite or edit a member.', 410);
     }
     return NextResponse.json({ ok: true });

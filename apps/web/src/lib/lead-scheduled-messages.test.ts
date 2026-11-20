@@ -14,7 +14,9 @@ import { sendOutboundEmail } from './email-adapter';
 import { POST as scheduleConversation, GET as readConversation, DELETE as cancelConversation } from '../app/api/communication/scheduled/route';
 import { POST as scheduleAccount, PATCH as editAccount, DELETE as cancelAccount } from '../app/api/scheduled-messages/route';
 
-vi.mock('./api-auth', () => ({ getApiSession: vi.fn().mockResolvedValue({ user: { id: '11111111-1111-4111-8111-111111111111' }, error: null }) }));
+vi.mock('./api-auth', () => ({ getApiSession: vi.fn(async () => ({
+  user: { id: '11111111-1111-4111-8111-111111111111' }, error: null, teamAccess: { mode: 'restricted', grants },
+})) }));
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
 vi.mock('./agency-membership', () => ({
   activeAgencyMember: vi.fn().mockResolvedValue({ role: 'agent', active: true }),
@@ -40,6 +42,7 @@ const mailbox = {
   sync_enabled: false, last_sync_at: null, last_error: null, watch_expires_at: null, bootstrap_complete: true, history_id: null,
 };
 let owner = '11111111-1111-4111-8111-111111111111', archived = false, claimed = true;
+let grants: Record<string, string>;
 let stored: Record<string, unknown> | null;
 let dispatchAllowed: boolean;
 let dispatchCalls: Array<Record<string, unknown> | null>;
@@ -54,6 +57,7 @@ const req = (method: string, body?: unknown) => new NextRequest(`http://localhos
 
 beforeEach(() => {
   vi.clearAllMocks(); stored = null; calls = []; queries = []; salesTemplates = []; owner = '11111111-1111-4111-8111-111111111111'; archived = false; claimed = true;
+  grants = { 'messages.view': 'agency', 'messages.send': 'agency', 'leads.view': 'agency', 'accounts.view': 'agency' };
   dispatchAllowed = true; dispatchCalls = [];
   vi.mocked(resolveOutboundEmailRecipient).mockResolvedValue({ ok: true, recipient: { to: 'synthetic@example.test', leadId: lead, clientId: null } });
   vi.mocked(getOwnGmailConnection).mockResolvedValue(null);
@@ -141,6 +145,7 @@ describe('scheduling across manual communications', () => {
       expect((await scheduleConversation(conversationRequest(key, 'POST', input()))).status).toBe(400);
     }
     expect((await scheduleConversation(conversationRequest(`client:${lead}`, 'POST', { ...input(), send_at: '2020-01-01' }))).status).toBe(400);
+    grants = { 'messages.view': 'assigned', 'messages.send': 'assigned', 'leads.view': 'assigned', 'accounts.view': 'assigned' };
     owner = 'other';
     expect((await scheduleConversation(conversationRequest(`client:${lead}`, 'POST', input()))).status).toBe(404);
     expect(calls.filter((call) => call.method === 'POST')).toHaveLength(0);
@@ -239,6 +244,7 @@ describe('lead scheduled email', () => {
     for (const change of [{ send_at: 'invalid' }, { send_at: '2020-01-01' }, { body: '' }, { request_id: 'invalid' }]) {
       expect((await POST(req('POST', { ...input(), ...change }), context)).status).toBe(400);
     }
+    grants = { 'messages.view': 'assigned', 'messages.send': 'assigned', 'leads.view': 'assigned', 'accounts.view': 'assigned' };
     owner = 'other';
     expect((await GET(req('GET'), context)).status).toBe(404);
     owner = '11111111-1111-4111-8111-111111111111'; archived = true;
