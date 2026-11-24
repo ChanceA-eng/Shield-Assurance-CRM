@@ -481,7 +481,7 @@ export default function CommunicationCenterPage(): JSX.Element {
                 {sendError ? <div role="alert" className="rounded border border-cui-danger/40 bg-cui-danger/10 px-3 py-1.5 text-sm text-cui-danger">{sendError}</div> : null}
                 {notice ? <div role="status" className="rounded border border-cui-success/40 bg-cui-success/10 px-3 py-1.5 text-sm text-[#2a7a48]">{notice}</div> : null}
                 {selected.can_email ? (
-                  <MessageComposer subject={subjectDraft} body={bodyDraft} onSubjectChange={setSubjectDraft} onBodyChange={setBodyDraft}
+                  <MessageComposer conversationKey={selected.key} subject={subjectDraft} body={bodyDraft} onSubjectChange={setSubjectDraft} onBodyChange={setBodyDraft}
                     bodyDocument={bodyDocument} onDocumentChange={setBodyDocument}
                     emailDesign={salesTemplate?.email_design}
                     disabled={composerBusy} bodyPlaceholder={`Email ${selected.name}…`} sender={<AgentSenderBadge />}

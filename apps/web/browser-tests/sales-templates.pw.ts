@@ -4,6 +4,36 @@ import { createServerClient } from '@supabase/ssr';
 import { test, expect, leadId } from './workspace-fixtures';
 import { DEFAULT_EMAIL_DESIGN, SALES_TEMPLATES } from '@crm/shared';
 
+test('conversation inserts reviewed details without sending placeholders', async ({ page }) => {
+  let fail = true;
+  await page.route('**/api/sales-templates**', (route) => fail
+    ? route.fulfill({ status: 503, json: { message: 'Details unavailable.' } })
+    : route.fulfill({ json: { templates: [], facts: { contact_name: 'Jane Example' }, recommended: [] } }));
+  await page.goto(`/leads?lead=${leadId}&tab=conversation`);
+  const drawer = page.getByRole('complementary', { name: 'Lead profile' });
+  const body = drawer.getByPlaceholder(/Email .*or type an instruction/);
+  await body.fill('Hello there');
+  await body.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(6, 11); });
+  await drawer.getByRole('button', { name: 'Insert a detail' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Insert a detail' });
+  await expect(dialog.getByRole('alert')).toContainText('Details unavailable');
+  await expect(dialog.getByRole('button', { name: 'Insert detail' })).toBeDisabled();
+  fail = false;
+  await dialog.getByRole('button', { name: 'Retry' }).click();
+  await expect(dialog.getByLabel('Value')).toHaveValue('Jane Example');
+  await dialog.getByRole('button', { name: 'Insert detail' }).click();
+  await expect(body).toHaveValue('Hello Jane Example');
+  await drawer.getByRole('button', { name: 'Insert a detail' }).click();
+  await dialog.getByRole('combobox').selectOption('business_name');
+  await expect(dialog.getByLabel('Value')).toHaveValue('');
+  await expect(dialog.getByRole('button', { name: 'Insert detail' })).toBeDisabled();
+  await dialog.getByLabel('Value').fill('{{business_name}}');
+  await expect(dialog.getByRole('button', { name: 'Insert detail' })).toBeDisabled();
+  await dialog.getByLabel('Value').fill('Example Plumbing');
+  await dialog.getByRole('button', { name: 'Insert detail' }).click();
+  await expect(body).toHaveValue('Hello Jane ExampleExample Plumbing');
+});
+
 test('conversation lets an owner design images and branding, save, then apply without sending', async ({ page }) => {
   const original = SALES_TEMPLATES.find((item) => item.id === 'introduction')!;
   let template = { ...original };

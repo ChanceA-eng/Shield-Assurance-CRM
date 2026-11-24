@@ -57,6 +57,12 @@ it('uses the saved personal signature when sending through personal Gmail', asyn
   const plain = /Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+)\r\n--/.exec(mime)?.[1];
   expect(Buffer.from(plain ?? '', 'base64').toString()).toContain('My updated signature');
 });
+it('blocks unresolved signature details before claiming or sending', async () => {
+  signature = 'Regards, {{agent_name}}';
+  await expect(sendAgentEmail(db, user, input, options)).rejects.toThrow('layout and signature');
+  expect(calls.some((call) => call.name === 'agent_email_attempts' && call.method === 'POST')).toBe(false);
+  expect(gmailRequest).not.toHaveBeenCalled();
+});
 it('includes rich body and personal signature styles in Gmail and its durable formatting snapshot', async () => {
   const bodyDocument = documentFromText(input.body);
   const signatureDocument = { type: 'doc' as const, content: [{ type: 'paragraph', content: [

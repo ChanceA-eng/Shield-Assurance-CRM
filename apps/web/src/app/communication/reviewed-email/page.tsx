@@ -73,7 +73,7 @@ export default function ReviewedEmailPage(): JSX.Element {
         {drafts.map((draft) => <article key={draft.contact.id}><Card><CardBody className="space-y-3">
           <h2 className="font-semibold">{draft.contact.full_name}</h2>
           <p className="break-all text-sm text-cui-muted">{draft.contact.email}</p>
-          <MessageComposer subject={draft.subject} body={draft.body} disabled={draft.busy || draft.queued}
+          <MessageComposer conversationKey={`lead:${draft.contact.id}`} subject={draft.subject} body={draft.body} disabled={draft.busy || draft.queued}
             subjectLabel={`Subject for ${draft.contact.full_name}`} bodyLabel={`Message for ${draft.contact.full_name}`}
             onSubjectChange={(subject) => update(draft.contact.id, { subject, reviewed: false })}
             onBodyChange={(body) => update(draft.contact.id, { body, reviewed: false })}

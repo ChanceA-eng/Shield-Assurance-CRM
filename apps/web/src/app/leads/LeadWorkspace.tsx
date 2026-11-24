@@ -1645,7 +1645,7 @@ export default function LeadWorkspace({ lead: initialLead, onClose, onChanged, o
 
         {tab === 'conversation' ? (
           <div className="shrink-0 border-t border-cui-border/60 p-3">
-            <MessageComposer subject={subjectDraft} body={bodyDraft} onSubjectChange={setSubjectDraft} onBodyChange={setBodyDraft}
+            <MessageComposer conversationKey={`lead:${lead.id}`} subject={subjectDraft} body={bodyDraft} onSubjectChange={setSubjectDraft} onBodyChange={setBodyDraft}
               bodyDocument={bodyDocument} onDocumentChange={setBodyDocument}
               emailDesign={salesTemplate?.email_design}
               disabled={scheduleBusy || isSending || isDrafting} sender={<AgentSenderBadge />}

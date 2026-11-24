@@ -1,14 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MutableRefObject } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { TextStyleKit } from '@tiptap/extension-text-style';
 import TextAlign from '@tiptap/extension-text-align';
 import { documentFromText, EMAIL_FONTS, emailLink, parseEmailDocument, type EmailDocument } from '@crm/shared';
 
-export default function EmailTextEditor({ value, onChange, disabled = false, label = 'Formatted text', compact = false }: {
+export default function EmailTextEditor({ value, onChange, disabled = false, label = 'Formatted text', compact = false, insertTextRef }: {
   value?: EmailDocument; onChange: (value: EmailDocument) => void; disabled?: boolean; label?: string; compact?: boolean;
+  insertTextRef?: MutableRefObject<((text: string) => void) | null>;
 }): JSX.Element {
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -32,6 +33,11 @@ export default function EmailTextEditor({ value, onChange, disabled = false, lab
     },
   });
   useEffect(() => { editor?.setEditable(!disabled, false); }, [editor, disabled]);
+  useEffect(() => {
+    if (!insertTextRef || !editor) return;
+    insertTextRef.current = (text) => { editor.chain().focus().insertContent({ type: 'text', text }).run(); };
+    return () => { insertTextRef.current = null; };
+  }, [editor, insertTextRef]);
   useEffect(() => {
     const doc = value ?? documentFromText('');
     if (editor && JSON.stringify(editor.getJSON()) !== JSON.stringify(doc)) editor.commands.setContent(doc, { emitUpdate: false });

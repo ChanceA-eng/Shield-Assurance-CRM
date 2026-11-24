@@ -6,7 +6,7 @@ import { WorkspaceError } from './record-scope';
 import { databaseError } from './workspace-api';
 import { isRecord, isUuid } from './workspace-validation';
 import type { OutboundEmail } from './email-adapter';
-import { ensureWebsiteLink, renderEmailHtml, emailPlainText, parseEmailDesign, type SalesTemplateSnapshot } from '@crm/shared';
+import { ensureWebsiteLink, renderEmailHtml, emailPlainText, parseEmailDesign, hasUnresolvedSalesFields, type SalesTemplateSnapshot } from '@crm/shared';
 
 function safeHeader(value: string): string {
   if (/[\r\n]/.test(value)) throw new WorkspaceError('Email headers cannot contain line breaks.', 400);
@@ -27,9 +27,14 @@ export function agentMime(input: OutboundEmail, from: string, name: string, mess
   if (reply) headers.push(`In-Reply-To: ${safeHeader(reply.messageId)}`, `References: ${safeHeader(`${reply.references} ${reply.messageId}`.trim())}`);
   const boundary = `crm_${createHash('sha256').update(messageId).digest('hex')}`;
   const alternative = `${boundary}_alternative`;
+  const text = emailPlainText(input.body, input.emailDesign, input);
+  const html = renderEmailHtml(input.body, input.emailDesign, input);
+  if ([input.subject, text, html].some(hasUnresolvedSalesFields)) {
+    throw new WorkspaceError('Complete the template details in the message, layout and signature before sending.', 400);
+  }
   const content = [
-    `--${alternative}`, 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', mimeBase64(Buffer.from(emailPlainText(input.body, input.emailDesign, input)).toString('base64')),
-    `--${alternative}`, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', mimeBase64(Buffer.from(renderEmailHtml(input.body, input.emailDesign, input)).toString('base64')),
+    `--${alternative}`, 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', mimeBase64(Buffer.from(text).toString('base64')),
+    `--${alternative}`, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', mimeBase64(Buffer.from(html).toString('base64')),
     `--${alternative}--`,
   ];
   if (!input.attachments?.length) return [...headers, `Content-Type: multipart/alternative; boundary="${alternative}"`, '', ...content].join('\r\n');

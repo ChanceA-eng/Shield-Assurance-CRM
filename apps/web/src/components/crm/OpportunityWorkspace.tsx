@@ -164,7 +164,7 @@ export default function OpportunityWorkspace({ target }: { target: RecordTarget 
           setDraft(null); setSubject(''); setBody(''); setReviewed(false); setSendAttempted(false);
           draftId.current = crypto.randomUUID(); setNotice('A separate follow-up draft is open. The previous email and evidence history are retained.');
         }}>Start a separate follow-up</button> : null}
-        <MessageComposer subject={subject} body={body} disabled={busy || dirty || locked}
+        <MessageComposer conversationKey={`${target.type}:${target.id}`} subject={subject} body={body} disabled={busy || dirty || locked}
           emailProvider={provider} onEmailProviderChange={setProvider} sender={<AgentSenderBadge />}
           onSubjectChange={(value) => { setSubject(value); setReviewed(false); }} onBodyChange={(value) => { setBody(value); setReviewed(false); }}
           draftAction={<div className="space-y-2"><button type="button" disabled={busy || dirty || locked || !data.profile.revision} className={composerDraftClass} onClick={() => void run(async () => {

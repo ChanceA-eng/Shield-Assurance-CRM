@@ -47,7 +47,8 @@ export default function PersonalSignature(): JSX.Element {
         .catch((failure: unknown) => setError(failure instanceof Error ? failure.message : 'Signature could not save.'))
         .finally(() => setBusy(false));
     }}>
-      <fieldset disabled={busy || !ready || uploading} className="space-y-3">
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+      <fieldset disabled={busy || !ready || uploading} className="min-w-0 space-y-3">
       <EmailTextEditor label="Signature" value={document} disabled={busy || !ready || uploading} onChange={(value) => {
         setDocument(value); setSignature(emailDocumentText(value)); setNotice('');
       }} />
@@ -56,9 +57,12 @@ export default function PersonalSignature(): JSX.Element {
       {rows ? <button type="button" className="crm-button" onClick={() => {
         if (window.confirm('Remove the signature layout, including its images and buttons? Save to keep the change.')) setRows(undefined);
       }}>Remove signature layout</button> : null}
-      {ready && signature ? <EmailDesignPreview body={`-- \n${signature}`}
-        formatting={{ signatureDocument: document, signatureRows: rows }} /> : null}
       </fieldset>
+      <div className="min-w-0 rounded border border-cui-border bg-cui-light p-3 lg:sticky lg:top-3">
+        {ready && signature ? <EmailDesignPreview body={`-- \n${signature}`}
+          formatting={{ signatureDocument: document, signatureRows: rows }} /> : <p className="text-sm text-cui-muted">Your signature preview will appear here.</p>}
+      </div>
+      </div>
       <p className="text-xs text-cui-muted">Used for your emails. Leave text blank to remove the custom signature and use the agency default.</p>
       <button disabled={busy || !ready || uploading} className="rounded bg-cui-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? 'Saving...' : 'Save my signature'}</button>
     </form>

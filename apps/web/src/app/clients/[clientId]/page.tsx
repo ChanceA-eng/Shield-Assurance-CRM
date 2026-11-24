@@ -1616,7 +1616,7 @@ export default function ClientWorkspacePage(): JSX.Element {
               </ConversationHistory>
                     <section aria-label="Message composer" className="shrink-0 border-t border-slate-200 bg-white p-3">
                       {error ? <p role="alert" className="mb-2 text-sm text-cui-danger">{error}</p> : null}
-                      <MessageComposer subject={composer.subject} body={composer.body} channel={composer.channel} expanded={conversationExpanded}
+                      <MessageComposer conversationKey={`client:${clientId}`} subject={composer.subject} body={composer.body} channel={composer.channel} expanded={conversationExpanded}
                         bodyDocument={bodyDocument} onDocumentChange={setBodyDocument}
                         emailDesign={salesTemplate?.email_design}
                         emailProvider={emailProvider} onEmailProviderChange={setEmailProvider}
