@@ -20,6 +20,7 @@ export default function SalesTemplateSettings(): JSX.Element {
   const [tagTarget, setTagTarget] = useState<TagTarget>('email_body');
   const fields = useRef<Partial<Record<TagTarget, HTMLInputElement | HTMLTextAreaElement | null>>>({});
   const selections = useRef<Partial<Record<TagTarget, { start: number; end: number }>>>({});
+  const focusFrame = useRef<number | null>(null);
   const dirty = Boolean(selected && JSON.stringify(selected) !== baseline);
   useUnsavedChanges(dirty);
   const load = useCallback(async () => {
@@ -33,6 +34,7 @@ export default function SalesTemplateSettings(): JSX.Element {
     setTagTarget('email_body'); selections.current = {};
   };
   const rememberSelection = (target: TagTarget, element: HTMLInputElement | HTMLTextAreaElement): void => {
+    if (focusFrame.current !== null) { cancelAnimationFrame(focusFrame.current); focusFrame.current = null; }
     setTagTarget(target);
     selections.current[target] = { start: element.selectionStart ?? element.value.length, end: element.selectionEnd ?? element.value.length };
   };
@@ -46,7 +48,9 @@ export default function SalesTemplateSettings(): JSX.Element {
     setSelected({ ...selected, [tagTarget]: next }); setError('');
     selections.current[tagTarget] = { start: position, end: position };
     const active = document.activeElement;
-    requestAnimationFrame(() => {
+    if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
+    focusFrame.current = requestAnimationFrame(() => {
+      focusFrame.current = null;
       if (document.activeElement !== active) return;
       fields.current[tagTarget]?.focus(); fields.current[tagTarget]?.setSelectionRange(position, position);
     });
