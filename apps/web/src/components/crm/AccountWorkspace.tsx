@@ -7,10 +7,11 @@ import AgentCommunicationSettings from './AgentCommunicationSettings';
 import PersonalGmailConnectionSettings from './PersonalGmailConnectionSettings';
 import PersonalSignature from './PersonalSignature';
 import GoogleCalendarSettings from './GoogleCalendarSettings';
+import PersonnelDocuments from './PersonnelDocuments';
 
-const accountTabs = [['profile', 'Profile'], ['security', 'Security'], ['signature', 'Signature / Mailbox']] as const;
+const accountTabs = [['profile', 'Profile'], ['security', 'Security'], ['signature', 'Signature / Mailbox'], ['documents', 'Documents']] as const;
 export type AccountTab = typeof accountTabs[number][0];
-export default function AccountWorkspace({ initialTab, mailboxMode, personalOnly = false }: { initialTab: AccountTab; mailboxMode: 'shared' | 'send_only' | 'disabled'; personalOnly?: boolean }): JSX.Element {
+export default function AccountWorkspace({ initialTab, initialDocumentMember, mailboxMode, personalOnly = false }: { initialTab: AccountTab; initialDocumentMember?: string; mailboxMode: 'shared' | 'send_only' | 'disabled'; personalOnly?: boolean }): JSX.Element {
   const tabs = accountTabs;
   const [active, setActive] = useState(initialTab);
   const [visited, setVisited] = useState<Set<AccountTab>>(new Set([initialTab]));
@@ -32,7 +33,7 @@ export default function AccountWorkspace({ initialTab, mailboxMode, personalOnly
         }} className="crm-tab">{personalOnly && tab === 'signature' ? 'Signature' : label}</button>)}
     </div>
     {tabs.map(([tab]) => <div key={tab} role="tabpanel" hidden={currentTab !== tab} id={`account-panel-${tab}`} aria-labelledby={`account-tab-${tab}`}>
-      {visited.has(tab) || currentTab === tab ? tab === 'profile' ? <MyAccountForm onSaved={() => router.refresh()} /> : tab === 'security' ? <AccountSecurity /> : personalOnly ? <PersonalSignature /> : mailboxMode === 'shared'
+      {visited.has(tab) || currentTab === tab ? tab === 'profile' ? <MyAccountForm onSaved={() => router.refresh()} /> : tab === 'security' ? <AccountSecurity /> : tab === 'documents' ? <PersonnelDocuments initialMember={initialDocumentMember} /> : personalOnly ? <PersonalSignature /> : mailboxMode === 'shared'
         ? <div className="space-y-5"><PersonalSignature /><AgentCommunicationSettings /><GoogleCalendarSettings /></div> : <div className="space-y-5"><PersonalSignature /><PersonalGmailConnectionSettings /><GoogleCalendarSettings /></div> : null}
     </div>)}
   </div>;

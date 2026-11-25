@@ -199,6 +199,11 @@ export async function resolveOutboundEmailRecipient(supabase: SupabaseClient, ta
 
   const ref = target.conversationKey ? parseConversationKey(target.conversationKey) : null;
   if (target.conversationKey && !ref) return { ok: false, status: 400, code: 'invalid_conversation', message: 'Unknown conversation.' };
+  if ((ref?.kind === 'client' && clientId && ref.id !== clientId)
+    || (ref?.kind === 'lead' && leadId && ref.id !== leadId)
+    || (ref?.kind === 'unmatched' && (leadId || clientId))) {
+    return { ok: false, status: 400, code: 'record_mismatch', message: 'The selected records do not match this conversation.' };
+  }
   if (ref?.kind === 'client') clientId = clientId ?? ref.id;
   if (ref?.kind === 'lead') leadId = leadId ?? ref.id;
   if (ref?.kind === 'unmatched') {
@@ -225,8 +230,8 @@ export async function resolveOutboundEmailRecipient(supabase: SupabaseClient, ta
       if (!decision.allowed) return blocked(decision);
       return { ok: true, recipient: { to: leadEmail, clientId: lead.account_id, leadId: lead.id } };
     }
-    if (lead.account_id && lead.account_id !== clientId) {
-      return { ok: false, status: 400, code: 'record_mismatch', message: 'This lead is linked to a different account.' };
+    if (lead.account_id !== clientId) {
+      return { ok: false, status: 400, code: 'record_mismatch', message: 'This lead is not linked to the selected account.' };
     }
     if (leadDeclinedContact(lead.form_payload)) {
       return blocked({ allowed: false, code: 'contact_declined', message: 'This lead declined to be contacted on their intake form.' });

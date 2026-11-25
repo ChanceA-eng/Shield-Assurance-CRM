@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { permitsTeamRequest, readTeamRequestAccess } from './team-request-access';
 import { canAccessTeamPage } from './team-page-access';
+import { activeNavigationHref, navigationCategories } from '../config/navigation';
 
 describe('restricted team request authorization', () => {
   it('admits delegated Team administrators only to the checked Team handler, not unrelated settings APIs', () => {
@@ -39,6 +40,72 @@ describe('restricted team request authorization', () => {
       ['/api/clients/example/files/example/download', 'GET'], ['/api/shell', 'GET'],
       ['/api/notifications', 'GET'], ['/api/metrics/home', 'GET'],
     ]) expect(permitsTeamRequest(reviewer, path, method)).toBe(false);
+  });
+
+  it('admits editors and approvers to the review handler, but not read-only users', () => {
+    for (const grants of [{ 'social.edit': 'agency' }, { 'social.approve': 'agency' }]) {
+      expect(permitsTeamRequest({ mode: 'restricted', grants }, '/api/social-marketing/reviews', 'POST')).toBe(true);
+    }
+    expect(permitsTeamRequest({ mode: 'restricted', grants: { 'social.view': 'agency' } }, '/api/social-marketing/reviews', 'POST')).toBe(false);
+  });
+
+  it('lets the Marketing starting grants use content and social drafts without customer or publishing access', () => {
+    const marketing = { mode: 'restricted' as const, grants: {
+      'dashboard.view': 'assigned', 'content.view': 'agency', 'content.edit': 'agency',
+      'social.view': 'agency', 'social.edit': 'agency',
+    } };
+    for (const [path, method] of [
+      ['/api/dashboard', 'GET'], ['/api/sales-templates', 'GET'], ['/api/sales-templates', 'PATCH'],
+      ['/api/social-marketing/drafts', 'GET'], ['/api/social-marketing/drafts', 'POST'],
+      ['/api/social-marketing/media', 'POST'], ['/api/social-marketing/reviews', 'POST'],
+    ]) expect(permitsTeamRequest(marketing, path, method), `${method} ${path}`).toBe(true);
+    for (const path of ['/api/clients/directory', '/api/communication/inbox', '/api/social-marketing/engine',
+      '/api/social-marketing/connections']) {
+      expect(permitsTeamRequest(marketing, path, path.includes('social-marketing') ? 'POST' : 'GET'), path).toBe(false);
+    }
+    expect(canAccessTeamPage(marketing, '/templates')).toBe(true);
+    expect(canAccessTeamPage(marketing, '/communication/social')).toBe(true);
+  });
+
+  it('only admits scoped conversation reads for assigned message access', () => {
+    const assigned = { mode: 'restricted' as const, grants: { 'messages.view': 'assigned' } };
+    expect(permitsTeamRequest(assigned, '/api/communication-log', 'GET')).toBe(true);
+    expect(permitsTeamRequest(assigned, `/api/leads/${memberId}/conversation`, 'GET')).toBe(true);
+    expect(permitsTeamRequest(assigned, '/api/communication/inbox', 'GET')).toBe(true);
+    expect(permitsTeamRequest(assigned, '/api/communication-log', 'PATCH')).toBe(true);
+    expect(canAccessTeamPage(assigned, '/communication')).toBe(true);
+    expect(canAccessTeamPage(assigned, '/communication/reviewed-email')).toBe(false);
+    expect(permitsTeamRequest(assigned, '/api/communication-log', 'POST')).toBe(false);
+  });
+
+  it('does not expose unscoped message helpers when customer record access is narrower', () => {
+    const mixed = { mode: 'restricted' as const, grants: { 'messages.view': 'agency', 'messages.send': 'agency', 'leads.view': 'assigned', 'accounts.view': 'assigned' } };
+    for (const [path, method] of [
+      ['/api/communication-log/delivery', 'GET'], ['/api/communication-log/unread', 'GET'],
+      ['/api/communication-log/mark-read', 'POST'], ['/api/communication/scheduled', 'GET'],
+      ['/api/scheduled-messages', 'POST'], ['/api/gmail/threads', 'GET'],
+    ]) expect(permitsTeamRequest(mixed, path, method)).toBe(false);
+    expect(permitsTeamRequest(mixed, '/api/communication-log', 'GET')).toBe(true);
+    expect(permitsTeamRequest(mixed, '/api/communication-log', 'POST')).toBe(false);
+  });
+
+  it('opens the template workspace only with reusable content access', () => {
+    expect(canAccessTeamPage({ mode: 'restricted', grants: { 'content.view': 'agency' } }, '/templates')).toBe(true);
+    expect(canAccessTeamPage({ mode: 'restricted', grants: { 'social.view': 'agency' } }, '/templates')).toBe(false);
+    expect(permitsTeamRequest({ mode: 'restricted', grants: { 'content.view': 'agency' } }, '/api/sales-templates', 'GET')).toBe(true);
+    expect(permitsTeamRequest({ mode: 'restricted', grants: { 'content.view': 'agency' } }, '/api/sales-templates', 'PATCH')).toBe(false);
+    expect(permitsTeamRequest({ mode: 'restricted', grants: { 'content.edit': 'agency' } }, '/api/sales-templates', 'PATCH')).toBe(true);
+    expect(navigationCategories.flatMap((category) => category.sections?.flatMap((section) => section.items) ?? [])
+      .filter((item) => item.href === '/templates')).toHaveLength(1);
+    expect(activeNavigationHref('/templates', '')).toBe('/templates');
+  });
+
+  it('lets active staff read the agency time zone without opening agency settings', () => {
+    const member = { mode: 'restricted' as const, grants: { 'tasks.view': 'self' } };
+    expect(permitsTeamRequest(member, '/api/agency/time-zone', 'GET')).toBe(true);
+    expect(permitsTeamRequest(member, '/api/agency/time-zone', 'POST')).toBe(false);
+    expect(permitsTeamRequest(member, '/api/agency/sender', 'GET')).toBe(false);
+    expect(permitsTeamRequest(member, '/api/agency/outreach', 'GET')).toBe(false);
   });
 
   it('does not silently allow unverified CRM routes based on broad or assigned grants', () => {
@@ -81,6 +148,30 @@ describe('restricted team request authorization', () => {
     expect(canAccessTeamPage(assigned, '/reports')).toBe(false);
     expect(permitsTeamRequest(assigned, '/api/leads', 'GET')).toBe(false);
     expect(permitsTeamRequest(assigned, '/api/leads/example', 'GET')).toBe(false);
+  });
+
+  it('opens only scoped event handlers to personal calendar permissions', () => {
+    const member = { mode: 'restricted' as const, grants: { 'calendar.view': 'self', 'calendar.edit': 'self' } };
+    expect(canAccessTeamPage(member, '/scheduler')).toBe(true);
+    expect(permitsTeamRequest(member, '/api/events', 'GET')).toBe(true);
+    expect(permitsTeamRequest(member, '/api/events', 'POST')).toBe(true);
+    expect(permitsTeamRequest(member, '/api/events/123/sync', 'POST')).toBe(true);
+    expect(permitsTeamRequest(member, '/api/events/123/confirmation', 'POST')).toBe(true);
+    expect(permitsTeamRequest(member, '/api/google-calendar/freebusy', 'GET')).toBe(false);
+    expect(permitsTeamRequest({ mode: 'restricted', grants: { 'calendar.view': 'self' } }, '/api/events', 'POST')).toBe(false);
+  });
+
+  it('opens the dashboard to all members without exposing legacy aggregate APIs', () => {
+    const marketing = { mode: 'restricted' as const, grants: { 'social.view': 'agency' } };
+    expect(canAccessTeamPage(marketing, '/')).toBe(true);
+    expect(permitsTeamRequest(marketing, '/api/dashboard', 'GET')).toBe(true);
+    const dashboardOnly = { mode: 'restricted' as const, grants: { 'dashboard.view': 'agency' } };
+    for (const path of ['/api/metrics/home', '/api/briefing', '/api/recent']) {
+      expect(permitsTeamRequest(dashboardOnly, path, 'GET')).toBe(false);
+    }
+    expect(permitsTeamRequest({ mode: 'restricted', grants: {
+      'dashboard.view': 'agency', 'leads.view': 'agency', 'accounts.view': 'agency', 'policies.view': 'agency',
+    } }, '/api/metrics/home', 'GET')).toBe(true);
   });
 
   it.each([{ code: '42501', status: 403 }, { code: 'PGRST202', status: 404 }])(

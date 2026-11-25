@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
 import { renderEmailHtml, emailPlainText } from './email-presentation.js';
+import { hasUnresolvedSalesFields } from './sales-templates.js';
 import { parseEmailDocument, parseEmailRows } from './email-document.js';
 import type { EmailFormatting } from './email-presentation.js';
 import { parseEmailDesign, type EmailDesign } from './email-design.js';
@@ -109,6 +110,10 @@ export async function sendResendEmail(message: ResendMessage, config: ResendConf
   const formatting = { bodyDocument: parseEmailDocument(message.bodyDocument), signatureDocument: parseEmailDocument(message.signatureDocument),
     signatureRows: parseEmailRows(message.signatureRows) };
   const html = renderEmailHtml(message.body, design, formatting);
+  const text = emailPlainText(message.body, design, formatting);
+  if ([message.subject, text, html].some(hasUnresolvedSalesFields)) {
+    throw new Error('Complete the template details in the message, layout and signature before sending.');
+  }
   if (!resendConfigured(config)) throw new Error('Resend is not ready. Complete and verify email setup in Settings before enabling sending.');
   for (const address of [message.to, config.from, config.replyTo]) {
     if (!address || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(address)) throw new Error('Enter a valid sender, recipient and reply-to email address.');
@@ -138,7 +143,7 @@ export async function sendResendEmail(message: ResendMessage, config: ResendConf
   // A durable claim precedes the provider call. Ambiguous attempts are never retried automatically.
   const { data, error } = await new Resend(config.apiKey).emails.send({
     from: `Shield Assurance <${config.from}>`, replyTo: config.replyTo, to: [message.to.toLowerCase()],
-    subject: message.subject, text: emailPlainText(message.body, design, formatting),
+    subject: message.subject, text,
     html,
     headers: message.headers,
     attachments: message.attachments?.map((file) => ({ filename: file.filename, content: file.content, contentType: file.type })),

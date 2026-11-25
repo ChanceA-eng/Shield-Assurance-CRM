@@ -1,4 +1,4 @@
-import { test, expect } from './workspace-fixtures';
+import { test, managerTest, expect } from './workspace-fixtures';
 
 test('initial lead load uses one shell request and one pipeline read without duplicate badge calls', async ({ page, data }) => {
   const startedAt = performance.now();
@@ -34,21 +34,20 @@ test('login never starts protected background polling', async ({ page, data }) =
   expect(data.requests.filter((item) => item === 'GET /api/leads/attention')).toHaveLength(0);
 });
 
-test('dashboard renders metrics while the renewals request is still pending', async ({ page }) => {
+managerTest('dashboard renders metrics while the renewals request is still pending', async ({ page }) => {
   const startedAt = performance.now();
   let releaseRenewals!: () => void;
   const renewalsPending = new Promise<void>((resolve) => { releaseRenewals = resolve; });
-  await page.route('**/api/metrics/home', (route) => route.fulfill({ json: {
-    total_written_premium: 125000,
-    written_premium_series: [{ month: 'Nov', premium: 125000 }],
-    active_leads: 9,
-    lead_conversion_rate: 0.25,
-    renewals_30_days: 2,
-    open_claims: 1,
-  } }));
-  await page.route('**/api/renewals**', async (route) => {
+  await page.route('**/api/dashboard**', async (route) => {
+    const section = new URL(route.request().url()).searchParams.get('section');
+    if (section === 'tasks') return route.fulfill({ json: { tasks: null } });
+    if (section !== 'renewals') return route.fulfill({ json: {
+      leads: { active: 9, conversion: 0.25, scope: 'agency' },
+      policies: { total_written_premium: 125000, written_premium_series: [{ month: 'Nov', premium: 125000 }],
+        renewals_30_days: 2, open_claims: 1 },
+    } });
     await renewalsPending;
-    await route.fulfill({ json: { items: [{
+    await route.fulfill({ json: { renewals: [{
       id: 'renewal-1',
       insured_name: 'Example insured',
       carrier: 'Example carrier',

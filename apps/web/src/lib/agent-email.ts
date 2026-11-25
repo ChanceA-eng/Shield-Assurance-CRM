@@ -6,7 +6,7 @@ import { WorkspaceError } from './record-scope';
 import { databaseError } from './workspace-api';
 import { isRecord, isUuid } from './workspace-validation';
 import type { OutboundEmail } from './email-adapter';
-import { ensureWebsiteLink, renderEmailHtml, emailPlainText, parseEmailDesign, type SalesTemplateSnapshot } from '@crm/shared';
+import { ensureWebsiteLink, renderEmailHtml, emailPlainText, parseEmailDesign, hasUnresolvedSalesFields, type SalesTemplateSnapshot } from '@crm/shared';
 
 function safeHeader(value: string): string {
   if (/[\r\n]/.test(value)) throw new WorkspaceError('Email headers cannot contain line breaks.', 400);
@@ -27,9 +27,14 @@ export function agentMime(input: OutboundEmail, from: string, name: string, mess
   if (reply) headers.push(`In-Reply-To: ${safeHeader(reply.messageId)}`, `References: ${safeHeader(`${reply.references} ${reply.messageId}`.trim())}`);
   const boundary = `crm_${createHash('sha256').update(messageId).digest('hex')}`;
   const alternative = `${boundary}_alternative`;
+  const text = emailPlainText(input.body, input.emailDesign, input);
+  const html = renderEmailHtml(input.body, input.emailDesign, input);
+  if ([input.subject, text, html].some(hasUnresolvedSalesFields)) {
+    throw new WorkspaceError('Complete the template details in the message, layout and signature before sending.', 400);
+  }
   const content = [
-    `--${alternative}`, 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', mimeBase64(Buffer.from(emailPlainText(input.body, input.emailDesign, input)).toString('base64')),
-    `--${alternative}`, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', mimeBase64(Buffer.from(renderEmailHtml(input.body, input.emailDesign, input)).toString('base64')),
+    `--${alternative}`, 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', mimeBase64(Buffer.from(text).toString('base64')),
+    `--${alternative}`, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', mimeBase64(Buffer.from(html).toString('base64')),
     `--${alternative}--`,
   ];
   if (!input.attachments?.length) return [...headers, `Content-Type: multipart/alternative; boundary="${alternative}"`, '', ...content].join('\r\n');
@@ -46,6 +51,7 @@ export function agentMime(input: OutboundEmail, from: string, name: string, mess
 export async function sendAgentEmail(
   db: SupabaseClient, userId: string, input: OutboundEmail,
   options: { attemptId: string; clientId: string | null; leadId: string | null; replyId?: string; salesTemplate?: SalesTemplateSnapshot },
+  beforeDispatch?: () => Promise<void>,
 ): Promise<{ id: string; provider: 'gmail'; status: string }> {
   if (!isUuid(options.attemptId)) throw new WorkspaceError('A stable send request ID is required. Refresh the composer before sending.', 400);
   const connection = await getOwnGmailConnection(db, userId);
@@ -114,6 +120,18 @@ export async function sendAgentEmail(
     }
     console.error('[gmail/send-claim]', claimed.error);
     throw new WorkspaceError(claimed.error.code === '23505' ? 'Another request claimed this send. Refresh before retrying.' : 'The send could not be claimed. No provider request was made.', 409);
+  }
+  if (beforeDispatch) {
+    try { await beforeDispatch(); }
+    catch (error) {
+      const released = await db.from('agent_email_attempts').delete().eq('id', options.attemptId)
+        .eq('user_id', userId).eq('status', 'sending').select('id').maybeSingle();
+      if (released.error || !released.data) {
+        console.error('[gmail/send-release]', released.error?.message ?? 'Claim was not released');
+        throw new WorkspaceError('No email was sent, but the send request could not be released. Contact your administrator before retrying.', 503);
+      }
+      throw error;
+    }
   }
   let accepted: unknown;
   try {

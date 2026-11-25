@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cleanExpiredPersonnelUploads } from '../../../../lib/personnel-upload-cleanup';
 import { getSupabaseServerClient } from '../../../../lib/supabase-server';
 import { getApiSession } from '../../../../lib/api-auth';
 import { requireTeamPermission } from '../../../../lib/team-request-access';
@@ -283,6 +284,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   };
   const runs: AutomationRun[] = [];
   try {
+    if (!job) runs.push(await trackedAutomation(supabase, 'personnel-upload-cleanup', async () => ({
+      status: 'succeeded', summary: await cleanExpiredPersonnelUploads(supabase),
+    })));
     if (!job || job === 'follow-up-routine') runs.push(await trackedAutomation(supabase, 'follow-up-routine', async () => {
       const result = await supabase.rpc('ensure_default_followups');
       if (result.error) throw new Error(result.error.message);

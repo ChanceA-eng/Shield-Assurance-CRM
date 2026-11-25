@@ -2,12 +2,19 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 import { WorkspaceError } from './record-scope';
 import { databaseError } from './workspace-api';
+import { isRecord } from './workspace-validation';
 
-export async function readPendingEmailChanges(db: SupabaseClient): Promise<EmailChange[]> {
-  const result = await db.from('account_email_changes').select('id,user_id,old_email,new_email,status,expires_at,created_at')
-    .eq('status', 'pending').gt('expires_at', new Date().toISOString()).order('created_at').limit(100).returns<EmailChange[]>();
+export async function readPendingEmailChanges(db: SupabaseClient, actor: string): Promise<EmailChange[]> {
+  const result = await db.rpc('team_pending_email_requests', { p_actor: actor });
   if (result.error) throw databaseError(result.error);
-  return result.data;
+  const rows: unknown = result.data;
+  if (!Array.isArray(rows) || !rows.every((row: unknown): row is EmailChange => isRecord(row)
+    && typeof row.id === 'string' && typeof row.user_id === 'string' && typeof row.old_email === 'string'
+    && typeof row.new_email === 'string' && row.status === 'pending'
+    && typeof row.expires_at === 'string' && typeof row.created_at === 'string')) {
+    throw new Error('Email change requests returned invalid data.');
+  }
+  return rows;
 }
 
 export interface EmailChange {

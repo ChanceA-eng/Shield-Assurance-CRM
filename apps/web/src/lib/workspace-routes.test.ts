@@ -6,7 +6,7 @@ import { getApiSession, requireApiSession } from './api-auth';
 import { endOfAgencyDay, startOfAgencyDay } from './agency-time';
 import { POST as addAsset, PATCH as changeAsset } from '../app/api/record-assets/route';
 import { POST as addNote, PATCH as changeNote } from '../app/api/interactions/route';
-import { GET as getTasks, PATCH as changeTask } from '../app/api/tasks/route';
+import { GET as getTasks, POST as addTask, PATCH as changeTask } from '../app/api/tasks/route';
 import { GET as getLead } from '../app/api/leads/[id]/route';
 import { POST as submitLead } from '../app/api/leads/route';
 import { GET as getBriefing } from '../app/api/briefing/route';
@@ -63,6 +63,67 @@ beforeEach(() => {
 
 describe('Workspace route contracts', () => {
   afterEach(() => vi.unstubAllEnvs());
+
+  it('limits personal task lists to the member’s unlinked tasks', async () => {
+    vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted', grants: { 'tasks.view': 'self' } } });
+    respond = () => json([], 200, 0);
+    const response = await getTasks(request('/api/tasks'));
+    expect(response.status).toBe(200);
+    expect(calls[0].url.searchParams.get('created_by_user_id')).toBe(`eq.${user.id}`);
+    expect(calls[0].url.searchParams.get('related_id')).toBe('is.null');
+    expect(calls[0].url.searchParams.get('account_id')).toBe('is.null');
+  });
+
+  it('allows an unassigned personal task without task-assignment permission', async () => {
+    vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted', grants: { 'tasks.edit': 'self' } } });
+    respond = (_url, _method, body) => json({ ...body }, 201);
+    const response = await addTask(request('/api/tasks', 'POST', { subject: 'Follow up', assignee: null }));
+    expect(response.status).toBe(201);
+    expect(calls[0].body).toMatchObject({ assignee: null, created_by_user_id: user.id });
+  });
+
+  it.each(['self', 'agency'])('requires assignment permission for a named assignee at %s task scope', async (scope) => {
+    vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted', grants: { 'tasks.edit': scope } } });
+    const response = await addTask(request('/api/tasks', 'POST', { subject: 'Follow up', assignee: 'Another member' }));
+    expect(response.status).toBe(403);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('allows a named assignee with explicit task-assignment permission', async () => {
+    vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted', grants: {
+      'tasks.edit': 'agency', 'tasks.assign': 'agency',
+    } } });
+    respond = (_url, _method, body) => json({ ...body }, 201);
+    const response = await addTask(request('/api/tasks', 'POST', { subject: 'Follow up', assignee: 'Another member' }));
+    expect(response.status).toBe(201);
+    expect(calls[0].body).toMatchObject({ assignee: 'Another member' });
+  });
+
+  it('uses the database-assigned task scope instead of collecting record IDs', async () => {
+    vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted', grants: { 'tasks.view': 'assigned' } } });
+    respond = () => json([], 200, 0);
+    const response = await getTasks(request('/api/tasks?status=open'));
+    expect(response.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url.pathname).toBe('/rest/v1/rpc/team_assigned_workspace_tasks');
+    expect(calls[0].body).toEqual({ p_actor: user.id, p_include_archived: false });
+    expect(calls[0].url.searchParams.get('status')).toBe('eq.open');
+    calls.length = 0;
+    expect((await getTasks(request('/api/tasks?count=true'))).status).toBe(200);
+    expect(calls[0].method).toBe('HEAD');
+    expect(calls[0].url.searchParams.get('p_actor')).toBe(user.id);
+  });
+
+  it('requires calendar access before changing an appointment-linked task status', async () => {
+    respond = (url) => url.pathname.endsWith('/tasks')
+      ? json({ id: itemId, event_id: leadId, related_type: 'event', related_id: leadId })
+      : json({ code: '42501', message: 'Calendar access required' }, 403);
+    const response = await changeTask(request('/api/tasks', 'PATCH', { id: itemId, status: 'completed' }));
+    expect(response.status).toBe(403);
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      '/rest/v1/tasks', '/rest/v1/rpc/assert_team_calendar_access',
+    ]);
+  });
 
   it('lets authorized website pushes fill receipt-linked leads without replacing producer edits', async () => {
     vi.stubEnv('WEBSITE_SYNC_TOKEN', 'website-test-token');

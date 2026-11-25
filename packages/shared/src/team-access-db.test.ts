@@ -91,6 +91,7 @@ beforeEach(async () => {
     $$;
   `);
   await db.exec(await readFile(new URL('../../../supabase/migrations/20261120030000_apply_custom_team_permissions.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../../supabase/migrations/20261120046000_personnel_permission.sql', import.meta.url), 'utf8'));
 }, 30000);
 afterEach(async () => { await db.close(); });
 
@@ -106,6 +107,250 @@ const delivery = (version: number, user: string | null, error: string | null = n
 const accept = () => db.query('select public.accept_team_invitation($1,$2) as saved', [invitee, invitation]);
 
 describe('Team access migration in isolated PostgreSQL', () => {
+  it('rechecks current document grants and account assignment before attaching a file', async () => {
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120055000_conversation_document_permissions.sql', import.meta.url), 'utf8'));
+    await activate();
+    await db.query('insert into clients(id,agent_user_id) values($1,$2),($3,$4)', [invitee, producer, invitation, admin]);
+    const check = async (account: string): Promise<boolean> => {
+      const result = await db.query<{ allowed: boolean }>('select public.team_account_document_allowed($1,$2) as allowed', [producer, account]);
+      return result.rows[0]!.allowed;
+    };
+    const grants = async (documents: string | null, accounts = 'agency'): Promise<void> => {
+      await db.query("update agency_members set direct_grants=$1,setup_state='accepted' where user_id=$2",
+        [{ 'accounts.view': accounts, ...(documents ? { 'documents.view': documents } : {}) }, producer]);
+    };
+    await grants('assigned');
+    expect(await check(invitee)).toBe(true);
+    expect(await check(invitation)).toBe(false);
+    await grants('agency');
+    expect(await check(invitation)).toBe(true);
+    await grants(null);
+    expect(await check(invitee)).toBe(false);
+    await grants('agency', 'assigned');
+    expect(await check(invitee)).toBe(true);
+    expect(await check(invitation)).toBe(false);
+    await db.query('update auth.users set banned_until=now()+interval \'1 day\' where id=$1', [producer]);
+    expect(await check(invitee)).toBe(false);
+  });
+
+  it('requires content deletion access before archiving a reusable template', async () => {
+    await db.exec(`
+      create table public.sales_templates(id text primary key,name text,category text,subject text,email_body text,
+        sms_body text,email_design jsonb,archived boolean,revision integer,updated_by uuid,updated_at timestamptz);
+      create table public.sales_template_revisions(template_id text,revision integer,snapshot jsonb,actor_id uuid);
+    `);
+    const source = (await readFile(new URL('../../../supabase/migrations/20261112010000_branded_email_templates.sql', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+    const start = source.indexOf('create or replace function public.save_sales_template(');
+    const end = source.indexOf('$$;', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const original = source.slice(start, end + 3);
+    const legacyGuard = "not exists(select 1 from agency_members where user_id=p_actor and active and role in ('owner','admin'))";
+    expect(original).toContain(legacyGuard);
+    await db.exec(original.replace(legacyGuard, "not public.team_has_permission(p_actor,'content.edit','agency')"));
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120052000_template_archive_permission.sql', import.meta.url), 'utf8'));
+    await activate();
+    await db.query(`update agency_members set direct_grants='{"content.view":"agency","content.edit":"agency"}',
+      setup_state='accepted' where user_id=$1`, [producer]);
+    const values = { name: 'Test', category: 'First contact', subject: 'Subject', email_body: 'Email', sms_body: 'SMS', archived: false };
+    const save = (actor: string, revision: number, archived: boolean) =>
+      db.query('select save_sales_template($1,$2,$3,$4)', [actor, 'test', revision, { ...values, archived }]);
+    await save(producer, 0, false);
+    await expect(save(producer, 1, true)).rejects.toMatchObject({ code: '42501' });
+    expect((await db.query('select archived,revision from sales_templates where id=$1', ['test'])).rows)
+      .toEqual([{ archived: false, revision: 1 }]);
+    await save(owner, 1, true);
+    await save(producer, 2, true);
+    await save(producer, 3, false);
+    await db.query(`update agency_members set direct_grants='{"content.view":"agency","content.edit":"agency","content.delete":"agency"}' where user_id=$1`, [producer]);
+    await save(producer, 4, true);
+    await db.query(`update agency_members set direct_grants='{"content.view":"agency","content.edit":"agency"}' where user_id=$1`, [producer]);
+    await save(producer, 5, false);
+    await expect(save(producer, 6, true)).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update auth.users set banned_until=now()+interval '1 day' where id=$1`, [producer]);
+    await expect(save(producer, 6, false)).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update auth.users set banned_until=now()+interval '1 day' where id=$1`, [owner]);
+    await expect(save(owner, 6, true)).rejects.toMatchObject({ code: '42501' });
+  });
+  it('rechecks social content permissions in the real draft and media functions', async () => {
+    await db.exec(`
+      create table public.social_posts(id uuid primary key,workspace_id uuid,title text,caption text,link_url text,
+        media_ids uuid[] default '{}',created_by uuid,updated_by uuid,revision integer default 1,
+        status text default 'draft',review_state text default 'not_submitted',updated_at timestamptz default now());
+      create table public.social_post_revisions(workspace_id uuid,post_id uuid,revision integer,title text,caption text,
+        link_url text,media_ids uuid[],action text,actor_id uuid,recorded_at timestamptz default now());
+      create table public.social_review_events(workspace_id uuid,post_id uuid,revision integer,review_version integer,
+        action text,actor_id uuid,reason text,recorded_at timestamptz);
+      create table public.social_revision_media(workspace_id uuid,post_id uuid,revision integer,media_id uuid);
+      create table public.social_media_assets(id uuid primary key default gen_random_uuid(),workspace_id uuid,
+        file_name text,alt_text text,rights_reference text,created_by uuid,status text default 'processing',
+        width integer,height integer,byte_size integer,error_message text,created_at timestamptz default now(),
+        expires_at timestamptz default now()+interval '5 minutes');
+      alter table storage.objects add column name text;
+      create function public.social_marketing_workspace_for(p_actor uuid) returns uuid language plpgsql as $$
+      begin
+        perform 1 from public.agency_members where user_id=p_actor and active for share;
+        if not found then raise exception 'Active agency membership is required' using errcode='42501'; end if;
+        return 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid;
+      end;
+      $$;
+    `);
+    for (const [file, names] of [
+      ['20261109190000_social_marketing_publish_links.sql', ['list_social_drafts', 'save_social_draft']],
+      ['20261105140000_social_marketing_media.sql', ['list_social_media', 'reserve_social_media', 'complete_social_media']],
+    ] as const) {
+      const source = (await readFile(new URL(`../../../supabase/migrations/${file}`, import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+      for (const name of names) {
+        const start = source.search(new RegExp(`create (?:or replace )?function public\\.${name}\\(`));
+        const end = source.indexOf('$$;', start);
+        expect(start).toBeGreaterThanOrEqual(0);
+        expect(end).toBeGreaterThan(start);
+        await db.exec(source.slice(start, end + 3));
+      }
+    }
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120051000_social_content_permissions.sql', import.meta.url), 'utf8'));
+    await activate();
+    await db.query(`update agency_members set direct_grants='{"social.view":"agency","social.edit":"agency"}',
+      setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query(`update agency_members set role='agent',direct_grants='{"social.view":"agency"}',
+      setup_state='accepted' where user_id=$1`, [admin]);
+    const save = (actor: string, action: string, revision: number | null) => db.query(
+      'select save_social_draft($1,$2,$3,$4,$5,$6,null,null)',
+      [actor, invitation, action, action === 'archive' ? null : 'Draft', action === 'archive' ? null : 'Caption', revision]);
+    await save(producer, 'create', null);
+    await expect(save(admin, 'create', null)).rejects.toMatchObject({ code: '42501' });
+    await expect(save(producer, 'archive', 1)).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select list_social_drafts($1,$2,0,null)', [admin, 'draft'])).resolves.toBeDefined();
+    const reservation = await db.query<{ result: { id: string } }>(
+      'select reserve_social_media($1,$2,$3,$4) as result', [producer, 'image.jpg', 'Alt', 'Owned']);
+    const mediaId = reservation.rows[0].result.id;
+    const prefix = `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/${mediaId}`;
+    await db.query(`insert into storage.objects(id,bucket_id,name) values
+      (gen_random_uuid(),'social-marketing-media',$1),(gen_random_uuid(),'social-marketing-media',$2)`,
+    [`${prefix}/image.jpg`, `${prefix}/thumbnail.jpg`]);
+    await db.query(`update agency_members set direct_grants='{"social.view":"agency"}' where user_id=$1`, [producer]);
+    await expect(db.query('select complete_social_media($1,$2,1,1,1)', [producer, mediaId])).rejects.toMatchObject({ code: '42501' });
+    await expect(save(producer, 'update', 1)).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select reserve_social_media($1,$2,$3,$4)', [admin, 'image.jpg', 'Alt', 'Owned']))
+      .rejects.toMatchObject({ code: '42501' });
+    await db.query(`update agency_members set direct_grants='{"social.view":"agency","social.edit":"agency","social.delete":"agency"}' where user_id=$1`, [producer]);
+    await db.query('select complete_social_media($1,$2,1,1,1)', [producer, mediaId]);
+    await save(producer, 'archive', 1);
+    await db.query(`update agency_members set direct_grants='{}' where user_id=$1`, [admin]);
+    await expect(db.query('select list_social_media($1,0,null)', [admin])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select list_social_drafts($1,$2,0,null)', [admin, 'draft'])).rejects.toMatchObject({ code: '42501' });
+  });
+  it('enforces action-specific social review permissions at the database', async () => {
+    await db.exec(`
+      create table public.social_posts(id uuid primary key,workspace_id uuid,revision integer,review_version integer,
+        status text,review_state text,caption text,updated_by uuid,updated_at timestamptz);
+      create table public.social_review_events(workspace_id uuid,post_id uuid,revision integer,review_version integer,
+        action text,actor_id uuid,reason text);
+      create function public.social_marketing_workspace_for(p_actor uuid) returns uuid language plpgsql as $$
+      begin
+        perform 1 from public.agency_members where user_id=p_actor and active for share;
+        if not found then raise exception 'Active agency membership is required' using errcode='42501'; end if;
+        return 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid;
+      end;
+      $$;
+    `);
+    const source = (await readFile(new URL('../../../supabase/migrations/20261105170000_social_marketing_reviews.sql', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+    const start = source.indexOf('create function public.review_social_draft(');
+    const end = source.indexOf('$$;', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const original = source.slice(start, end + 3);
+    const legacyGuard = "perform 1 from agency_members where user_id=p_actor and active and role in ('owner','admin') for share;\n    if not found then raise exception 'Only active owners and administrators can review social posts.' using errcode='42501'; end if;";
+    expect(original).toContain(legacyGuard);
+    await db.exec(original.replace(legacyGuard, "if not public.team_has_permission(p_actor,'social.approve','agency') then raise exception 'Social review permission is required' using errcode='42501'; end if;"));
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120049000_social_review_permissions.sql', import.meta.url), 'utf8'));
+    await activate();
+    await db.query(`update agency_members set direct_grants='{"social.view":"agency","social.edit":"agency"}',setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query(`update agency_members set role='agent',direct_grants='{"social.view":"agency","social.approve":"agency"}',setup_state='accepted' where user_id=$1`, [admin]);
+    await db.query(`insert into social_posts values($1,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',1,0,'draft','not_submitted','Caption',null,null)`, [invitation]);
+    const review = (actor: string, action: string, version: number) =>
+      db.query('select public.review_social_draft($1,$2,$3,1,$4,$5)', [actor, invitation, action, version, action === 'request_changes' ? 'Fix caption' : '']);
+    await review(producer, 'submit', 0);
+    await expect(review(producer, 'approve', 1)).rejects.toMatchObject({ code: '42501' });
+    await expect(review(admin, 'withdraw', 1)).rejects.toMatchObject({ code: '42501' });
+    await review(admin, 'request_changes', 1);
+    await review(producer, 'submit', 2);
+    await review(producer, 'withdraw', 3);
+    await review(producer, 'submit', 4);
+    await review(admin, 'approve', 5);
+    await db.query(`update agency_members set direct_grants='{"social.view":"agency"}' where user_id=$1`, [producer]);
+    await expect(review(producer, 'withdraw', 6)).rejects.toMatchObject({ code: '42501' });
+    const invalid = await db.query('select public.team_can_review_social($1,$2) as allowed', [owner, 'invalid']);
+    expect(invalid.rows).toEqual([{ allowed: false }]);
+  });
+  it('limits conversation histories to currently assigned records and linked accounts', async () => {
+    await db.exec(`alter table leads add column account_id uuid;
+      create table public.communication_log(id uuid primary key,direction text,read_at timestamptz);
+      create table public.canonical_communications(id uuid primary key,conversation_key text,sent_at timestamptz,body text,
+        canonical_account_id uuid,canonical_lead_id uuid);
+      create table public.conversation_inbox(key text,kind text,client_id uuid,lead_id uuid,name text,email text,phone text,last_subject text,last_at timestamptz);`);
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120050000_assigned_conversation_reads.sql', import.meta.url), 'utf8'));
+    await activate();
+    await db.query(`update agency_members set direct_grants='{"messages.view":"assigned","leads.view":"assigned","accounts.view":"assigned"}',
+      setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query(`insert into clients(id,agent_user_id) values($1,$2),($3,$4)`, [invitee, producer, invitation, admin]);
+    await db.query(`insert into leads(id,agent_user_id,account_id) values($1,$2,$3),($4,$2,$5),($6,$2,null)`,
+      [owner, producer, invitee, admin, invitation, producer]);
+    await db.query(`insert into canonical_communications values
+      ($1,'client:'||$2::uuid::text,now(),'assigned',$2,$1),($3,'client:'||$4::uuid::text,now(),'other',$4,$3),
+      ($5,'lead:'||$6::uuid::text,now(),'lead',null,$6)`, [owner, invitee, admin, invitation, invitee, producer]);
+    await db.query(`insert into communication_log values($1,'inbound',null),($2,'inbound',null),($3,'inbound',null)`, [owner, admin, invitee]);
+    await db.query(`insert into conversation_inbox values
+      ('client:'||$1::uuid::text,'client',$1,$2,'Assigned',null,null,'First',now()),
+      ('client:'||$3::uuid::text,'client',$3,$4,'Other',null,null,'Second',now()),
+      ('lead:'||$5::uuid::text,'lead',null,$5,'Lead',null,null,'Third',now()),
+      ('unmatched:unknown','unmatched',null,null,'Unknown',null,null,'Unmatched',now())`,
+      [invitee, owner, invitation, admin, producer]);
+    const read = (type: string, id: string, actor = producer) => db.query<{ result: { items: Array<{ body: string }>; total: number } }>(
+      'select team_conversation_thread($1,$2,$3,0,100) as result', [actor, type, id]);
+    expect((await read('lead', owner)).rows[0].result).toMatchObject({ clientId: invitee, total: 1, items: [{ body: 'assigned' }] });
+    expect((await read('lead', producer)).rows[0].result).toMatchObject({ clientId: null, total: 1, items: [{ body: 'lead' }] });
+    const inbox = await db.query<{ result: { total: number; conversations: Array<{ name: string }> } }>(
+      'select team_conversation_inbox($1,$2,0) as result', [producer, '']);
+    expect(inbox.rows[0].result.total).toBe(2);
+    expect(inbox.rows[0].result.conversations.map((item) => item.name).sort()).toEqual(['Assigned', 'Lead']);
+    await expect(db.query('select team_mark_conversation_read($1,$2::uuid[])', [producer, [owner, admin]])).rejects.toMatchObject({ code: '42501' });
+    expect((await db.query('select read_at from communication_log where id=$1', [owner])).rows[0]).toEqual({ read_at: null });
+    expect((await db.query('select team_mark_conversation_read($1,$2::uuid[]) as result', [producer, [owner]])).rows[0])
+      .toEqual({ result: { updated: 1, ids: [owner] } });
+    await expect(read('lead', admin)).rejects.toMatchObject({ code: '42501' });
+    await expect(read('client', invitation)).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update agency_members set direct_grants='{"messages.view":"agency","leads.view":"assigned","accounts.view":"assigned"}' where user_id=$1`, [producer]);
+    await expect(read('client', invitation)).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update clients set agent_user_id=$1 where id=$2`, [admin, invitee]);
+    await expect(read('lead', owner)).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update auth.users set banned_until=now()+interval '1 day' where id=$1`, [producer]);
+    await expect(read('lead', producer)).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update auth.users set banned_until=null where id=$1`, [producer]);
+    await db.query(`update agency_members set active=false where user_id=$1`, [producer]);
+    await expect(read('lead', producer)).rejects.toMatchObject({ code: '42501' });
+  });
+  it('rechecks the linked account and rejects inconsistent record pairs before dispatch', async () => {
+    await db.exec('alter table leads add column account_id uuid');
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120054000_dispatch_record_links.sql', import.meta.url), 'utf8'));
+    await activate();
+    await db.query(`update agency_members set direct_grants='{"messages.view":"assigned","messages.send":"assigned",
+      "leads.view":"assigned","accounts.view":"assigned"}',setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query('insert into clients(id,agent_user_id) values($1,$2),($3,$4)', [invitee, producer, invitation, admin]);
+    await db.query('insert into leads(id,agent_user_id,account_id) values($1,$2,$3),($4,$2,null)',
+      [owner, producer, invitee, producer]);
+    const allowed = async (lead: string | null, client: string | null, actor = producer) =>
+      (await db.query<{ allowed: boolean }>('select team_record_dispatch_allowed($1,$2,$3) as allowed', [actor, lead, client])).rows[0].allowed;
+    expect(await allowed(owner, null)).toBe(true);
+    expect(await allowed(owner, invitee)).toBe(true);
+    expect(await allowed(owner, invitation)).toBe(false);
+    expect(await allowed(producer, invitee)).toBe(false);
+    expect(await allowed(admin, null, owner)).toBe(false);
+    await db.query('update clients set agent_user_id=$1 where id=$2', [admin, invitee]);
+    expect(await allowed(owner, null)).toBe(false);
+    expect(await allowed(owner, invitee)).toBe(false);
+    expect(await allowed(owner, invitee, owner)).toBe(true);
+  });
   it('enforces custom grants and record scopes in the SQL permission helper', async () => {
     await db.query(`update agency_members set direct_grants='{"automation.manage":"agency","leads.view":"assigned"}'::jsonb,
       setup_state='accepted' where user_id=$1`, [producer]);
@@ -187,6 +432,336 @@ describe('Team access migration in isolated PostgreSQL', () => {
     await expect(save(admin, invitee, { 'leads.view': 'agency' }, 4, true)).rejects.toMatchObject({ code: 'PT409' });
     await save(admin, invitee, {}, 5);
     expect((await db.query('select agency_session_allowed() as allowed')).rows).toEqual([{ allowed: false }]);
+  });
+  it('enforces expiry, replacement, verified recipient and single-use completion for Team setup', async () => {
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120040000_team_setup_challenges.sql', import.meta.url), 'utf8'));
+    await db.query(`insert into auth.users(id,email) values($1,'pending@example.test')`, [invitee]);
+    await db.query(`select save_team_profile($1,$2,'pending@example.test','Pending Member','Producer','{"leads.view":"assigned"}',false,null)`, [owner, invitee]);
+    const first = 'a'.repeat(64), second = 'b'.repeat(64);
+    await db.query('select begin_team_setup($1,$2,$3)', [owner, invitee, first]);
+    await expect(db.query('select claim_team_setup($1,$2)', [invitee, first])).rejects.toMatchObject({ code: '42501' });
+    await db.query('select finish_team_setup($1,$2,$3,true)', [owner, invitee, first]);
+    expect((await db.query('select claim_team_setup($1,$2) as email', [invitee, first])).rows).toEqual([{ email: 'pending@example.test' }]);
+    await expect(db.query('select claim_team_setup($1,$2)', [invitee, 'c'.repeat(64)])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select verify_team_setup($1,$2)', [invitee, first])).rejects.toMatchObject({ code: '42501' });
+    await db.query('update auth.users set email_confirmed_at=now() where id=$1', [invitee]);
+    await db.query('select verify_team_setup($1,$2)', [invitee, first]);
+    await db.query('select begin_team_setup($1,$2,$3)', [owner, invitee, second]);
+    await expect(db.query('select claim_team_setup($1,$2)', [invitee, first])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select verify_team_setup($1,$2)', [invitee, first])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select finish_team_setup($1,$2,$3,true)', [owner, invitee, first])).rejects.toMatchObject({ code: 'PT409' });
+    await expect(db.query('select verify_team_setup($1,$2)', [invitee, second])).rejects.toMatchObject({ code: '42501' });
+    await db.query('select finish_team_setup($1,$2,$3,true)', [owner, invitee, second]);
+    await db.query(`update team_setup_challenges set expires_at=now()+interval '22 hours' where user_id=$1`, [invitee]);
+    expect((await db.query('select claim_team_setup($1,$2) as email', [invitee, second])).rows).toEqual([{ email: 'pending@example.test' }]);
+    await db.query(`update team_setup_challenges set expires_at=now()-interval '1 second' where user_id=$1`, [invitee]);
+    await expect(db.query('select claim_team_setup($1,$2)', [invitee, second])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select complete_team_setup($1,$2,$3,$4)', [invitee, second, '520-555-0101', null])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select claim_team_setup($1,$2)', [invitee, second])).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update team_setup_challenges set expires_at=now()+interval '1 hour' where user_id=$1`, [invitee]);
+    await expect(db.query('select complete_team_setup($1,$2,$3,$4)', [invitee, second, '', null])).rejects.toMatchObject({ code: '22023' });
+    await db.query('select complete_team_setup($1,$2,$3,$4)', [invitee, second, '520-555-0101', 'Example address']);
+    expect((await db.query('select active,setup_state,contact_phone,mailing_address from agency_members where user_id=$1', [invitee])).rows)
+      .toEqual([{ active: true, setup_state: 'accepted', contact_phone: '520-555-0101', mailing_address: 'Example address' }]);
+    await expect(db.query('select complete_team_setup($1,$2,$3,$4)', [invitee, second, '520-555-0101', null])).rejects.toMatchObject({ code: '42501' });
+    expect((await db.query(`select has_function_privilege('service_role','public.accept_team_profile(uuid)','execute') as allowed`)).rows)
+      .toEqual([{ allowed: false }]);
+  });
+  it('rejects empty custom grants for pending invitations at the database boundary', async () => {
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120040000_team_setup_challenges.sql', import.meta.url), 'utf8'));
+    await db.query(`insert into auth.users(id,email) values($1,'pending@example.test')`, [invitee]);
+    await expect(db.query(`select save_team_profile($1,$2,'pending@example.test','Pending','Other','{}',false,null)`,
+      [owner, invitee])).rejects.toMatchObject({ code: '22023' });
+    expect((await db.query('select user_id from agency_members where user_id=$1', [invitee])).rows).toEqual([]);
+  });
+  it('limits contact edits and password resets to authorized managers and current memberships', async () => {
+    for (const migration of ['20261120040000_team_setup_challenges.sql', '20261120041000_team_member_profile.sql']) {
+      await db.exec(await readFile(new URL(`../../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
+    }
+    await db.query(`select save_team_profile($1,$2,null,null,'Manager','{"team.manage":"agency","leads.view":"assigned"}',true,1)`, [owner, producer]);
+    await db.query(`insert into auth.users(id,email,email_confirmed_at) values($1,'target@example.test',now())`, [invitee]);
+    await db.query(`insert into agency_members(user_id,email,role,active,team_name,role_title,direct_grants,setup_state)
+      values($1,'target@example.test','agent',true,'Target','Producer','{"leads.view":"assigned"}','accepted')`, [invitee]);
+    await db.query(`select save_team_contact($1,$2,1,'New Name','555-0101','Example address')`, [producer, invitee]);
+    expect((await db.query(`select team_name,contact_phone,mailing_address,access_version from agency_members where user_id=$1`, [invitee])).rows)
+      .toEqual([{ team_name: 'New Name', contact_phone: '555-0101', mailing_address: 'Example address', access_version: 2 }]);
+    expect((await db.query(`select read_team_contact($1,$2) as profile`, [producer, invitee])).rows)
+      .toEqual([{ profile: { name: 'New Name', phone: '555-0101', address: 'Example address', version: 2 } }]);
+    await expect(db.query(`select read_team_contact($1,$2)`, [invitee, producer])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query(`select read_team_contact($1,$2)`, [producer, owner])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query(`select save_team_contact($1,$2,1,'Stale','','')`, [producer, invitee])).rejects.toMatchObject({ code: 'PT409' });
+    await expect(db.query(`select save_team_contact($1,$2,1,'Owner','','')`, [producer, owner])).rejects.toMatchObject({ code: '42501' });
+    expect((await db.query('select authorize_team_reset($1,$2) as email', [producer, invitee])).rows)
+      .toEqual([{ email: 'target@example.test' }]);
+    await db.query('select record_team_reset($1,$2,true)', [producer, invitee]);
+    await db.query(`update agency_members set direct_grants='{"leads.view":"agency"}' where user_id=$1`, [invitee]);
+    await expect(db.query('select read_team_contact($1,$2)', [producer, invitee])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select authorize_team_reset($1,$2)', [producer, invitee])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select record_team_reset($1,$2,true)', [producer, invitee])).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update agency_members set active=false where user_id=$1`, [invitee]);
+    await expect(db.query('select authorize_team_reset($1,$2)', [owner, invitee])).rejects.toMatchObject({ code: '42501' });
+  });
+  it('lets an authorized new inviter replace a link after the original inviter loses authority', async () => {
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120040000_team_setup_challenges.sql', import.meta.url), 'utf8'));
+    await db.query(`select save_team_profile($1,$2,null,null,'Manager','{"team.manage":"agency","leads.view":"assigned"}',true,1)`, [owner, producer]);
+    await db.query(`insert into auth.users(id,email) values($1,'pending@example.test')`, [invitee]);
+    await db.query(`select save_team_profile($1,$2,'pending@example.test','Pending','Producer','{"leads.view":"assigned"}',false,null)`, [producer, invitee]);
+    const first = 'a'.repeat(64), second = 'b'.repeat(64);
+    await db.query('select begin_team_setup($1,$2,$3)', [producer, invitee, first]);
+    await db.query('select finish_team_setup($1,$2,$3,true)', [producer, invitee, first]);
+    await db.query(`update agency_members set active=false where user_id=$1`, [producer]);
+    await expect(db.query('select claim_team_setup($1,$2)', [invitee, first])).rejects.toMatchObject({ code: '42501' });
+    await db.query('select begin_team_setup($1,$2,$3)', [owner, invitee, second]);
+    await db.query('select finish_team_setup($1,$2,$3,true)', [owner, invitee, second]);
+    expect((await db.query('select claim_team_setup($1,$2) as email', [invitee, second])).rows).toEqual([{ email: 'pending@example.test' }]);
+  });
+  it('scopes assigned task reads in PostgreSQL without truncating large assignments', async () => {
+    await db.exec('alter table public.tasks add column account_id uuid');
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120042000_assigned_workspace_tasks.sql', import.meta.url), 'utf8'));
+    await db.query(`update agency_members set direct_grants='{"tasks.view":"assigned"}',setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query(`insert into clients(id,agent_user_id) select
+      ('00000000-0000-4000-8000-'||lpad(to_hex(n),12,'0'))::uuid,$1 from generate_series(1,1101) n`, [producer]);
+    await db.query(`insert into tasks(id,related_type,related_id,account_id,created_by_user_id)
+      values (1,'client','00000000-0000-4000-8000-00000000044d','00000000-0000-4000-8000-00000000044d',$1),
+        (2,null,null,null,$1),(3,null,null,null,$2)`, [producer, admin]);
+    await db.query(`insert into clients(id,agent_user_id) values($1,$2)`, [invitation, admin]);
+    await db.query(`insert into tasks(id,related_type,related_id,created_by_user_id) values
+      (5,'client','00000000-0000-4000-8000-00000000044d',$1),(6,'client',$2,$1)`, [producer, invitation]);
+    await db.query(`insert into leads(id,agent_user_id,archived_at) values($1,$2,now())`, [invitee, producer]);
+    await db.query(`insert into tasks(id,related_type,related_id,created_by_user_id) values(4,'lead',$1,$2)`, [invitee, producer]);
+    expect((await db.query('select id from team_assigned_workspace_tasks($1) order by id', [producer])).rows)
+      .toEqual([{ id: 1 }, { id: 2 }, { id: 5 }]);
+    expect((await db.query('select id from team_assigned_workspace_tasks($1,true) order by id', [producer])).rows)
+      .toEqual([{ id: 1 }, { id: 2 }, { id: 4 }, { id: 5 }]);
+    await expect(db.query('select * from team_assigned_workspace_tasks($1)', [admin]))
+      .resolves.toBeDefined();
+    await db.query(`update agency_members set direct_grants='{}',setup_state='accepted' where user_id=$1`, [producer]);
+    await expect(db.query('select * from team_assigned_workspace_tasks($1)', [producer])).rejects.toMatchObject({ code: '42501' });
+  });
+  it('scopes calendar events and mutations to their owner and accessible linked records', async () => {
+    await db.exec(`
+      alter table leads add column account_id uuid;
+      create table public.events(id uuid primary key,user_id uuid,related_type text,related_id uuid,client_id uuid);
+      create function public.save_calendar_event(p_id uuid,p_changes jsonb,p_create boolean,p_actor text,p_user uuid)
+      returns jsonb language plpgsql security definer set search_path=public as $$
+      declare original events; saved events; account uuid; member_role text;
+      begin
+        select role into member_role from agency_members where user_id=p_user and active;
+        select * into original from events where id=p_id;
+        saved:=jsonb_populate_record(original,p_changes); account:=saved.client_id;
+        saved.client_id:=account;
+        return to_jsonb(saved);
+      end $$;
+      create function public.claim_appointment_sync(p_id uuid,p_user uuid,p_lock uuid) returns jsonb
+      language plpgsql as $$ begin
+        perform pg_advisory_xact_lock(hashtextextended('calendar-owner:'||p_user::text,0));
+        return '{}'::jsonb;
+      end $$;
+      create function public.claim_appointment_notification(p_id uuid,p_user uuid,p_revision integer,p_lock uuid) returns void
+      language plpgsql as $$ begin
+        perform pg_advisory_xact_lock(hashtextextended('calendar-owner:'||p_user::text,0));
+      end $$;
+    `);
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120048000_scoped_team_calendar.sql', import.meta.url), 'utf8'));
+    await db.query(`update agency_members set direct_grants='{"calendar.view":"self","calendar.edit":"self","leads.view":"assigned","accounts.view":"assigned"}',setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query(`insert into clients(id,agent_user_id) values($1,$2),($3,$4)`, [invitee, producer, invitation, admin]);
+    await db.query(`insert into leads(id,agent_user_id,account_id) values($1,$2,$3),($4,$2,$5)`, [owner, producer, invitee, admin, invitation]);
+    await db.query(`insert into events(id,user_id,related_type,related_id,client_id) values
+      ($1,$2,null,null,null),($3,$2,'client',$4,$4),($5,$2,'lead',$6,$7),($8,$9,null,null,null)`,
+    [owner, producer, admin, invitee, invitation, admin, invitation, invitee, admin]);
+    expect((await db.query('select id from team_calendar_events($1) order by id', [producer])).rows)
+      .toEqual([{ id: owner }, { id: admin }]);
+    await expect(db.query('select assert_team_calendar_access($1,$2,$3)', [producer, invitation, 'calendar.edit']))
+      .rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select claim_appointment_sync($1,$2,$3)', [invitation, producer, owner]))
+      .rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select save_calendar_event($1,$2,true,$3,$4)', [invitee, { related_type: 'client', related_id: invitation, client_id: invitation }, 'test', producer]))
+      .rejects.toMatchObject({ code: '42501' });
+    await db.query(`update agency_members set direct_grants='{"calendar.view":"assigned","calendar.edit":"assigned","leads.view":"agency","accounts.view":"agency"}' where user_id=$1`, [producer]);
+    expect((await db.query('select id from team_calendar_events($1) order by id', [producer])).rows)
+      .toEqual([{ id: owner }, { id: admin }]);
+    await db.query(`update agency_members set direct_grants='{"calendar.view":"self"}' where user_id=$1`, [producer]);
+    await expect(db.query('select claim_appointment_sync($1,$2,$3)', [owner, producer, invitee]))
+      .rejects.toMatchObject({ code: '42501' });
+  });
+  it('patches the real appointment function definitions without losing their existing behavior', async () => {
+    await db.exec(`alter table leads add column account_id uuid;
+      create table public.events(id uuid primary key,user_id uuid,related_type text,related_id uuid,client_id uuid);`);
+    const calendar = await readFile(new URL('../../../supabase/migrations/20261109160000_google_calendar_appointments.sql', import.meta.url), 'utf8');
+    const zoom = await readFile(new URL('../../../supabase/migrations/20261109180000_zoom_appointments.sql', import.meta.url), 'utf8');
+    const definition = (source: string, start: string): string => {
+      const index = source.indexOf(start);
+      if (index < 0) throw new Error(`Missing function ${start}`);
+      const end = source.indexOf('end $$;', index);
+      if (end < 0) throw new Error(`Incomplete function ${start}`);
+      return source.slice(index, end + 'end $$;'.length);
+    };
+    await db.exec(definition(calendar, 'create function public.save_calendar_event('));
+    await db.exec(definition(zoom, 'create or replace function public.claim_appointment_sync('));
+    await db.exec(definition(calendar, 'create function public.claim_appointment_notification('));
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120048000_scoped_team_calendar.sql', import.meta.url), 'utf8'));
+    const result = await db.query<{ definition: string }>(`
+      select pg_get_functiondef('public.save_calendar_event(uuid,jsonb,boolean,text,uuid)'::regprocedure) as definition`);
+    expect(result.rows[0].definition).toContain('Calendar editing and linked record access are required.');
+    expect(result.rows[0].definition).toContain('saved.client_id:=account;');
+    expect(result.rows[0].definition).toContain('insert into notifications');
+  });
+  it('stores copy-only presets with delegation, dependencies and version checks', async () => {
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120045000_team_profile_presets.sql', import.meta.url), 'utf8'));
+    await db.query(`update agency_members set direct_grants='{"team.manage":"agency","leads.view":"assigned"}',
+      setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query(`select save_team_profile_preset($1,null,'Lead reader','{"leads.view":"assigned"}',true,null)`, [owner]);
+    await db.query(`select save_team_profile_preset($1,null,'Agency reader','{"leads.view":"agency"}',true,null)`, [owner]);
+    const listed = await db.query<{ id: string; name: string; version: number }>('select * from list_team_profile_presets($1)', [producer]);
+    expect(listed.rows.map((row) => row.name)).toEqual(['Lead reader']);
+    const id = listed.rows[0].id;
+    await expect(db.query(`select save_team_profile_preset($1,$2,'Lead reader','{"leads.view":"agency"}',true,1)`, [producer, id]))
+      .rejects.toMatchObject({ code: '42501' });
+    await expect(db.query(`select save_team_profile_preset($1,$2,'Lead reader','{"leads.edit":"assigned"}',true,1)`, [owner, id]))
+      .rejects.toMatchObject({ code: '22023' });
+    await db.query(`select save_team_profile_preset($1,$2,'Renamed','{"leads.view":"assigned"}',false,1)`, [producer, id]);
+    await expect(db.query(`select save_team_profile_preset($1,$2,'Stale','{"leads.view":"assigned"}',true,1)`, [producer, id]))
+      .rejects.toMatchObject({ code: 'PT409' });
+    expect((await db.query('select name,active,version from list_team_profile_presets($1)', [producer])).rows)
+      .toEqual([{ name: 'Renamed', active: false, version: 2 }]);
+    await expect(db.query('select * from list_team_profile_presets($1)', [admin]))
+      .resolves.toBeDefined();
+    await db.query(`update agency_members set direct_grants='{}' where user_id=$1`, [producer]);
+    await expect(db.query('select * from list_team_profile_presets($1)', [producer]))
+      .rejects.toMatchObject({ code: '42501' });
+    expect((await db.query(`select has_table_privilege('authenticated','public.team_profile_presets','select') as allowed`)).rows)
+      .toEqual([{ allowed: false }]);
+  });
+  it('offers an editable Marketing starting preset without changing members or replacing customizations', async () => {
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120045000_team_profile_presets.sql', import.meta.url), 'utf8'));
+    const seed = await readFile(new URL('../../../supabase/migrations/20261120053000_marketing_team_preset.sql', import.meta.url), 'utf8');
+    const before = await db.query('select user_id,direct_grants from agency_members order by user_id');
+    await db.exec(seed);
+    const presets = await db.query<{ id: string; grants: Record<string, string>; version: number }>(
+      `select id,grants,version from list_team_profile_presets($1) where name='Marketing'`, [owner]);
+    expect(presets.rows).toHaveLength(1);
+    expect(presets.rows[0].grants).toEqual({ 'dashboard.view': 'assigned', 'content.view': 'agency',
+      'content.edit': 'agency', 'social.view': 'agency', 'social.edit': 'agency' });
+    expect((await db.query('select user_id,direct_grants from agency_members order by user_id')).rows).toEqual(before.rows);
+    const { id } = presets.rows[0];
+    await db.query('select save_team_profile_preset($1,$2,$3,$4,true,1)', [owner, id, 'Marketing', { 'social.view': 'agency' }]);
+    await db.exec(seed);
+    expect((await db.query(`select grants,version from team_profile_presets where id=$1`, [id])).rows)
+      .toEqual([{ grants: { 'social.view': 'agency' }, version: 2 }]);
+  });
+  it('isolates personnel files, requires explicit authority, and honors retention', async () => {
+    await db.exec(`create table storage.buckets(id text primary key,name text,public boolean,file_size_limit integer,allowed_mime_types text[]);
+      alter table storage.objects add column name text,add column metadata jsonb,add column created_at timestamptz default now();`);
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120047000_personnel_vault.sql', import.meta.url), 'utf8'));
+    await db.query(`update agency_members set direct_grants='{"team.manage":"agency","documents.view":"agency"}',
+      setup_state='accepted' where user_id=$1`, [producer]);
+    expect((await db.query('select personnel_manager($1) as allowed', [producer])).rows).toEqual([{ allowed: false }]);
+    await db.query(`update agency_members set direct_grants='{"personnel.manage":"agency"}' where user_id=$1`, [producer]);
+    const path = `${admin}/${invitation}/document`;
+    await db.query('select reserve_personnel_upload($1,$2,$3)', [producer, admin, invitation]);
+    await db.query(`insert into storage.objects(id,bucket_id,name,metadata) values($1,'personnel-documents',$2,'{"size":12,"mimetype":"application/pdf"}')`, [invitation, path]);
+    await db.query(`select save_personnel_document($1,$2,$3,'Agreement.pdf',$4,'application/pdf',12,current_date+1,false)`,
+      [producer, invitation, admin, path]);
+    expect((await db.query('select id from list_personnel_documents($1,$1)', [admin])).rows).toEqual([]);
+    await expect(db.query('select * from list_personnel_documents($1,$2)', [admin, producer])).rejects.toMatchObject({ code: '42501' });
+    await db.query(`select change_personnel_document($1,$2,1,'share')`, [producer, invitation]);
+    expect((await db.query('select id from list_personnel_documents($1,$1)', [admin])).rows).toEqual([{ id: invitation }]);
+    expect((await db.query('select * from read_personnel_document($1,$2)', [invitee, invitation])).rows).toEqual([]);
+    expect((await db.query(`select * from read_personnel_document($1,$2)`, [admin, invitation])).rows).toHaveLength(1);
+    expect((await db.query(`select actor_id,target_id from agency_audit where action='personnel_document_access_requested'`)).rows)
+      .toEqual([{ actor_id: admin, target_id: admin }]);
+    await expect(db.query(`select change_personnel_document($1,$2,2,'remove')`, [producer, invitation]))
+      .rejects.toMatchObject({ code: 'PT409' });
+    await db.query('update personnel_documents set retain_until=current_date-1 where id=$1', [invitation]);
+    await expect(db.query(`select change_personnel_document($1,$2,2,'remove')`, [producer, invitation]))
+      .rejects.toMatchObject({ code: 'PT409' });
+    await db.query(`update personnel_uploads set expires_at=now()-interval '1 second' where id=$1`, [invitation]);
+    expect((await db.query('select * from claim_expired_personnel_uploads()')).rows).toEqual([]);
+    await db.query(`select change_personnel_document($1,$2,2,'remove')`, [producer, invitation]);
+    expect((await db.query('select * from read_personnel_document($1,$2)', [admin, invitation])).rows).toEqual([]);
+    await expect(db.query('select finish_personnel_document_removal($1,$2)', [producer, invitation]))
+      .rejects.toMatchObject({ code: 'PT409' });
+    await db.query('delete from storage.objects where id=$1', [invitation]);
+    await db.query('select finish_personnel_document_removal($1,$2)', [producer, invitation]);
+    expect((await db.query('select state from personnel_documents where id=$1', [invitation])).rows).toEqual([{ state: 'removed' }]);
+    expect((await db.query(`select has_table_privilege('authenticated','public.personnel_documents','select') as allowed`)).rows)
+      .toEqual([{ allowed: false }]);
+  });
+  it('cleans abandoned personnel uploads without deleting completed documents', async () => {
+    await db.exec(`create table storage.buckets(id text primary key,name text,public boolean,file_size_limit integer,allowed_mime_types text[]);
+      alter table storage.objects add column name text,add column metadata jsonb,add column created_at timestamptz default now();`);
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120047000_personnel_vault.sql', import.meta.url), 'utf8'));
+    await db.query('select reserve_personnel_upload($1,$2,$3)', [owner, admin, invitation]);
+    const path = `${admin}/${invitation}/document`;
+    await db.query(`insert into storage.objects(id,bucket_id,name,metadata) values($1,'personnel-documents',$2,'{"size":12,"mimetype":"application/pdf"}')`, [invitation, path]);
+    expect((await db.query('select * from claim_expired_personnel_uploads()')).rows).toEqual([]);
+    await db.query(`update personnel_uploads set expires_at=now()-interval '1 second' where id=$1`, [invitation]);
+    expect((await db.query('select * from claim_expired_personnel_uploads()')).rows).toEqual([{ id: invitation, storage_path: path }]);
+    await expect(db.query(`select save_personnel_document($1,$2,$3,'Agreement.pdf',$4,'application/pdf',12,current_date,false)`,
+      [owner, invitation, admin, path])).rejects.toMatchObject({ code: 'PT409' });
+    await expect(db.query('select finish_expired_personnel_upload($1)', [invitation])).rejects.toMatchObject({ code: 'PT409' });
+    await db.query('delete from storage.objects where id=$1', [invitation]);
+    await db.query('select finish_expired_personnel_upload($1)', [invitation]);
+    expect((await db.query('select * from personnel_uploads')).rows).toEqual([]);
+    await db.query(`insert into storage.objects(id,bucket_id,name,metadata,created_at)
+      values($1,'personnel-documents',$2,'{"size":12,"mimetype":"application/pdf"}',now()-interval '25 hours')`, [invitation, path]);
+    expect((await db.query('select * from claim_expired_personnel_uploads()')).rows).toEqual([{ id: invitation, storage_path: path }]);
+    expect((await db.query(`select has_function_privilege('authenticated','public.claim_expired_personnel_uploads()','execute') as allowed`)).rows)
+      .toEqual([{ allowed: false }]);
+    expect((await db.query(`select has_table_privilege('authenticated','public.personnel_uploads','select') as allowed`)).rows)
+      .toEqual([{ allowed: false }]);
+  });
+  it('limits policy, renewal and claim dashboard data to assigned accounts with both permissions', async () => {
+    await db.exec(`alter table public.policies add column effective_date date, add column premium numeric;
+      create table public.claims(id integer primary key,policy_id uuid,client_id uuid,status text);
+      create view public.renewals as select id,client_id from public.policies;`);
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120043000_assigned_dashboard_policies.sql', import.meta.url), 'utf8'));
+    await db.query(`update agency_members set direct_grants='{"accounts.view":"assigned","policies.view":"assigned"}',
+      setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query(`insert into clients(id,agent_user_id) values ($1,$3),($2,$4)`, [invitee, invitation, producer, admin]);
+    await db.query(`insert into policies(id,client_id,effective_date,premium) values
+      ($1,$1,'2026-01-15',100),($2,$2,'2026-01-15',500)`, [invitee, invitation]);
+    await db.query(`insert into claims(id,policy_id,client_id,status) values
+      (1,$1,$1,'open'),(2,$2,$2,'open'),(3,$2,$1,'open')`, [invitee, invitation]);
+    const summary = await db.query<{ summary: { total: number; months: { month: string; premium: number }[] } }>(
+      `select team_assigned_premium_summary($1,'2026-01-01') as summary`, [producer]);
+    expect(Number(summary.rows[0].summary.total)).toBe(100);
+    expect(Number(summary.rows[0].summary.months[0].premium)).toBe(100);
+    expect((await db.query('select id from team_assigned_dashboard_renewals($1)', [producer])).rows).toEqual([{ id: invitee }]);
+    expect((await db.query('select id from team_assigned_dashboard_claims($1)', [producer])).rows).toEqual([{ id: 1 }]);
+    await db.query(`update agency_members set direct_grants='{"policies.view":"assigned"}' where user_id=$1`, [producer]);
+    await expect(db.query(`select team_assigned_premium_summary($1,'2026-01-01')`, [producer])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select * from team_assigned_dashboard_renewals($1)', [producer])).rejects.toMatchObject({ code: '42501' });
+    await expect(db.query('select * from team_assigned_dashboard_claims($1)', [producer])).rejects.toMatchObject({ code: '42501' });
+  });
+  it('scopes email approvals and rechecks the approving manager before an identity change', async () => {
+    await db.exec('alter table auth.users add column email_change text');
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261105060000_account_security.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../../../supabase/migrations/20261120044000_team_email_approval_scope.sql', import.meta.url), 'utf8'));
+    await db.query(`update agency_members set direct_grants='{"team.manage":"agency","leads.view":"assigned"}',
+      setup_state='accepted' where user_id=$1`, [producer]);
+    await db.query(`insert into auth.users(id,email,email_confirmed_at) values($1,'target@example.test',now())`, [invitee]);
+    await db.query(`insert into agency_members(user_id,email,role,active,direct_grants,setup_state)
+      values($1,'target@example.test','agent',true,'{"leads.view":"assigned"}','accepted')`, [invitee]);
+    const request = await db.query<{ id: string }>(`select request_account_email($1,'new@example.test') as id`, [invitee]);
+    const id = request.rows[0].id;
+    await db.query(`insert into account_email_changes(user_id,old_email,new_email,status)
+      values($1,'admin@example.test','other@example.test','pending')`, [admin]);
+    const pending = await db.query<{ user_id: string }>('select * from team_pending_email_requests($1)', [producer]);
+    expect(pending.rows.map((row) => row.user_id)).toEqual([invitee]);
+    await expect(db.query(`select decide_account_email($1,(select id from account_email_changes where user_id=$2),true)`,
+      [producer, admin])).rejects.toMatchObject({ code: '42501' });
+    await db.query('select decide_account_email($1,$2,true)', [producer, id]);
+    await expect(db.query(`update auth.users set email='new@example.test' where id=$1`, [invitee])).rejects.toMatchObject({ code: '42501' });
+    await db.query('update account_email_changes set old_confirmed_at=now(),new_confirmed_at=now() where id=$1', [id]);
+    await db.query('update account_email_changes set approved_by=null where id=$1', [id]);
+    await expect(db.query(`update auth.users set email='new@example.test' where id=$1`, [invitee])).rejects.toMatchObject({ code: '42501' });
+    await db.query('update account_email_changes set approved_by=$2 where id=$1', [id, producer]);
+    await db.query(`update agency_members set direct_grants='{"leads.view":"agency"}' where user_id=$1`, [invitee]);
+    await expect(db.query(`update auth.users set email='new@example.test' where id=$1`, [invitee])).rejects.toMatchObject({ code: '42501' });
+    await db.query(`update agency_members set direct_grants='{"leads.view":"assigned"}' where user_id=$1`, [invitee]);
+    await db.query(`update auth.users set email='new@example.test' where id=$1`, [invitee]);
+    expect((await db.query('select email from agency_members where user_id=$1', [invitee])).rows).toEqual([{ email: 'new@example.test' }]);
   });
   it('lets delegated team administrators manage only members within their own selected grants', async () => {
     const set = (actor: string, target: string, grants: object, version = 1) =>

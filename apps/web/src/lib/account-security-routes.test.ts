@@ -22,24 +22,27 @@ const user: User = { id: 'c5b14c2b-5527-4a2d-b395-e0a04a4f6dd2', email: 'old@exa
 const request = (path: string, body: unknown): NextRequest => new NextRequest(`https://crm.example.invalid${path}`, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 });
-let role: string; let active: boolean; let complete: boolean; let recoveryMissing: boolean;
+let role: string; let active: boolean; let complete: boolean; let recoveryMissing: boolean; let requestStatus: 'pending' | 'approved';
 let calls: Array<{ path: string; body: Record<string, unknown> | null; method: string }>;
 let db: SupabaseClient;
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubEnv('CRM_WEB_ORIGIN', 'https://crm.example.invalid');
-  role = 'agent'; active = true; complete = false; recoveryMissing = false; calls = [];
+  role = 'agent'; active = true; complete = false; recoveryMissing = false; requestStatus = 'pending'; calls = [];
   db = createClient('https://example.supabase.co', 'test-key', {
     auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: async (input, init) => {
-      const path = new URL(String(input)).pathname;
+      const url = new URL(String(input));
+      const path = url.pathname;
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null;
       calls.push({ path, body, method: init?.method ?? 'GET' });
       let data: unknown = null; let status = 200;
       if (path.endsWith('/agency_members')) data = { user_id: user.id, role, active };
       if (path.endsWith('/rpc/reserve_account_security')) data = true;
       if (path.endsWith('/rpc/request_account_email') || path.endsWith('/rpc/confirm_account_email')) data = 'request-id';
+      if (path.endsWith('/rpc/team_pending_email_requests')) data = [];
       if (path.endsWith('/account_email_changes')) data = { id: 'request-id', user_id: user.id, old_email: user.email,
         new_email: 'new@example.invalid', status: 'approved', expires_at: new Date(Date.now() + 3600000).toISOString(),
         old_confirmed_at: '2026-11-01', new_confirmed_at: complete ? '2026-11-01' : null };
+      if (path.endsWith('/account_email_changes') && url.searchParams.get('select') === 'status') data = { status: requestStatus };
       if (path.includes('/auth/v1/admin/users/')) data = { ...user, email: body?.email };
       if (path.endsWith('/auth/v1/admin/generate_link')) {
         data = recoveryMissing ? { code: 'user_not_found', msg: 'not found' } : { ...user,
@@ -61,6 +64,7 @@ describe('verified own-account email changes', () => {
     expect(calls.find((call) => call.path.endsWith('/request_account_email'))?.body).toEqual({ p_actor: user.id, p_email: 'new@example.invalid' });
   });
   it('uses the administrator permission, not the legacy membership role, for self-approval messaging', async () => {
+    requestStatus = 'approved';
     vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: {
       mode: 'restricted', grants: { 'team.manage': 'agency' },
     } });
@@ -97,6 +101,13 @@ describe('verified own-account email changes', () => {
     active = true; role = 'admin';
     expect((await approvals(request('/api/settings/account-email', {}))).status).toBe(403);
     expect((await decide(request('/api/settings/account-email', { id: 'request-id', approve: true }))).status).toBe(403);
+  });
+  it('loads delegated approvals through the scoped database function', async () => {
+    vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted', grants: { 'team.manage': 'agency' } } });
+    const response = await approvals(new NextRequest('https://crm.example.invalid/api/settings/account-email'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ requests: [] });
+    expect(calls.find((call) => call.path.endsWith('/team_pending_email_requests'))?.body).toEqual({ p_actor: user.id });
   });
   it('propagates delivery failure instead of claiming verification was sent', async () => {
     vi.mocked(sendAccountMail).mockRejectedValueOnce(new Error('test delivery failure'));

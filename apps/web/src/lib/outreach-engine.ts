@@ -460,15 +460,31 @@ export async function sendOutboxItem(
       throw error;
     }
     let result: { id: string };
+    let dispatchDenied: { error: unknown } | undefined;
     try {
       result = await sendAgentEmail(supabase, actorId, { to: target.recipient.to, subject, body, headers: envelope.headers },
         { attemptId: item.id, clientId: target.recipient.clientId, leadId: item.lead_id,
-          ...(item.sales_template ? { salesTemplate: item.sales_template } : {}) });
+          ...(item.sales_template ? { salesTemplate: item.sales_template } : {}) },
+        async () => {
+          try {
+            const current = await resolveOutboundEmailRecipient(supabase, { leadId: item.lead_id, to: item.to_email });
+            if (!current.ok) throw new WorkspaceError(current.message, current.status);
+            if (current.recipient.to !== target.recipient.to || current.recipient.clientId !== target.recipient.clientId
+              || current.recipient.leadId !== target.recipient.leadId) {
+              throw new WorkspaceError('The recipient or linked record changed. Review the outreach before sending.', 409);
+            }
+            if (!item.sales_template) await requireMarketingConsent(supabase, item.to_email);
+            await assertOutreachSendAccess(supabase, actorId, item.lead_id);
+          }
+          catch (error) { dispatchDenied = { error }; throw error; }
+        });
     } catch (error) {
       const limited = error instanceof WorkspaceError && error.status === 429;
-      const saved = await supabase.from('outreach_outbox').update({ status: limited ? 'pending_approval' : 'acceptance_unknown',
-        ...(limited ? { sent_at: null } : {}),
-        error: limited ? error.message : 'Email sending was not confirmed. Check Gmail Sent before retrying.' }).eq('id', item.id).eq('status', 'sending');
+      const denied = dispatchDenied !== undefined && dispatchDenied.error === error;
+      const saved = await supabase.from('outreach_outbox').update({ status: limited || denied ? 'pending_approval' : 'acceptance_unknown',
+        ...(limited || denied ? { sent_at: null } : {}),
+        error: limited ? error.message : denied && error instanceof Error ? error.message
+          : 'Email sending was not confirmed. Check Gmail Sent before retrying.' }).eq('id', item.id).eq('status', 'sending');
       if (saved.error) throw new Error('Agent send state could not be saved; do not resend.');
       throw error;
     }

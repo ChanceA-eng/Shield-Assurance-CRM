@@ -109,7 +109,8 @@ export default function SalesTemplatePicker({ conversation, channel = 'email', d
             .map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
         </optgroup>)}
       </select>
-      {template ? <>
+      {template ? <div className="grid items-start gap-3 lg:grid-cols-2">
+        <div className="min-w-0 space-y-2">
         <button type="button" className="text-xs text-cui-primary underline" onClick={() => chooseTemplate('')}>Clear selection</button>
         {needsAppointment ? <label className="block text-xs font-semibold">Scheduled appointment
           <select aria-label="Scheduled appointment" className="mt-1 w-full rounded border border-cui-border p-2 text-sm" value={appointmentId}
@@ -134,9 +135,6 @@ export default function SalesTemplatePicker({ conversation, channel = 'email', d
           </div> : null}
           {designNotice ? <p role="status" className="text-xs text-green-800">{designNotice}</p> : null}
         </> : null}
-        <div className="rounded bg-cui-light p-2 text-xs"><p className="font-semibold">{preview?.subject}</p>
-          {channel === 'email' ? <EmailDesignPreview body={preview?.body ?? ''} design={design} />
-            : <p className="whitespace-pre-wrap">{preview?.body}</p>}</div>
         <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
           {template.id.startsWith('cold_first_touch')
             ? 'I verified the business detail and offer, and this prospect is appropriate to contact.'
@@ -148,7 +146,11 @@ export default function SalesTemplatePicker({ conversation, channel = 'email', d
           <button type="button" disabled={!confirmed || Boolean(preview?.missing.length) || designDirty || conversation.startsWith('unmatched:')} onClick={() => void apply(true)}
             className="rounded border border-cui-primary px-3 py-2 text-xs text-cui-primary disabled:opacity-50">Personalize with AI</button>
         </div>
-      </> : null}
+        </div>
+        <div className="min-w-0 rounded bg-cui-light p-2 text-xs lg:sticky lg:top-0"><p className="font-semibold">{preview?.subject}</p>
+          {channel === 'email' ? <EmailDesignPreview body={preview?.body ?? ''} design={design} />
+            : <p className="whitespace-pre-wrap">{preview?.body}</p>}</div>
+      </div> : null}
       {channel === 'sms' ? <p className="text-xs text-cui-muted">SMS drafts only. Sending and scheduling require a connected outbound provider.</p> : null}
     </fieldset>
   </ConversationTool>;

@@ -19,7 +19,7 @@ beforeEach(() => {
   calls = [];
   agencyTimeZone = 'America/Phoenix';
   respond = () => json([]);
-  vi.mocked(getApiSession).mockResolvedValue({ user, error: null });
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'legacy' } });
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     calls.push({ url, body: typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null });

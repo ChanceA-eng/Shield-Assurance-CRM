@@ -8,6 +8,7 @@ import { isRecord } from './workspace-validation';
 import { WorkspaceError } from './record-scope';
 import { emailContentKey, parseEmailDesign } from '@crm/shared';
 import { messageDocument } from './email-formatting';
+import { assertTeamRecordSendAccess } from './team-request-access';
 
 export async function assertScheduledSendAccess(
   db: SupabaseClient, actor: string | null, leadId: string | null, clientId: string | null,
@@ -20,11 +21,8 @@ export async function assertScheduledSendAccess(
 }
 
 export async function assertOutreachSendAccess(db: SupabaseClient, actor: string, leadId: string): Promise<void> {
-  const { data: allowed, error } = await db.rpc('team_record_dispatch_allowed', {
-    p_actor: actor, p_lead: leadId, p_client: null,
-  });
-  if (error) throw databaseError(error);
-  if (allowed !== true) throw new WorkspaceError('The person approving this outreach no longer has permission to send it for this record.', 403);
+  await assertTeamRecordSendAccess(db, actor, leadId, null,
+    'The person approving this outreach no longer has permission to send it for this record.');
 }
 
 export async function processAgentScheduled(db: SupabaseClient, limit = 50): Promise<{ sent: number; blocked: number }> {
@@ -42,10 +40,11 @@ export async function processAgentScheduled(db: SupabaseClient, limit = 50): Pro
       const sender = await getAgentEmailSender(db, row.agent_user_id);
       const mailbox = await getOwnGmailConnection(db, row.agent_user_id);
       if (!mailbox || mailbox.id !== row.gmail_connection_id || emailContentKey(sender) !== emailContentKey(row.approved_sender)) throw new Error('Sender profile or mailbox changed. Review and recreate this scheduled message.');
-      const recipient = await resolveOutboundEmailRecipient(db, {
+      const target = {
         clientId: row.client_id, leadId: row.lead_id,
         ...(!row.client_id && !row.lead_id ? { conversationKey: `unmatched:${row.approved_recipient}` } : {}),
-      });
+      };
+      const recipient = await resolveOutboundEmailRecipient(db, target);
       if (!recipient.ok) throw new Error(recipient.message);
       if (recipient.recipient.to !== row.approved_recipient) throw new Error('Recipient changed. Review and recreate the scheduled message.');
       await assertScheduledSendAccess(db, row.agent_user_id, row.lead_id ?? null, row.client_id ?? null);
@@ -54,7 +53,16 @@ export async function processAgentScheduled(db: SupabaseClient, limit = 50): Pro
         { attemptId: row.id, clientId: row.client_id, leadId: row.lead_id ?? null,
           ...(isRecord(row.sales_template) && typeof row.sales_template.id === 'string' && typeof row.sales_template.revision === 'number'
             ? { salesTemplate: { id: row.sales_template.id, revision: row.sales_template.revision,
-              ...(row.sales_template.email_design ? { email_design: parseEmailDesign(row.sales_template.email_design) } : {}) } } : {}) });
+              ...(row.sales_template.email_design ? { email_design: parseEmailDesign(row.sales_template.email_design) } : {}) } } : {}) },
+        async () => {
+          const current = await resolveOutboundEmailRecipient(db, target);
+          if (!current.ok) throw new WorkspaceError(current.message, current.status);
+          if (current.recipient.to !== recipient.recipient.to || current.recipient.leadId !== recipient.recipient.leadId
+            || current.recipient.clientId !== recipient.recipient.clientId) {
+            throw new WorkspaceError('Recipient or linked record changed. Review and recreate this scheduled message.', 409);
+          }
+          await assertScheduledSendAccess(db, row.agent_user_id, row.lead_id ?? null, row.client_id ?? null);
+        });
       const saved = await db.from('scheduled_messages').update({ status: 'sent', last_error: null }).eq('id', row.id).eq('status', 'processing');
       if (saved.error) throw databaseError(saved.error);
       sent += 1;

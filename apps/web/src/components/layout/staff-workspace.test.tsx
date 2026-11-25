@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import SocialMarketingPage from '../../app/communication/social/page';
 import ClientsPage from '../../app/clients/page';
+import SchedulerPage from '../../app/scheduler/page';
 import { StaffWorkspaceProvider } from '../../context/StaffWorkspaceContext';
 import { NotificationProvider } from '../../context/NotificationContext';
 import { NavProvider } from '../../context/NavContext';
@@ -13,6 +14,7 @@ vi.mock('../../lib/supabase-auth-browser', () => ({ createSupabaseBrowserAuthCli
 vi.mock('../../context/WorkspaceNavigationContext', () => ({
   useUnsavedChanges: () => ({ confirmDiscard: () => true }),
 }));
+vi.mock('@fullcalendar/react', () => ({ default: () => null }));
 vi.mock('next/navigation', () => ({
   usePathname: () => '/communication/social',
   useSearchParams: () => new URLSearchParams(),
@@ -59,4 +61,20 @@ it('combines permitted record and marketing navigation without rendering the Own
   expect(html).not.toContain('href="/settings"');
   expect(html).toContain('Loading accounts');
   expect(html).not.toContain('New Account');
+});
+
+it.each([
+  { workspace: 'account' as const, grants: { 'calendar.view': 'agency' }, edit: false, tasks: false, send: false },
+  { workspace: 'account' as const, grants: { 'calendar.view': 'agency', 'calendar.edit': 'agency', 'tasks.view': 'self' }, edit: true, tasks: true, send: false },
+  { workspace: 'account' as const, grants: { 'calendar.view': 'self', 'calendar.edit': 'self' }, edit: true, tasks: false, send: false },
+  { workspace: 'full' as const, grants: {}, edit: true, tasks: true, send: true },
+])('renders calendar controls according to access', ({ workspace, grants, edit, tasks, send }) => {
+  const html = renderToStaticMarkup(
+    <StaffWorkspaceProvider workspace={workspace} access={{ mode: 'restricted', grants }}>
+      <NotificationProvider enabled={false}><SchedulerPage /></NotificationProvider>
+    </StaffWorkspaceProvider>,
+  );
+  expect(html.includes('+ New Event')).toBe(edit);
+  expect(html.includes('Tasks due today or overdue')).toBe(tasks);
+  expect(html.includes('Email contacts about cancellations and reschedules')).toBe(send);
 });

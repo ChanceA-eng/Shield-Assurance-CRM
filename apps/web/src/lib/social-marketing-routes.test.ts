@@ -48,16 +48,19 @@ describe('Social marketing routes', () => {
     expect((await POST(request('POST', { action: 'create', id, title: ' Idea ', caption: '' }))).status).toBe(201);
     expect(calls[0].body).toEqual({ p_actor: actor, p_id: id, p_action: 'create', p_title: 'Idea', p_caption: '', p_link_url: null, p_expected_revision: null });
   });
-  it('allows staff editors to create and update drafts but not archive them, and keeps readers read-only', async () => {
+  it('requires separate archive access and keeps readers read-only', async () => {
     vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted',
       grants: { 'social.view': 'agency', 'social.edit': 'agency' } } });
     expect((await POST(request('POST', { action: 'create', id, title: 'Idea', caption: '' }))).status).toBe(201);
     expect((await POST(request('POST', { action: 'update', id, title: 'Updated', caption: '', expected_revision: 1 }))).status).toBe(200);
     expect((await POST(request('POST', { action: 'archive', id, expected_revision: 2 }))).status).toBe(403);
     vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted',
+      grants: { 'social.view': 'agency', 'social.edit': 'agency', 'social.delete': 'agency' } } });
+    expect((await POST(request('POST', { action: 'archive', id, expected_revision: 2 }))).status).toBe(200);
+    vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted',
       grants: { 'social.view': 'agency' } } });
     expect((await POST(request('POST', { action: 'create', id, title: 'Idea', caption: '' }))).status).toBe(403);
-    expect(calls.map(({ body }) => body.p_action)).toEqual(['create', 'update']);
+    expect(calls.map(({ body }) => body.p_action)).toEqual(['create', 'update', 'archive']);
   });
   it('passes versioned attachment changes and preserves omitted legacy attachments', async () => {
     expect((await POST(request('POST', { action: 'update', id, title: 'Idea', caption: '', expected_revision: 1, media_ids: [id] }))).status).toBe(200);

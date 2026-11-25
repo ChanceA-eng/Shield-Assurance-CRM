@@ -76,7 +76,7 @@ export default function SettingsWorkspace({ team, emailRequests, restricted = fa
     <SettingsTabs active={tab} onSelect={select} visibleTabs={visibleTabs} />
     {visited.map((id) => <div key={id} role="tabpanel" hidden={tab !== id} id={`panel-${id}`}
       aria-labelledby={`tab-${id}`} tabIndex={0} className="space-y-5 focus:outline-none">
-      {id === 'team' ? <><AgencyTeamSettings initial={team} />{!restricted ? <AccountEmailApprovals initial={emailRequests} /> : null}</> : null}
+      {id === 'team' ? <><AgencyTeamSettings initial={team} /><AccountEmailApprovals initial={emailRequests} /></> : null}
       {id === 'email' ? <EmailConnectionSettings /> : null}
       {id === 'automation' ? <AutomationWorkspace section={section} active={tab === id} /> : null}
       {id === 'intelligence' ? <DiscoverySettings active={tab === id} /> : null}

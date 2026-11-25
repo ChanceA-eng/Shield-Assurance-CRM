@@ -2,7 +2,7 @@ import type { TeamPermission } from '@crm/shared';
 
 export type TeamRoutePolicy =
   | { kind: 'permission'; permissions: readonly TeamPermission[]; recordScoped: boolean }
-  | { kind: 'handler'; handler: 'personal' | 'shell' | 'tasks' | 'calendar' | 'agency' | 'social' | 'templates' | 'records' }
+  | { kind: 'handler'; handler: 'personal' | 'shell' | 'tasks' | 'calendar' | 'agency' | 'social' | 'templates' | 'records' | 'dashboard' | 'personnel' }
   | { kind: 'external'; authorization: string };
 
 type Methods = Readonly<Partial<Record<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS', TeamRoutePolicy>>>;
@@ -36,6 +36,7 @@ routes(['/billing-records', '/certificates', '/claims', '/endorsements', '/polic
   GET: permission('policies.view'), POST: permission('policies.edit'), PATCH: permission('policies.edit'), DELETE: permission('policies.delete'),
 });
 routes(['/briefing', '/metrics/home', '/recent'], { GET: permission('dashboard.view') });
+routes(['/dashboard'], { GET: handler('dashboard') });
 routes(['/carrier-appetite'], { GET: permission('knowledge.view', false), POST: permission('knowledge.edit', false) });
 routes(['/clients'], { GET: permission('accounts.view'), POST: permission('accounts.edit'), PATCH: permission('accounts.edit'), DELETE: permission('accounts.delete') });
 routes(['/clients/directory', '/clients/[clientId]', '/clients/[clientId]/context', '/clients/[clientId]/workspace'], { GET: permission('accounts.view') });
@@ -100,6 +101,8 @@ routes(['/learning/snapshots/list'], { GET: permission('knowledge.edit', false) 
 routes(['/learning/progress/update', '/learning/quizzes/submit'], { POST: permission('knowledge.view', false) });
 routes(['/learning/static-assessments/[moduleNumber]'], { GET: permission('knowledge.view', false), POST: permission('knowledge.view', false) });
 routes(['/metrics/tasks'], { GET: handler('tasks') });
+routes(['/personnel-documents'], { GET: handler('personnel'), POST: handler('personnel') });
+routes(['/personnel-documents/[id]'], { GET: handler('personnel') });
 routes(['/notifications'], { GET: handler('shell'), PATCH: handler('shell'), POST: handler('shell') });
 routes(['/outreach/enroll'], { GET: permission('campaigns.view'), POST: permission('campaigns.send') });
 routes(['/outreach/enrollments/[id]', '/outreach/outbox/[id]'], { PATCH: permission('campaigns.send') });
@@ -148,7 +151,7 @@ routes(['/workday'], { GET: handler('tasks'), PATCH: handler('tasks') });
 routes(['/workers-comp'], { GET: handler('records'), PUT: handler('records'), DELETE: handler('records'), POST: handler('records') });
 
 routes(['/appointments/manage/[token]', '/questionnaire/[token]', '/intelligence/questionnaire/[token]'], { GET: external('Verified recipient token and session'), POST: external('Verified recipient token and session') });
-routes(['/auth/confirm', '/auth/recovery'], { POST: external('Account recovery or confirmation challenge') });
+routes(['/auth/confirm', '/auth/recovery', '/auth/team-setup'], { POST: external('Account recovery or confirmation challenge') });
 routes(['/cron/heartbeat', '/cron/intelligence', '/gmail/sync/worker'], { POST: external('Scheduler bearer secret') });
 routes(['/cron/outreach', '/cron/sync-leads', '/messages/process-scheduled'], { GET: external('Scheduler bearer secret') });
 routes(['/email/resend'], { POST: external('Signed email-provider webhook') });

@@ -73,6 +73,29 @@ beforeEach(() => {
 });
 
 describe('outreach send safety', () => {
+  it('releases the outreach claim when access is revoked at the Gmail handoff', async () => {
+    const actor = logId;
+    let checks = 0;
+    vi.mocked(getOwnGmailConnection).mockResolvedValue({ id: outboxId, user_id: actor, email: 'agent@example.invalid', status: 'connected',
+      sync_enabled: false, last_sync_at: null, last_error: null, watch_expires_at: null, bootstrap_complete: false, history_id: null });
+    vi.mocked(sendAgentEmail).mockImplementationOnce(async (_db, _actor, _input, _options, beforeDispatch) => {
+      await beforeDispatch?.();
+      return { id: logId, provider: 'gmail', status: 'accepted_by_provider' };
+    });
+    respond = (call) => {
+      const name = call.url.pathname.split('/').pop();
+      if (name === 'team_record_dispatch_allowed') return json(++checks < 3);
+      if (name === 'outreach_outbox' && call.method === 'GET') return json({ ...item(), agent_user_id: actor, gmail_connection_id: outboxId });
+      if (name === 'agency_members') return json({ user_id: actor, role: 'owner', active: true });
+      if (name === 'agent_email_attempts') return json(null);
+      return defaultResponse(call);
+    };
+    await expect(sendOutboxItem(db, outboxId, undefined, actor)).rejects.toMatchObject({ status: 403 });
+    expect(checks).toBe(3);
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'PATCH',
+      body: expect.objectContaining({ status: 'pending_approval', sent_at: null }) }));
+  });
+
   it.each(['gmail', 'shared'] as const)('rechecks staff access after claiming %s outreach and releases a denied claim', async (provider) => {
     const actor = logId;
     let checks = 0;
@@ -125,7 +148,7 @@ describe('outreach send safety', () => {
     expect(await sendOutboxItem(db, outboxId, undefined, actor)).toMatchObject({ sent: true });
     if (provider === 'gmail') {
       expect(sendAgentEmail).toHaveBeenCalledWith(db, actor, expect.anything(),
-        expect.objectContaining({ salesTemplate: expect.objectContaining({ email_design: design }) }));
+        expect.objectContaining({ salesTemplate: expect.objectContaining({ email_design: design }) }), expect.any(Function));
     } else {
       expect(sendOutboundEmail).toHaveBeenCalledWith(expect.objectContaining({ emailDesign: design }));
     }

@@ -4,6 +4,11 @@ export const STAFF_WORKSPACE_HEADER = 'x-crm-staff-workspace';
 export const STAFF_TEAM_ACCESS_HEADER = 'x-crm-team-access';
 export type StaffWorkspace = 'full' | 'account' | 'social-reader' | 'social-editor';
 
+export function hasUnrestrictedConversationAccess(access: RequestAccess): boolean {
+  return access.mode === 'legacy' || (access.grants['messages.view'] === 'agency'
+    && access.grants['leads.view'] === 'agency' && access.grants['accounts.view'] === 'agency');
+}
+
 export function staffWorkspace(access: RequestAccess): StaffWorkspace {
   if (access.mode === 'legacy') return 'full';
   if (access.grants['social.view'] !== 'agency') return 'account';

@@ -7,6 +7,9 @@ import { staffRecords, type StaffRecordKind } from '../../lib/staff-records';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 import { StaffPolicyInbox, StaffPolicyRequestDialog } from './StaffPolicyRequests';
 import { downloadAccountDocument, uploadAccountDocument, type AccountDocumentView } from '../../lib/account-document-client';
+import { useStaffAccess } from '../../context/StaffWorkspaceContext';
+import Link from 'next/link';
+import type { Route } from 'next';
 
 interface Row {
   id: string;
@@ -125,6 +128,8 @@ function AccountContactEditor({ row, onClose, onSaved }: { row: Row; onClose: ()
 }
 
 export default function StaffRecordList({ kind }: { kind: StaffRecordKind }): JSX.Element {
+  const access = useStaffAccess();
+  const canViewMessages = access.mode === 'legacy' || access.grants['messages.view'] === 'agency' || access.grants['messages.view'] === 'assigned';
   const [input, setInput] = useState('');
   const [query, setQuery] = useState({ search: '', page: 0 });
   const [retry, setRetry] = useState(0);
@@ -148,7 +153,7 @@ export default function StaffRecordList({ kind }: { kind: StaffRecordKind }): JS
   }, [kind, label, query, retry]);
 
   const changePage = (page: number): void => { setResult(null); setQuery({ ...query, page }); };
-  const hasActions = result?.rows.some((row) => row.canEdit || row.canRequest || row.canReadDocuments);
+  const hasActions = result?.rows.some((row) => row.canEdit || row.canRequest || row.canReadDocuments || (canViewMessages && kind !== 'policies'));
   return <SectionLayout title={label}>
     {kind === 'policies' ? <StaffPolicyInbox /> : null}
     <Card>
@@ -183,6 +188,8 @@ export default function StaffRecordList({ kind }: { kind: StaffRecordKind }): JS
                   {hasActions ? <td className="space-x-2 px-3 py-2">{row.canEdit ? <button className="crm-button"
                     aria-label={`Edit contact for ${row.full_name}`} onClick={() => { setSaved(false); setEditing(row); }}>Edit contact</button>
                     : row.canRequest ? <button className="crm-button" onClick={() => { setSubmitted(false); setRequesting(row); }}>Request change</button> : null}
+                    {canViewMessages && kind !== 'policies' ? <Link className="crm-button"
+                      href={`/communication?conversation=${encodeURIComponent(`${kind === 'leads' ? 'lead' : 'client'}:${row.id}`)}` as Route}>Conversation</Link> : null}
                     {row.canReadDocuments && <button className="crm-button" onClick={() => setViewingDocuments(row)}>Documents</button>}</td> : null}
                 </tr>;
               })}</tbody>

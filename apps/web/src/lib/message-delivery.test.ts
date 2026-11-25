@@ -8,7 +8,7 @@ const email = 'prospect@example.test';
 const json = (value: unknown, status = 200): Response =>
   new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 
-function db(doNotContact = false, missingPreferenceTable = false, optedOut = false) {
+function db(doNotContact = false, missingPreferenceTable = false, optedOut = false, linkedAccount: string | null = clientId) {
   const calls: string[] = [];
   const client = createClient('https://example.supabase.co', 'test-key', {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -18,7 +18,7 @@ function db(doNotContact = false, missingPreferenceTable = false, optedOut = fal
       calls.push(table);
       if (table === 'leads') {
         return url.searchParams.has('account_id') ? json([{ id: leadId }])
-          : json({ id: leadId, email, account_id: url.searchParams.get('select')?.includes('account_id') ? clientId : null, form_payload: null });
+          : json({ id: leadId, email, account_id: url.searchParams.get('select')?.includes('account_id') ? linkedAccount : null, form_payload: null });
       }
       if (table === 'clients') return json({ id: clientId, email, email_consent: true, preferred_channel: 'email' });
       if (table === 'record_contact_preferences') {
@@ -33,6 +33,29 @@ function db(doNotContact = false, missingPreferenceTable = false, optedOut = fal
   });
   return { client, calls };
 }
+
+describe('outbound conversation identity', () => {
+  const otherId = '168413e9-a6a4-4dff-a8bf-8f8df83dace8';
+  it('rejects conflicting conversation keys and record IDs before looking up recipients', async () => {
+    const { client, calls } = db();
+    for (const target of [
+      { clientId, conversationKey: `client:${otherId}` },
+      { leadId, conversationKey: `lead:${otherId}` },
+      { clientId, conversationKey: `unmatched:${email}` },
+    ]) {
+      expect(await resolveOutboundEmailRecipient(client, target)).toMatchObject({ ok: false, code: 'record_mismatch' });
+    }
+    expect(calls).toEqual([]);
+  });
+  it('rejects an account that is not actually linked to the selected lead', async () => {
+    for (const linkedAccount of [null, otherId]) {
+      expect(await resolveOutboundEmailRecipient(db(false, false, false, linkedAccount).client, { leadId, clientId }))
+        .toMatchObject({ ok: false, code: 'record_mismatch' });
+    }
+    expect(await resolveOutboundEmailRecipient(db().client, { leadId, clientId, conversationKey: `client:${clientId}` }))
+      .toEqual({ ok: true, recipient: { to: email, leadId, clientId } });
+  });
+});
 
 describe('record-level Do Not Contact enforcement', () => {
   it('blocks an email to a lead marked Do Not Contact before consent or delivery checks', async () => {

@@ -1,13 +1,14 @@
 import { test as base, expect } from '@playwright/test';
 import { createClient } from '@supabase/supabase-js';
 import { createServerClient } from '@supabase/ssr';
+import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { WorkspaceAsset, WorkspaceNote, WorkspaceTask } from '@crm/shared';
 import { isRecord, isUuid } from '../src/lib/workspace-validation';
 import { namedTaskSubject } from '../src/lib/record-scope';
 import { directoryRows, type DirectoryFilter } from '../src/lib/client-directory';
-import { BUILT_IN_AUTOMATION_DEFAULTS, validateAutomationConfiguration, DEFAULT_OUTREACH_SENDER, EMPTY_MARKETING_PROFILE } from '@crm/shared';
+import { BUILT_IN_AUTOMATION_DEFAULTS, validateAutomationConfiguration, DEFAULT_OUTREACH_SENDER, EMPTY_MARKETING_PROFILE, TEAM_PERMISSIONS } from '@crm/shared';
 import { endOfArizonaDay } from '../src/lib/arizona-time';
 import { senderOptions } from '../src/lib/sender-options';
 import { SALES_TEMPLATES, renderSalesTemplate } from '@crm/shared';
@@ -170,7 +171,7 @@ export class WorkspaceData {
     if (url.pathname === '/api/appointments') return { json: { appointments: [], facts: {} } };
     if (/^\/api\/events\/[^/]+\/confirmation$/.test(url.pathname)) return { json: { message: 'Appointment saved and confirmation accepted by Gmail.' } };
     if (url.pathname === '/api/sales-templates') {
-      if (method === 'GET') return { json: { templates: SALES_TEMPLATES, canManage: true,
+      if (method === 'GET') return { json: { templates: SALES_TEMPLATES, canManage: true, canArchive: true,
         facts: { contact_name: this.lead.full_name, agent_name: 'Verification agent', agency_name: 'Shield Assurance' }, recommended: ['introduction'] } };
       if (method === 'POST') {
         const template = SALES_TEMPLATES.find((row) => row.id === body.id);
@@ -401,6 +402,12 @@ export class WorkspaceData {
     if (url.pathname === '/api/renewals') return { json: { items: [], counts: { '30': 0, '60': 0, '90': 0, overdue: 0 } } };
     if (url.pathname === '/api/metrics/home') return { json: { total_written_premium: 0, written_premium_series: [], active_leads: 1, lead_conversion_rate: 0, renewals_30_days: 0, open_claims: 0 } };
     if (url.pathname === '/api/metrics/tasks') return { json: { on_time: 1, overdue: 0, open: 1, completed: 1, unclassified: 0 } };
+    if (url.pathname === '/api/dashboard') {
+      if (url.searchParams.get('section') === 'tasks') return { json: { tasks: { on_time: 1, overdue: 0, open: 1, completed: 1, unclassified: 0 } } };
+      if (url.searchParams.get('section') === 'renewals') return { json: { renewals: [] } };
+      return { json: { leads: { active: 1, conversion: 0, scope: 'agency' },
+        policies: { total_written_premium: 0, written_premium_series: [], renewals_30_days: 0, open_claims: 0 } } };
+    }
     if (url.pathname === '/api/briefing') return { json: { overdue_tasks: 0, today_tasks: [], today_tasks_count: 12, unread_messages: 0, pending_approvals: 0, new_leads_24h: 1, recent_replies: [], stalled_leads: 0, active_sequences: 0, summary: 'Review the current website request.' } };
     this.unexpected.push(key);
     return { status: 501, json: { message: `Unexpected browser fixture request: ${key}` } };
@@ -419,7 +426,7 @@ export class WorkspaceData {
   }
 }
 
-export const test = base.extend<{ data: WorkspaceData; settingsOwner: void }, { authCookies: Array<{ name: string; value: string }> }>({
+export const test = base.extend<{ data: WorkspaceData; settingsOwner: void; settingsManager: void }, { authCookies: Array<{ name: string; value: string }> }>({
   authCookies: [async ({}, use) => {
     if (process.env.CRM_BROWSER_QA_ALLOWED !== '1') throw new Error('Set CRM_BROWSER_QA_ALLOWED=1 to allow creating and removing a temporary browser-verification auth user.');
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -450,6 +457,18 @@ export const test = base.extend<{ data: WorkspaceData; settingsOwner: void }, { 
     const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !anon || !key) throw new Error('The local Supabase configuration is required for owner-only Settings verification.');
+    if (!['localhost', '127.0.0.1', '::1'].includes(new URL(url).hostname)) {
+      throw new Error('Owner-only browser verification requires an isolated local Supabase database.');
+    }
+    const databaseUrl = process.env.DIRECT_URL;
+    if (process.env.CRM_LOCAL_SUPABASE_QA_DATABASE !== '1' || !databaseUrl) {
+      throw new Error('Owner verification requires CRM_LOCAL_SUPABASE_QA_DATABASE=1 and a local DIRECT_URL.');
+    }
+    const database = new URL(databaseUrl);
+    if (!['localhost', '127.0.0.1', '::1'].includes(database.hostname) || database.port !== '54322'
+      || database.pathname !== '/postgres' || !['postgres:', 'postgresql:'].includes(database.protocol)) {
+      throw new Error('Owner verification requires the isolated local Supabase database on port 54322.');
+    }
     const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
     const auth = createServerClient(url, anon, { cookies: { getAll: () => authCookies, setAll: (values) => {
       for (const cookie of values) {
@@ -472,8 +491,55 @@ export const test = base.extend<{ data: WorkspaceData; settingsOwner: void }, { 
     try {
       await use();
     } finally {
-      const removed = await admin.from('agency_members').delete().eq('user_id', identity.id);
-      if (removed.error) throw new Error('Could not remove temporary owner access after Settings verification.');
+      const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`lock table public.agency_members in access exclusive mode`;
+          const triggers = await tx.$queryRaw<Array<{ enabled: string }>>`
+            select t.tgenabled::text as enabled from pg_trigger t
+            where t.tgrelid='public.agency_members'::regclass
+              and t.tgname='protect_agency_owner_access' and not t.tgisinternal`;
+          if (triggers.length !== 1 || triggers[0].enabled !== 'O') {
+            throw new Error('Owner protection is not in its expected enabled state; refusing cleanup.');
+          }
+          await tx.$executeRaw`alter table public.agency_members disable trigger protect_agency_owner_access`;
+          const removed = await tx.$executeRaw`delete from public.agency_members m where m.user_id=${identity.id}::uuid
+            and m.email=${identity.email} and m.role='owner'
+            and exists(select 1 from auth.users u where u.id=m.user_id and u.email=${identity.email}
+              and u.raw_user_meta_data->>'crm_browser_qa'='true')`;
+          if (removed !== 1) throw new Error('The exact disposable owner membership could not be verified.');
+          await tx.$executeRaw`alter table public.agency_members enable trigger protect_agency_owner_access`;
+        });
+      } finally { await prisma.$disconnect(); }
+    }
+  },
+  settingsManager: async ({ authCookies }, use) => {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !anon || !key || !['localhost', '127.0.0.1', '::1'].includes(new URL(url).hostname)) {
+      throw new Error('Manager browser verification requires an isolated local Supabase database.');
+    }
+    const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+    const auth = createServerClient(url, anon, { cookies: { getAll: () => authCookies, setAll: (values) => {
+      for (const cookie of values) {
+        const previous = authCookies.findIndex((item) => item.name === cookie.name);
+        if (previous >= 0) authCookies.splice(previous, 1);
+        authCookies.push({ name: cookie.name, value: cookie.value });
+      }
+    } } });
+    const identity = (await auth.auth.getUser()).data.user;
+    if (!identity?.email?.startsWith('crm-browser-') || !identity.email.endsWith('@example.invalid')
+      || identity.user_metadata.crm_browser_qa !== true) throw new Error('Disposable browser identity was not verified.');
+    const existing = await admin.from('agency_members').select('user_id').eq('user_id', identity.id).maybeSingle();
+    if (existing.error || existing.data) throw new Error('The disposable browser account membership could not be verified.');
+    const membership = await admin.from('agency_members').insert({ user_id: identity.id, email: identity.email, role: 'agent', active: true,
+      direct_grants: Object.fromEntries(Object.keys(TEAM_PERMISSIONS).map((permission) => [permission, 'agency'])), setup_state: 'accepted' });
+    if (membership.error) throw new Error('Could not grant temporary manager access for browser verification.');
+    try { await use(); }
+    finally {
+      const removed = await admin.from('agency_members').delete().eq('user_id', identity.id).eq('role', 'agent');
+      if (removed.error) throw new Error('Could not remove temporary manager access after browser verification.');
     }
   },
   context: async ({ browser, authCookies, baseURL, storageState }, use) => {
@@ -524,5 +590,11 @@ export const test = base.extend<{ data: WorkspaceData; settingsOwner: void }, { 
     await use(data);
     expect(data.unexpected, 'Every browser API request must have an explicit fixture, including accidental AI requests').toEqual([]);
   }, { auto: true }],
+});
+export const managerTest = test.extend({
+  context: async ({ settingsManager, context }, use) => {
+    void settingsManager;
+    await use(context);
+  },
 });
 export { expect };

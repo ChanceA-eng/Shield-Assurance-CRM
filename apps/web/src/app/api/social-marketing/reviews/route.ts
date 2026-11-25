@@ -15,6 +15,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const parsed = validateSocialReviewCommand(await workspaceBody(request));
     if (parsed.error !== null) throw new WorkspaceError(parsed.error, 400);
     const command = parsed.command;
+    const permission = command.action === 'submit' || command.action === 'withdraw' ? 'social.edit' : 'social.approve';
+    if (session.teamAccess?.mode === 'restricted' && session.teamAccess.grants[permission] !== 'agency') {
+      throw new WorkspaceError('You do not have access to perform this review action.', 403);
+    }
     const { data, error } = await db.rpc('review_social_draft', {
       p_actor: session.user.id, p_id: command.id, p_action: command.action,
       p_expected_revision: command.expected_revision, p_expected_review_version: command.expected_review_version, p_reason: command.reason,

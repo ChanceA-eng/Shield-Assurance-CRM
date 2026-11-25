@@ -5,7 +5,7 @@ import { GET } from '../app/api/staff-records/route';
 import { GET as inbox, PATCH as review, POST as submit } from '../app/api/staff-policy-requests/route';
 import { getApiSession } from './api-auth';
 import { getSupabaseServerClient } from './supabase-server';
-import { permitsTeamRequest, teamLanding } from './team-request-access';
+import { permitsTeamRequest } from './team-request-access';
 
 vi.mock('./api-auth', () => ({ getApiSession: vi.fn() }));
 vi.mock('./supabase-server', () => ({ getSupabaseServerClient: vi.fn() }));
@@ -39,7 +39,7 @@ it('pages and searches only active leads in the permitted assignment scope', asy
     expect(url.searchParams.get('limit')).toBe('26');
     return Response.json(Array.from({ length: 26 }, (_, index) => ({ id: index, full_name: 'Synthetic lead' })));
   });
-  expect(teamLanding(access)).toBe('/leads');
+  expect(permitsTeamRequest(access, '/leads', 'GET')).toBe(true);
   const response = await read('kind=leads&page=1&q=Acme_');
   expect(response.status).toBe(200);
   expect(response.headers.get('cache-control')).toBe('private, no-store');
@@ -81,7 +81,7 @@ it('allows agency account browsing but exposes edit controls only for assigned r
 
 it('denies unauthorized record kinds and separate workflows before querying records', async () => {
   const access = grants({ 'accounts.view': 'agency', 'social.view': 'agency' });
-  expect(teamLanding(access)).toBe('/clients');
+  expect(permitsTeamRequest(access, '/clients', 'GET')).toBe(true);
   expect(permitsTeamRequest(access, '/communication/social', 'GET')).toBe(true);
   expect(permitsTeamRequest(access, '/leads', 'GET')).toBe(false);
   expect(permitsTeamRequest(access, '/api/leads', 'POST')).toBe(false);

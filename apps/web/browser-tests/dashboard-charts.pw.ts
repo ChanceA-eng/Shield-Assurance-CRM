@@ -1,11 +1,15 @@
-import { test, expect } from './workspace-fixtures';
+import { managerTest as test, expect } from './workspace-fixtures';
 
 test('premium and animated task charts are compact side-by-side, truthful and responsive', async ({ page, data }) => {
-  await page.route('**/api/metrics/home', (route) => route.fulfill({ json: {
-    total_written_premium: 1000, active_leads: 1, lead_conversion_rate: 0.5, renewals_30_days: 0, open_claims: 0,
-    written_premium_series: Array.from({ length: 12 }, (_, i) => ({ month: `Month ${i + 1}`, premium: 100 + i })),
-  } }));
-  await page.route('**/api/metrics/tasks', (route) => route.fulfill({ json: { on_time: 8, overdue: 3, open: 5, completed: 10, unclassified: 1 } }));
+  await page.route('**/api/dashboard**', (route) => {
+    const section = new URL(route.request().url()).searchParams.get('section');
+    return route.fulfill({ json: section === 'tasks' ? { tasks: { on_time: 8, overdue: 3, open: 5, completed: 10, unclassified: 1 } }
+      : section === 'renewals' ? { renewals: [] } : {
+        leads: { active: 1, conversion: 0.5, scope: 'agency' },
+        policies: { total_written_premium: 1000, renewals_30_days: 0, open_claims: 0,
+          written_premium_series: Array.from({ length: 12 }, (_, i) => ({ month: `Month ${i + 1}`, premium: 100 + i })) },
+      } });
+  });
   await page.goto('/');
   const charts = page.locator('[data-dashboard-charts]');
   await expect(charts.getByRole('img', { name: 'Task timing: 8 completed on time, 3 overdue or completed late, 5 open and not overdue, 1 timing unknown', exact: true })).toBeVisible();
@@ -29,13 +33,16 @@ test('premium and animated task charts are compact side-by-side, truthful and re
 });
 
 test('task chart distinguishes an empty dataset from failure and supports retry', async ({ page }) => {
-  await page.route('**/api/metrics/home', (route) => route.fulfill({ json: {
-    total_written_premium: 0, written_premium_series: [], active_leads: 0, lead_conversion_rate: 0, renewals_30_days: 0, open_claims: 0,
-  } }));
   let failure = true;
-  await page.route('**/api/metrics/tasks', (route) => route.fulfill(failure
-    ? { status: 503, json: { message: 'Task metrics temporarily unavailable.' } }
-    : { json: { on_time: 0, overdue: 0, open: 0, completed: 0, unclassified: 0 } }));
+  await page.route('**/api/dashboard**', (route) => {
+    const section = new URL(route.request().url()).searchParams.get('section');
+    return route.fulfill(section === 'tasks' && failure
+      ? { status: 503, json: { message: 'Task metrics temporarily unavailable.' } }
+      : { json: section === 'tasks' ? { tasks: { on_time: 0, overdue: 0, open: 0, completed: 0, unclassified: 0 } }
+        : section === 'renewals' ? { renewals: [] }
+          : { leads: { active: 0, conversion: 0, scope: 'agency' },
+            policies: { total_written_premium: 0, written_premium_series: [], renewals_30_days: 0, open_claims: 0 } } });
+  });
   await page.goto('/');
   await expect(page.getByRole('alert').filter({ hasText: 'Task metrics temporarily unavailable.' })).toBeVisible();
   await expect(page.getByText('No tasks yet.', { exact: true })).toHaveCount(0);

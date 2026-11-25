@@ -10,6 +10,7 @@ import { listSalesTemplates, renderSalesTemplate, salesFacts } from './sales-tem
 import { resolveOutboundEmailRecipient } from './message-delivery';
 import { sendAgentEmail } from './agent-email';
 import { ownedAppointment, type Appointment } from './appointment-lifecycle';
+import { assertTeamRecordSendAccess } from './team-request-access';
 
 export type AppointmentNotificationKind = 'confirmation' | 'rescheduled' | 'cancelled';
 export function appointmentNotificationKind(event: Pick<Appointment, 'status' | 'revision'>): AppointmentNotificationKind {
@@ -77,6 +78,10 @@ async function deliverAppointmentNotification(
     && !(ref.kind === 'client' && ref.id === event.client_id)) {
     throw new WorkspaceError('This appointment is not linked to this contact.', 409);
   }
+  const checkSendAccess = () => assertTeamRecordSendAccess(db, actor,
+    ref.kind === 'lead' ? ref.id : null, ref.kind === 'client' ? ref.id : null,
+    'You do not have permission to send messages for this contact.');
+  await checkSendAccess();
   if (event.status === 'completed') throw new WorkspaceError('Completed appointments cannot send booking notifications.', 409);
   const kind = appointmentNotificationKind(event);
   if (requestedKind !== undefined && requestedKind !== kind) throw new WorkspaceError('This appointment changed. Refresh before sending its current notification.', 409);
@@ -112,9 +117,20 @@ async function deliverAppointmentNotification(
   // also prevents automatic retries after uncertain Gmail acceptance.
   const current = await ownedAppointment(db, actor, event.id);
   if (current.revision !== event.revision) throw new WorkspaceError('The appointment changed. Refresh before sending.', 409);
+  await checkSendAccess();
   const result = await sendAgentEmail(db, actor, { to: recipient.recipient.to, subject, body }, {
       attemptId, clientId: recipient.recipient.clientId, leadId: recipient.recipient.leadId,
       ...(templateIdentity ? { salesTemplate: templateIdentity } : {}),
+    }, async () => {
+      const latest = await ownedAppointment(db, actor, event.id);
+      if (latest.revision !== event.revision) throw new WorkspaceError('The appointment changed. Refresh before sending.', 409);
+      const recipientNow = await resolveOutboundEmailRecipient(db, { conversationKey: conversation });
+      if (!recipientNow.ok) throw new WorkspaceError(recipientNow.message, recipientNow.status);
+      if (recipientNow.recipient.to !== recipient.recipient.to || recipientNow.recipient.leadId !== recipient.recipient.leadId
+        || recipientNow.recipient.clientId !== recipient.recipient.clientId) {
+        throw new WorkspaceError('The recipient or linked record changed. Refresh before sending.', 409);
+      }
+      await checkSendAccess();
     });
   return { message: 'Appointment saved and notification accepted by Gmail.', ...result, kind };
 }

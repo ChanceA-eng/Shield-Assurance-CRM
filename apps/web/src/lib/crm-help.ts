@@ -33,7 +33,7 @@ export const CRM_HELP = {
   },
   templates: {
     title: 'Templates and sender',
-    answer: 'In [Sales templates](/settings?tab=automation&section=templates), owners and admins edit shared wording and use **Save template**. Preview with example facts before applying. Missing merge facts must be supplied in the composer; never invent them. Delivery appends the agent signature, so do not add one to template bodies. SMS preview is not a connected SMS delivery tool. The [Sender](/settings?tab=automation&section=sender) controls agency wording; personal sender details belong in My Account. Automatic windows and daily caps use agency local time; manual approval sends immediately.',
+    answer: 'In [Sales templates](/settings?tab=automation&section=templates), choose a template to open its editor. Place the cursor in the subject, email or SMS and use **Insert tag**; the preview uses example facts. Save shared changes with **Save template**. Missing facts must be supplied in the composer; never invent them. Delivery appends the agent signature, so do not add one to template bodies. SMS preview is not a connected SMS delivery tool. The [Sender](/settings?tab=automation&section=sender) controls agency wording; personal sender details belong in My Account. Automatic windows and daily caps use agency local time; manual approval sends immediately.',
   },
   permissions: {
     title: 'Marketing permission',

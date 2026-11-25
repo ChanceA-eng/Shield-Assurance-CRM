@@ -17,7 +17,28 @@ export interface HomeMetrics {
   open_claims: number;
 }
 
-export async function loadHomePremiumMetrics(supabase: SupabaseClient, now = new Date()): Promise<{
+export interface DashboardData {
+  leads: { active: number; conversion: number; scope: 'agency' | 'assigned' } | null;
+  policies: {
+    scope?: 'agency' | 'assigned';
+    total_written_premium: number;
+    written_premium_series: PremiumMonth[];
+    renewals_30_days: number;
+    open_claims: number;
+  } | null;
+}
+
+export interface DashboardRenewal {
+  id: string;
+  insured_name: string;
+  carrier: string;
+  line_of_business: string;
+  premium: number | string | null;
+  renewal_date: string | null;
+  expiration_date: string | null;
+}
+
+export async function loadHomePremiumMetrics(supabase: SupabaseClient, now = new Date(), actor?: string): Promise<{
   total_written_premium: number;
   written_premium_series: PremiumMonth[];
 }> {
@@ -30,7 +51,9 @@ export async function loadHomePremiumMetrics(supabase: SupabaseClient, now = new
       premium: 0,
     };
   });
-  const result = await supabase.rpc('home_premium_summary', { p_first_month: `${buckets[0]!.key}-01` });
+  const result = actor
+    ? await supabase.rpc('team_assigned_premium_summary', { p_actor: actor, p_first_month: `${buckets[0]!.key}-01` })
+    : await supabase.rpc('home_premium_summary', { p_first_month: `${buckets[0]!.key}-01` });
   if (result.error) throw databaseError(result.error);
   const data: unknown = result.data;
   if (!isRecord(data) || !Array.isArray(data.months) || data.months.length !== 12

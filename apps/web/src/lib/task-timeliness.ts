@@ -2,7 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { databaseError } from './workspace-api';
 import { agencyInputToIso } from './agency-time';
 import { WorkspaceError } from './record-scope';
-import { absoluteDateTime } from './workspace-validation';
+import { absoluteDateTime, isRecord } from './workspace-validation';
+import type { TaskScope } from './task-access';
 
 export interface TaskTimeliness { on_time: number; overdue: number; open: number; completed: number; unclassified: number }
 export interface TimelinessTask { status: string; due_date: string | null; completed_at: string | null }
@@ -32,15 +33,25 @@ export function taskTimeliness(rows: TimelinessTask[], now = new Date()): TaskTi
   return result;
 }
 
-export async function loadTaskTimeliness(db: SupabaseClient, now = new Date()): Promise<TaskTimeliness> {
+export async function loadTaskTimeliness(db: SupabaseClient, now = new Date(), access?: { actor: string; scope: TaskScope }): Promise<TaskTimeliness> {
   const total: TaskTimeliness = { on_time: 0, overdue: 0, open: 0, completed: 0, unclassified: 0 };
   for (let offset = 0; ; offset += 1000) {
-    const { data, error } = await db.from('active_workspace_tasks').select('status,due_date,completed_at')
-      .in('status', ['open', 'completed']).order('id').range(offset, offset + 999).returns<TimelinessTask[]>();
+    let query = (access?.scope === 'assigned'
+      ? db.rpc('team_assigned_workspace_tasks', { p_actor: access.actor, p_include_archived: false }).select('status,due_date,completed_at')
+      : db.from('active_workspace_tasks').select('status,due_date,completed_at')).in('status', ['open', 'completed']);
+    if (access?.scope === 'self') query = query.eq('created_by_user_id', access.actor).is('related_id', null).is('account_id', null);
+    const { data, error } = await query.order('id').range(offset, offset + 999);
     if (error) throw databaseError(error);
-    const counts = taskTimeliness(data ?? [], now);
+    const raw: unknown = data;
+    if (!Array.isArray(raw) || !raw.every((row: unknown): row is TimelinessTask => isRecord(row)
+      && typeof row.status === 'string'
+      && (row.due_date === null || typeof row.due_date === 'string')
+      && (row.completed_at === null || typeof row.completed_at === 'string'))) {
+      throw new Error('Task metrics returned invalid rows.');
+    }
+    const counts = taskTimeliness(raw, now);
     total.on_time += counts.on_time; total.overdue += counts.overdue; total.unclassified += counts.unclassified;
     total.open += counts.open; total.completed += counts.completed;
-    if (!data || data.length < 1000) return total;
+    if (raw.length < 1000) return total;
   }
 }

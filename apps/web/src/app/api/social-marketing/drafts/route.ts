@@ -37,7 +37,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const parsed = validateSocialDraftCommand(await workspaceBody(request));
     if (parsed.error !== null) throw new WorkspaceError(parsed.error, 400);
     const command = parsed.command;
-    if (session.teamAccess?.mode === 'restricted' && (session.teamAccess.grants['social.edit'] !== 'agency' || command.action === 'archive')) {
+    if (session.teamAccess?.mode === 'restricted'
+      && session.teamAccess.grants[command.action === 'archive' ? 'social.delete' : 'social.edit'] !== 'agency') {
       throw new WorkspaceError('You do not have access to perform this draft action.', 403);
     }
     const { data, error } = await db.rpc('save_social_draft', {

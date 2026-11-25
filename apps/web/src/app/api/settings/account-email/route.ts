@@ -15,7 +15,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     if (!db) throw new WorkspaceError('Account security is unavailable.', 503);
     requireTeamPermission(session.teamAccess, 'team.manage');
     if (request.method === 'GET') {
-      return NextResponse.json({ requests: await readPendingEmailChanges(db) }, { headers: { 'Cache-Control': 'private, no-store' } });
+      return NextResponse.json({ requests: await readPendingEmailChanges(db, session.user.id) }, { headers: { 'Cache-Control': 'private, no-store' } });
     }
     const body = await workspaceBody(request);
     if (!isUuid(body.id) || typeof body.approve !== 'boolean') throw new WorkspaceError('Choose a current email change request.', 400);

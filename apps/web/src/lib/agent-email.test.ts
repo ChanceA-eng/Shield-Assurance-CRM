@@ -6,6 +6,7 @@ import { gmailRequest, getOwnGmailConnection } from './gmail-provider';
 import { agencyEnabled, agentSender } from './agency-membership';
 import { getOutreachSender } from './marketing-profile';
 import { DEFAULT_EMAIL_DESIGN, DEFAULT_OUTREACH_SENDER, documentFromText } from '@crm/shared';
+import { WorkspaceError } from './record-scope';
 
 vi.mock('./gmail-provider', () => ({ getOwnGmailConnection: vi.fn(), gmailRequest: vi.fn() }));
 vi.mock('./agency-membership', () => ({ agencyEnabled: vi.fn(() => true), agentSender: vi.fn() }));
@@ -56,6 +57,12 @@ it('uses the saved personal signature when sending through personal Gmail', asyn
   const mime = Buffer.from(sent.raw, 'base64url').toString();
   const plain = /Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+)\r\n--/.exec(mime)?.[1];
   expect(Buffer.from(plain ?? '', 'base64').toString()).toContain('My updated signature');
+});
+it('blocks unresolved signature details before claiming or sending', async () => {
+  signature = 'Regards, {{agent_name}}';
+  await expect(sendAgentEmail(db, user, input, options)).rejects.toThrow('layout and signature');
+  expect(calls.some((call) => call.name === 'agent_email_attempts' && call.method === 'POST')).toBe(false);
+  expect(gmailRequest).not.toHaveBeenCalled();
 });
 it('includes rich body and personal signature styles in Gmail and its durable formatting snapshot', async () => {
   const bodyDocument = documentFromText(input.body);
@@ -141,6 +148,26 @@ it('blocks concurrent duplicate claims without a second provider call', async ()
   respond = (call) => call.name === 'agent_email_attempts' && call.method === 'POST'
     ? Response.json({ code: '23505', message: 'duplicate' }, { status: 409 }) : original(call);
   await expect(sendAgentEmail(db, user, input, options)).rejects.toThrow('Another request claimed');
+  expect(gmailRequest).not.toHaveBeenCalled();
+});
+it('releases the claimed attempt if the final authorization check rejects the send', async () => {
+  const original = respond;
+  respond = (call) => call.name === 'agent_email_attempts' && call.method === 'DELETE'
+    ? Response.json({ id: options.attemptId }) : original(call);
+  const recheck = vi.fn(async () => { throw new WorkspaceError('Access was revoked.', 403); });
+  await expect(sendAgentEmail(db, user, input, options, recheck)).rejects.toMatchObject({ status: 403 });
+  const release = calls.find((call) => call.name === 'agent_email_attempts' && call.method === 'DELETE');
+  expect(release?.url.searchParams.get('id')).toBe(`eq.${options.attemptId}`);
+  expect(release?.url.searchParams.get('user_id')).toBe(`eq.${user}`);
+  expect(release?.url.searchParams.get('status')).toBe('eq.sending');
+  expect(gmailRequest).not.toHaveBeenCalled();
+});
+it('reports when a denied attempt cannot be released', async () => {
+  const original = respond;
+  respond = (call) => call.name === 'agent_email_attempts' && call.method === 'DELETE'
+    ? Response.json({ code: 'XX000', message: 'release failed' }, { status: 500 }) : original(call);
+  await expect(sendAgentEmail(db, user, input, options, async () => { throw new WorkspaceError('Access was revoked.', 403); }))
+    .rejects.toMatchObject({ status: 503, message: expect.stringContaining('No email was sent') });
   expect(gmailRequest).not.toHaveBeenCalled();
 });
 it('surfaces the shared mailbox limit without a Gmail request', async () => {

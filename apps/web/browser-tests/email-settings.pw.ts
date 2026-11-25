@@ -1,9 +1,9 @@
-import { test, expect } from './workspace-fixtures';
+import { test, managerTest, expect } from './workspace-fixtures';
 import { DEFAULT_OPPORTUNITY_SETTINGS } from '@crm/shared';
 
 const owner = { user_id: 'cf98e001-b31a-4fbc-9eba-31ac9215d439', email: 'owner@example.invalid', role: 'owner', active: true,
   role_title: null, team_name: null, direct_grants: null, setup_state: null, access_version: 1, invitation_id: null };
-const teamResponse = (members: object[]) => ({ owner: true, managerGrants: null, members, invitationIssue: null, activity: [] });
+const teamResponse = (members: object[]) => ({ owner: true, managerGrants: null, members, presets: [], invitationIssue: null, activity: [] });
 
 test('Settings switches without server reloads, retains drafts and cached data, and supports browser Back', async ({ page, settingsOwner }) => {
   void settingsOwner;
@@ -32,8 +32,7 @@ test('Settings switches without server reloads, retains drafts and cached data, 
   expect(serverNavigations).toEqual([]);
 });
 
-test('Inline invitation preserves a failed draft, retries and refreshes the member list', async ({ page, settingsOwner }) => {
-  void settingsOwner;
+managerTest('Invitation dialog preserves a failed draft, retries and refreshes the member list', async ({ page }) => {
   const members: object[] = [owner];
   const invitations: unknown[] = [];
   await page.route('**/api/agency**', async (route) => {
@@ -49,17 +48,21 @@ test('Inline invitation preserves a failed draft, retries and refreshes the memb
     return route.fulfill({ json: teamResponse(members) });
   });
   await page.goto('/settings?tab=team');
+  await page.getByRole('button', { name: 'Add member', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Add team member' })).toBeVisible();
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('New Member');
   await page.getByRole('textbox', { name: 'Email', exact: true }).fill('new-agent@example.invalid');
   await page.getByRole('textbox', { name: 'Role title', exact: true }).fill('Renewal Coordinator');
-  const send = page.getByRole('button', { name: 'Send invite', exact: true });
   await expect(page.getByRole('checkbox', { name: 'View leads', exact: true })).not.toBeChecked();
   await page.getByRole('checkbox', { name: 'View leads', exact: true }).check();
+  await page.getByRole('button', { name: 'Review access', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Invitation review' })).toContainText('View leads — Assigned only');
+  const send = page.getByRole('button', { name: 'Send invite', exact: true });
   await send.click();
   await expect(page.getByText('Invitation service unavailable. Try again.', { exact: true })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Email', exact: true })).toHaveValue('new-agent@example.invalid');
+  await expect(page.getByRole('region', { name: 'Invitation review' })).toContainText('new-agent@example.invalid');
   await send.click();
-  await expect(page.getByRole('textbox', { name: 'Email', exact: true })).toHaveValue('');
+  await expect(page.getByRole('dialog', { name: 'Add team member' })).toHaveCount(0);
   await expect(page.getByText('new-agent@example.invalid', { exact: true })).toBeVisible();
   const row = page.getByRole('listitem').filter({ hasText: 'new-agent@example.invalid' });
   await row.getByRole('button', { name: 'Edit access' }).click();

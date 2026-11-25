@@ -4,6 +4,8 @@ import { staffRecords, staffRecordScope, visibleStaffRecords } from './staff-rec
 import { canAccessTeamPage } from './team-page-access';
 import type { TeamPermission, TeamScope } from '@crm/shared';
 import { WorkspaceError } from './record-scope';
+import { databaseError } from './workspace-api';
+import { hasUnrestrictedConversationAccess } from './staff-workspace';
 
 type Grants = Readonly<Record<string, unknown>>;
 export type RequestAccess = ({ mode: 'legacy' } | { mode: 'restricted'; grants: Grants }) & {
@@ -25,6 +27,16 @@ export function requireTeamPermission(access: RequestAccess | undefined, permiss
   if (!hasTeamPermission(access, permission, requiredScope)) {
     throw new WorkspaceError(`The ${permission} permission is required.`, 403);
   }
+}
+
+export async function assertTeamRecordSendAccess(
+  db: SupabaseClient, actor: string, leadId: string | null, clientId: string | null, message: string,
+): Promise<void> {
+  const { data, error } = await db.rpc('team_record_dispatch_allowed', {
+    p_actor: actor, p_lead: leadId, p_client: clientId,
+  });
+  if (error) throw databaseError(error);
+  if (data !== true) throw new WorkspaceError(message, 403);
 }
 
 export function accountRecordScope(
@@ -76,6 +88,18 @@ export function permitsTeamRequest(access: RequestAccess, pathname: string, meth
   }
   const policy = teamApiRoutePolicy(pathname, method);
   const read = method === 'GET' || method === 'HEAD';
+  if ((['/api/communication-log/delivery', '/api/communication-log/unread', '/api/communication-log/unread-by-lead',
+    '/api/communication-log/mark-read', '/api/communication/scheduled', '/api/scheduled-messages', '/api/gmail/threads'].includes(pathname)
+    || /^\/api\/leads\/[^/]+\/scheduled-messages$/.test(pathname)) && !hasUnrestrictedConversationAccess(access)) return false;
+  if (pathname === '/api/communication-log' && method === 'POST' && !hasUnrestrictedConversationAccess(access)) return false;
+  if (read && ['/api/metrics/home', '/api/briefing', '/api/recent'].includes(pathname)) {
+    const required: TeamPermission[] = pathname === '/api/metrics/home'
+      ? ['dashboard.view', 'leads.view', 'accounts.view', 'policies.view']
+      : pathname === '/api/recent'
+        ? ['dashboard.view', 'leads.view', 'accounts.view', 'messages.view', 'tasks.view']
+        : ['dashboard.view', 'leads.view', 'messages.view', 'tasks.view', 'campaigns.view'];
+    return required.every((permission) => access.grants[permission] === 'agency');
+  }
   if (policy?.kind === 'permission') {
     const granted = policy.permissions.some((permission) => {
       const scope = access.grants[permission];
@@ -107,6 +131,8 @@ export function permitsTeamRequest(access: RequestAccess, pathname: string, meth
   }
   if (policy?.kind === 'permission') return false;
   if (policy?.kind !== 'handler') return false;
+  if (policy.handler === 'dashboard') return read && pathname === '/api/dashboard';
+  if (policy.handler === 'personnel') return true;
   if (read && policy.handler === 'records' && pathname === '/api/staff-records') {
     return !!(staffRecordScope(access, 'leads') || staffRecordScope(access, 'accounts') || staffRecordScope(access, 'policies'));
   }
@@ -161,18 +187,20 @@ export function permitsTeamRequest(access: RequestAccess, pathname: string, meth
     const permission = read ? 'calendar.view' : 'calendar.edit';
     if ((pathname === '/api/google-calendar/connect' || pathname === '/api/google-calendar/freebusy'
       || pathname === '/api/zoom/connect') && access.grants['integrations.manage'] === 'agency') return true;
-    return access.grants[permission] === 'agency'
-      || (access.grants[permission] === 'self' && (pathname === '/api/events'
-        || /^\/api\/events\/[^/]+\/(confirmation|sync)$/.test(pathname)));
+    if (pathname === '/api/events' || /^\/api\/events\/[^/]+\/(?:sync|confirmation)$/.test(pathname)) {
+      return hasTeamPermission(access, permission, 'self');
+    }
+    return access.grants[permission] === 'agency';
   }
   if (policy.handler === 'shell') return false;
   if (policy.handler === 'agency') {
+    if (pathname === '/api/agency/time-zone') return read;
     if (pathname === '/api/agency/assignment') {
       const type = new URLSearchParams(search).get('record_type');
       return type === 'lead' ? access.grants['leads.assign'] === 'agency'
         : type === 'client' && access.grants['accounts.assign'] === 'agency';
     }
-    if (pathname === '/api/agency/sender' || pathname === '/api/agency/time-zone' || pathname === '/api/agency/outreach') {
+    if (pathname === '/api/agency/sender' || pathname === '/api/agency/outreach') {
       return access.grants['agency.manage'] === 'agency';
     }
     return false;
@@ -184,7 +212,7 @@ export function permitsTeamRequest(access: RequestAccess, pathname: string, meth
   }
   if (policy.handler === 'social') {
     if (read) return access.grants['social.view'] === 'agency';
-    if (pathname.endsWith('/reviews')) return access.grants['social.approve'] === 'agency';
+    if (pathname.endsWith('/reviews')) return access.grants['social.edit'] === 'agency' || access.grants['social.approve'] === 'agency';
     if (pathname.endsWith('/connections') || pathname.includes('/connections/')) return access.grants['social.connections'] === 'agency';
     if (pathname.endsWith('/engine')) return access.grants['social.publish'] === 'agency' || access.grants['social.publish_direct'] === 'agency';
     if (pathname.endsWith('/drafts') || pathname.endsWith('/media') || pathname.endsWith('/captions')) return access.grants['social.edit'] === 'agency';
@@ -194,6 +222,10 @@ export function permitsTeamRequest(access: RequestAccess, pathname: string, meth
 
 function assignedRouteIsScoped(access: RequestAccess, pathname: string, method: string, permission: string): boolean {
   return (pathname === '/api/staff-records' && method === 'GET')
+    || (permission === 'messages.view' && method === 'GET'
+      && (pathname === '/api/communication-log' || pathname === '/api/communication/inbox'
+        || /^\/api\/leads\/[^/]+\/conversation$/.test(pathname)))
+    || (permission === 'messages.view' && pathname === '/api/communication-log' && method === 'PATCH')
     || (/^\/api\/clients\/[^/]+$/.test(pathname) && method === 'GET'
       && accountRecordScope(access, 'accounts.view') === 'assigned')
     || (pathname === '/api/clients' && method === 'PATCH'
@@ -205,11 +237,4 @@ function assignedRouteIsScoped(access: RequestAccess, pathname: string, method: 
           ? accountRecordScope(access, 'documents.edit') === 'assigned'
           : permission === 'documents.delete' && method === 'DELETE'
             ? accountRecordScope(access, 'documents.delete') === 'assigned' : false));
-}
-
-export function teamLanding(access: RequestAccess): string {
-  if (access.mode === 'legacy') return '/';
-  const candidates = ['/', '/tasks', '/clients', '/leads', '/policies', '/communication', '/communication/social',
-    '/outreach', '/scheduler', '/reports', '/rashi', '/learning', '/account'];
-  return candidates.find((path) => canAccessTeamPage(access, path)) ?? '/account';
 }

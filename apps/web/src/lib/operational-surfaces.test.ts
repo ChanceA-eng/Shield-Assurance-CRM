@@ -4,7 +4,8 @@ import { NextRequest } from 'next/server';
 import { getApiSession, requireApiSession } from './api-auth';
 import { getSupabaseServerClient } from './supabase-server';
 import { GET as inbox } from '../app/api/communication/inbox/route';
-import { GET as thread } from '../app/api/communication-log/route';
+import { GET as thread, PATCH as markRead } from '../app/api/communication-log/route';
+import { GET as leadThread } from '../app/api/leads/[id]/conversation/route';
 import { PATCH as assign } from '../app/api/workday/route';
 import { trackedAutomation } from './automation-health';
 
@@ -30,6 +31,9 @@ beforeEach(() => {
     }
     if (url.pathname.endsWith('update_workday_source')) return failState
       ? Response.json({ code: '40001', message: 'Another agent changed this work.' }, { status: 409 }) : Response.json({ work_id: body?.p_id });
+    if (url.pathname.endsWith('team_conversation_thread')) return Response.json({ clientId: null, items: [{ id: account }], total: 2, nextOffset: 1 });
+    if (url.pathname.endsWith('team_conversation_inbox')) return Response.json({ conversations: [{ key: `lead:${account}`, email: 'person@example.invalid' }], total: 1, page: 0, page_size: 25 });
+    if (url.pathname.endsWith('team_mark_conversation_read')) return Response.json({ updated: 1, ids: [account] });
     if (url.pathname.endsWith('conversation_inbox')) return Response.json([{ key: `client:${account}`, email: 'account@example.invalid' }], { headers: { 'Content-Range': '25-49/1200' } });
     return Response.json([{ id: account, conversation_key: `client:${account}` }], { headers: { 'Content-Range': '200-200/201' } });
   };
@@ -51,6 +55,25 @@ it('uses canonical account identity and returns explicit next-page metadata', as
   expect(requests[0].url.pathname).toContain('canonical_communications');
   expect(requests[0].url.searchParams.get('conversation_key')).toBe(`eq.client:${account}`);
   expect(requests[0].url.searchParams.get('offset')).toBe('200');
+});
+it('uses the database-scoped thread for assigned users and denies unscoped reads', async () => {
+  vi.mocked(getApiSession).mockResolvedValue({ user, error: null, teamAccess: { mode: 'restricted',
+    grants: { 'messages.view': 'assigned', 'leads.view': 'assigned' } } });
+  const result = await thread(new NextRequest(`http://localhost/api/communication-log?lead_id=${account}&limit=1`));
+  expect(result.status).toBe(200);
+  expect(await result.json()).toEqual([{ id: account }]);
+  expect(result.headers.get('X-Next-Offset')).toBe('1');
+  expect(requests[0].body).toMatchObject({ p_actor: user.id, p_type: 'lead', p_id: account, p_limit: 1 });
+  expect((await thread(new NextRequest('http://localhost/api/communication-log'))).status).toBe(403);
+  expect((await thread(new NextRequest('http://localhost/api/communication-log?conversation_key=unmatched:person@example.test'))).status).toBe(403);
+  const lead = await leadThread(new NextRequest(`http://localhost/api/leads/${account}/conversation`), { params: Promise.resolve({ id: account }) });
+  expect(lead.status).toBe(200);
+  expect(await lead.json()).toMatchObject({ items: [{ id: account }], total: 2 });
+  const list = await inbox(new NextRequest('http://localhost/api/communication/inbox'));
+  expect(await list.json()).toMatchObject({ conversations: [{ href: `/communication?conversation=lead%3A${account}` }] });
+  const marked = await markRead(new NextRequest('http://localhost/api/communication-log', { method: 'PATCH', body: JSON.stringify({ read_ids: [account] }) }));
+  expect(await marked.json()).toEqual({ updated: 1, ids: [account] });
+  expect(requests).toHaveLength(4);
 });
 it('validates source-only assignment and exposes concurrent edits', async () => {
   const request = (body: object): NextRequest => new NextRequest('http://localhost/api/workday', { method: 'PATCH', body: JSON.stringify(body) });

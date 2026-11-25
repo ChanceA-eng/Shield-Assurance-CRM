@@ -24,13 +24,15 @@ it('denies a signed-in nonmember and admits an active member even with the mailb
   expect(rpc).toHaveBeenCalledWith('agency_session_allowed');
 });
 
-it('routes content members to content and denies direct navigation to customer records', async () => {
+it('admits content members to the scoped dashboard and denies direct navigation to customer records', async () => {
   getUser.mockResolvedValue({ data: { user: { id: 'member' } } });
   rpc.mockImplementation(async (name: string) => ({
     error: null, data: name === 'agency_session_allowed' ? true : { mode: 'restricted', grants: { 'social.view': 'agency' } },
   }));
   const home = await middleware(new NextRequest('http://localhost/'));
-  expect(home.headers.get('location')).toBe('http://localhost/communication/social');
+  expect(home.status).toBe(200);
+  expect(home.headers.get('location')).toBeNull();
+  expect(home.headers.get(`x-middleware-request-${STAFF_WORKSPACE_HEADER}`)).toBe('social-reader');
   expect((await middleware(new NextRequest('http://localhost/clients/workspace'))).status).toBe(403);
   expect((await middleware(new NextRequest('http://localhost/communication/social'))).status).toBe(200);
 });

@@ -8,7 +8,7 @@ import SectionLayout from '../../../components/crm/SectionLayout';
 import { Card, CardBody, CardHeader } from '../../../components/ui/Card';
 import { workspaceFetch } from '../../../lib/workspace-fetch';
 import { useUnsavedChanges } from '../../../context/WorkspaceNavigationContext';
-import { useStaffWorkspace } from '../../../context/StaffWorkspaceContext';
+import { useStaffAccess, useStaffWorkspace } from '../../../context/StaffWorkspaceContext';
 import { formatArizonaDateTime } from '../../../lib/arizona-time';
 import SocialMediaLibrary, { SocialImagePreview } from '../../../components/crm/SocialMediaLibrary';
 import SocialCaptionHelp from '../../../components/crm/SocialCaptionHelp';
@@ -32,8 +32,10 @@ const reviewColors = {
 
 export default function SocialMarketingPage(): JSX.Element {
   const workspace = useStaffWorkspace();
+  const access = useStaffAccess();
   const full = workspace === 'full';
   const canEdit = full || workspace === 'social-editor';
+  const canArchive = full || (access.mode === 'restricted' && access.grants['social.delete'] === 'agency');
   const [list, setList] = useState<DraftList>({ posts: [], total: 0 });
   const [status, setStatus] = useState('draft');
   const [offset, setOffset] = useState(0);
@@ -169,7 +171,7 @@ export default function SocialMarketingPage(): JSX.Element {
               <p className="mt-2 line-clamp-2 min-h-10 whitespace-pre-wrap break-words text-sm text-cui-muted">{post.caption || 'No caption yet.'}</p>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2 pt-1">
                 <p className="text-xs text-cui-muted">Revision {post.revision}<br />{formatArizonaDateTime(post.updated_at)} AZ</p>
-                {full && post.status === 'draft' ? <button className="rounded px-2 py-1 text-xs font-semibold text-cui-muted hover:bg-cui-light hover:text-cui-text" disabled={busy} onClick={() => { setError(''); setArchive(post); }}>Archive</button> : null}
+                {canArchive && post.status === 'draft' ? <button className="rounded px-2 py-1 text-xs font-semibold text-cui-muted hover:bg-cui-light hover:text-cui-text" disabled={busy} onClick={() => { setError(''); setArchive(post); }}>Archive</button> : null}
               </div>
             </div>
           </article>)}
@@ -230,7 +232,7 @@ export default function SocialMarketingPage(): JSX.Element {
             {!readOnly ? <button type="button" disabled={busy} className="mt-2 text-xs font-semibold text-cui-muted underline hover:text-cui-danger" onClick={() => setEditor({ ...editor, media_ids: [] })}>Remove image from draft</button> : null}</div>
           </div> : null}
           {!readOnly && showMedia ? <SocialMediaLibrary selected={editor.media_ids[0]} disabled={busy} onBusyChange={setBusy} onSelect={(asset) => setEditor((current) => current ? { ...current, media_ids: [asset.id] } : current)} /> : null}
-          {full && editor.saved && !readOnly ? <div className="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70">
+          {editor.saved && !archived && (canEdit || editor.can_review) ? <div className="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70">
             <div className="flex flex-wrap items-center justify-between gap-2"><p className="inline-flex items-center gap-2 text-sm font-semibold"><ShieldCheck size={17} className="text-cui-primary" aria-hidden />Content review</p>
             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${reviewColors[editor.saved.review_state]}`}>{SOCIAL_REVIEW_LABELS[editor.saved.review_state]}</span></div>
             <p className="mt-3 text-xs text-slate-500">Revision {editor.saved.revision}</p>
@@ -240,13 +242,13 @@ export default function SocialMarketingPage(): JSX.Element {
               Review note (required for changes)<textarea rows={2} maxLength={1000} className={inputClass} disabled={busy} value={reviewReason} onChange={(event) => setReviewReason(event.target.value)} />
             </label> : null}
             <div className="mt-3 flex flex-wrap gap-2">
-              {['not_submitted','changes_requested'].includes(editor.saved.review_state) ? <button type="button" className={secondaryClass} disabled={busy || dirty || !editor.saved.caption.trim()} onClick={() => void review('submit')}>Request review</button> : null}
+              {canEdit && ['not_submitted','changes_requested'].includes(editor.saved.review_state) ? <button type="button" className={secondaryClass} disabled={busy || dirty || !editor.saved.caption.trim()} onClick={() => void review('submit')}>Request review</button> : null}
               {editor.saved.review_state === 'awaiting_review' ? <>
-                <button type="button" className={secondaryClass} disabled={busy || dirty} onClick={() => void review('withdraw')}>Withdraw review</button>
+                {canEdit ? <button type="button" className={secondaryClass} disabled={busy || dirty} onClick={() => void review('withdraw')}>Withdraw review</button> : null}
                 {editor.can_review ? <>
                   <button type="button" className={buttonClass} disabled={busy || dirty} onClick={() => void review('approve')}>Approve content</button>
                   <button type="button" className={secondaryClass} disabled={busy || dirty || !reviewReason.trim()} onClick={() => void review('request_changes')}>Request changes</button>
-                </> : <p className="text-xs text-cui-muted">An active owner or administrator must review this revision.</p>}
+                </> : <p className="text-xs text-cui-muted">A person with social approval access must review this revision.</p>}
               </> : null}
             </div>
           </div> : null}

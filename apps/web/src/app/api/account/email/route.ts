@@ -7,7 +7,6 @@ import { accountOrigin, reauthenticate, securityLimit, type EmailChange } from '
 import { sendAccountMail } from '../../../../lib/account-mail';
 import { WorkspaceError } from '../../../../lib/record-scope';
 import { databaseError, workspaceApiError, workspaceBody } from '../../../../lib/workspace-api';
-import { hasTeamPermission } from '../../../../lib/team-request-access';
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
@@ -52,7 +51,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     await securityLimit(db, 'email-request', session.user.id);
     const result = await db.rpc('request_account_email', { p_actor: session.user.id, p_email: body.email });
     if (result.error) throw databaseError(result.error);
-    return NextResponse.json({ message: !hasTeamPermission(session.teamAccess, 'team.manage')
+    const saved = await db.from('account_email_changes').select('status').eq('id', result.data).eq('user_id', session.user.id).single();
+    if (saved.error) throw databaseError(saved.error);
+    if (!saved.data || !['pending', 'approved'].includes(saved.data.status)) throw new WorkspaceError('The email change status could not be confirmed. Reload Security.', 503);
+    return NextResponse.json({ message: saved.data.status === 'pending'
       ? 'Request sent for administrator approval. After approval, return here to verify both addresses.'
       : 'Request saved. Send verification links to confirm both addresses.' });
   } catch (error) { return workspaceApiError(error, 'account/email'); }

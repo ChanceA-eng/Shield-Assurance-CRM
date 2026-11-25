@@ -9,7 +9,7 @@ export interface TeamPageRequirement {
 
 const pageRules: ReadonlyArray<{ test: (pathname: string) => boolean; permissions: readonly TeamPermission[]; scope?: TeamScope; mode?: 'all' | 'any' }> = [
   { test: (path) => path === '/account', permissions: [] },
-  { test: (path) => path === '/', permissions: ['dashboard.view'], scope: 'agency' },
+  { test: (path) => path === '/', permissions: [] },
   { test: (path) => path === '/settings', permissions: ['team.manage'] },
   { test: (path) => path.startsWith('/settings/'), permissions: ['agency.manage'] },
   { test: (path) => path.startsWith('/leads/finder'), permissions: ['leads.prospect'], scope: 'agency' },
@@ -20,9 +20,11 @@ const pageRules: ReadonlyArray<{ test: (pathname: string) => boolean; permission
     permissions: ['policies.view', 'accounts.view'], scope: 'assigned', mode: 'all' },
   { test: (path) => path === '/tasks' || path.startsWith('/tasks/'), permissions: ['tasks.view'], scope: 'self' },
   { test: (path) => path === '/workday', permissions: ['tasks.view'], scope: 'agency' },
-  { test: (path) => path.startsWith('/scheduler'), permissions: ['calendar.view'] },
+  { test: (path) => path.startsWith('/scheduler'), permissions: ['calendar.view'], scope: 'self' },
   { test: (path) => path.startsWith('/communication/social'), permissions: ['social.view'], scope: 'agency' },
-  { test: (path) => path.startsWith('/communication'), permissions: ['messages.view'], scope: 'agency' },
+  { test: (path) => path === '/templates', permissions: ['content.view'], scope: 'agency' },
+  { test: (path) => path === '/communication', permissions: ['messages.view'], scope: 'assigned' },
+  { test: (path) => path.startsWith('/communication/'), permissions: ['messages.view'], scope: 'agency' },
   { test: (path) => path.startsWith('/outreach/campaigns') || path.startsWith('/outreach/enrollments'), permissions: ['campaigns.view'], scope: 'agency' },
   { test: (path) => path.startsWith('/outreach'), permissions: ['automation.view'], scope: 'agency' },
   { test: (path) => path.startsWith('/reports'), permissions: ['reports.view'], scope: 'agency' },

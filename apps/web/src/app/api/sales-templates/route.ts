@@ -8,30 +8,43 @@ import { draftOutreach } from '../../../lib/outreach-ai';
 import { recordOutreachContext } from '../../../lib/lead-outreach-context';
 import { parseConversationKey } from '../../../lib/conversations';
 import { conversationAppointments } from '../../../lib/appointment-confirmation';
-import { hasTeamPermission } from '../../../lib/team-request-access';
+import { hasTeamPermission, type RequestAccess } from '../../../lib/team-request-access';
+
+function requireConversationAccess(access: RequestAccess | undefined, conversation: string, send: boolean): void {
+  const ref = parseConversationKey(conversation);
+  if (!ref) throw new WorkspaceError('Choose a contact or conversation.', 400);
+  if (!hasTeamPermission(access, send ? 'messages.send' : 'messages.view')
+    || (ref.kind === 'lead' && !hasTeamPermission(access, 'leads.view'))
+    || (ref.kind === 'client' && !hasTeamPermission(access, 'accounts.view'))
+    || (ref.kind === 'unmatched' && (!hasTeamPermission(access, 'leads.view') || !hasTeamPermission(access, 'accounts.view')))) {
+    throw new WorkspaceError('Conversation templates require access to this conversation and its records.', 403);
+  }
+}
 
 async function access(request: NextRequest) {
   const session = await getApiSession(request);
   if (session.error) throw new WorkspaceError('Sign in before using templates.', 401);
   const db = getSupabaseServerClient();
   if (!db) throw new WorkspaceError('The CRM database is not connected.', 503);
-  return { db, actor: session.user.id, canManage: hasTeamPermission(session.teamAccess, 'content.edit') };
+  return { db, actor: session.user.id, teamAccess: session.teamAccess, canManage: hasTeamPermission(session.teamAccess, 'content.edit') };
 }
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
-    const { db, actor, canManage } = await access(request);
+    const { db, actor, teamAccess, canManage } = await access(request);
     const conversation = request.nextUrl.searchParams.get('conversation');
+    if (conversation) requireConversationAccess(teamAccess, conversation, false);
     const templates = await listSalesTemplates(db);
     const facts = conversation ? await salesFacts(db, actor, conversation) : {};
     return NextResponse.json({ templates: canManage && !conversation ? templates : templates.filter((row) => !row.archived),
-      canManage, facts, recommended: conversation ? await suggestedSalesTemplates(db, conversation, facts) : [] },
+      canManage, canArchive: hasTeamPermission(teamAccess, 'content.delete'), facts,
+      recommended: conversation ? await suggestedSalesTemplates(db, conversation, facts) : [] },
     { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) { return workspaceApiError(error, 'sales-templates/read'); }
 }
 export async function PATCH(request: NextRequest): Promise<NextResponse> {
   try {
     const { db, actor, canManage } = await access(request);
-    if (!canManage) throw new WorkspaceError('Only owners and admins can save shared templates.', 403);
+    if (!canManage) throw new WorkspaceError('Reusable content editing permission is required to save shared templates.', 403);
     const template = parseSalesTemplate(await workspaceBody(request));
     const saved = await db.rpc('save_sales_template', { p_actor: actor, p_id: template.id, p_expected: template.revision, p_values: template });
     if (saved.error?.code === 'PT409' || saved.error?.code === '40001') throw new WorkspaceError('Template changed. Reload the saved version before editing.', 409);
@@ -41,10 +54,11 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 }
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
-    const { db, actor } = await access(request);
+    const { db, actor, teamAccess } = await access(request);
     const body = await workspaceBody(request);
     if (body.confirmed !== true) throw new WorkspaceError('Verify the template details and sales event before applying it.', 400);
     if (typeof body.conversation !== 'string' || !['email', 'sms'].includes(String(body.channel))) throw new WorkspaceError('Choose a conversation and channel.', 400);
+    requireConversationAccess(teamAccess, body.conversation, true);
     const template = (await listSalesTemplates(db)).find((row) => row.id === body.id && row.revision === body.revision && !row.archived);
     if (!template) throw new WorkspaceError('Template changed. Reload the library before composing.', 409);
     const facts = mergeSalesFacts(await salesFacts(db, actor, body.conversation), body.facts);

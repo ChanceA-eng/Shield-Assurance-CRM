@@ -59,6 +59,16 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('Resend transport', () => {
+  it('blocks unresolved details in layout blocks before claiming or sending', async () => {
+    const block = { color: '#263238', background: '#ffffff', padding: 0, border: 0, radius: 0, align: 'left' as const };
+    const emailDesign = { ...DEFAULT_EMAIL_DESIGN, rows: [{ id: 'row', background: '#ffffff', columns: [[
+      { ...block, id: 'body', type: 'body' as const },
+      { ...block, id: 'text', type: 'text' as const, document: documentFromText('Hello {{contact_name}}') },
+    ]] }] };
+    await expect(sendResendEmail({ to: 'to@example.invalid', subject: 'Hello', body: 'Hello', emailDesign }, config))
+      .rejects.toThrow('layout and signature');
+    expect(requests).toHaveLength(0);
+  });
   it('sends rich text and signature styles, binds them to retry identity, and rejects mismatched text before claiming', async () => {
     const bodyDocument: EmailDocument = { type: 'doc', content: [{ type: 'paragraph', content: [
       { type: 'text', text: 'Hello', marks: [{ type: 'bold' }] },

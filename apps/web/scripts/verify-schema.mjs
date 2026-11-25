@@ -19,6 +19,13 @@ const supabase = createClient(url, serviceRoleKey, {
 const checks = [
   supabase.from('agency_members').select('team_name,role_title,direct_grants,setup_state,access_version').limit(0),
   supabase.rpc('team_profile_manager', { p_actor: null }),
+  supabase.from('team_profile_presets').select('id').limit(0),
+  supabase.from('team_setup_challenges').select('user_id').limit(0),
+  supabase.from('personnel_documents').select('id').limit(0),
+  supabase.from('personnel_uploads').select('id').limit(0),
+  supabase.rpc('personnel_manager', { p_actor: null }),
+  supabase.rpc('read_personnel_document', { p_actor: null, p_id: null }),
+  supabase.rpc('finish_expired_personnel_upload', { p_id: null }),
   supabase.from('email_signature_designs').select('user_id,document,rows').limit(0),
   supabase.from('scheduled_messages').select('body_document').limit(0),
   supabase.from('agent_email_attempts').select('email_formatting').limit(0),
@@ -204,6 +211,40 @@ for (const name of ['get_opportunity_context', 'get_opportunity_operations', 'op
 const questionnaireContract = await supabase.rpc('public_opportunity_questionnaire', { p_hash: '0'.repeat(64), p_response: null, p_consent: false });
 if (questionnaireContract.error?.code !== 'P0002') throw new Error(`Questionnaire schema contract failed: ${questionnaireContract.error?.message ?? 'An unknown token was accepted.'}`);
 
+const socialReviewContract = await supabase.rpc('team_can_review_social', { p_actor: null, p_action: 'submit' });
+if (socialReviewContract.error || socialReviewContract.data !== false) {
+  throw new Error(`Social review permission contract failed: ${socialReviewContract.error?.message ?? 'An unauthorized actor was accepted.'}`);
+}
+const socialContentContract = await supabase.rpc('team_can_social_content', { p_actor: null, p_action: 'edit' });
+if (socialContentContract.error || socialContentContract.data !== false) {
+  throw new Error(`Social content permission contract failed: ${socialContentContract.error?.message ?? 'An unauthorized actor was accepted.'}`);
+}
+const templateArchiveContract = await supabase.rpc('team_can_archive_template', { p_actor: null });
+if (templateArchiveContract.error || templateArchiveContract.data !== false) {
+  throw new Error(`Template archive permission contract failed: ${templateArchiveContract.error?.message ?? 'An unauthorized actor was accepted.'}`);
+}
+const dispatchLinksContract = await supabase.rpc('team_dispatch_links_match', {
+  p_lead: '00000000-0000-0000-0000-000000000000', p_client: null,
+});
+if (dispatchLinksContract.error || dispatchLinksContract.data !== false) {
+  throw new Error(`Dispatch record link contract failed: ${dispatchLinksContract.error?.message ?? 'A nonexistent lead was accepted.'}`);
+}
+const attachmentAccessContract = await supabase.rpc('team_account_document_allowed', { p_actor: null, p_client: null });
+if (attachmentAccessContract.error || attachmentAccessContract.data !== false) {
+  throw new Error(`Conversation document permission contract failed: ${attachmentAccessContract.error?.message ?? 'An unauthorized actor was accepted.'}`);
+}
+
+for (const [name, args] of [
+  ['team_calendar_events', { p_actor: null }],
+  ['assert_team_calendar_access', { p_actor: null, p_event: null, p_permission: 'calendar.edit' }],
+  ['team_conversation_thread', { p_actor: null, p_type: 'lead', p_id: '00000000-0000-0000-0000-000000000000', p_offset: 0, p_limit: 1 }],
+  ['team_conversation_inbox', { p_actor: null, p_search: '', p_page: 0 }],
+  ['team_mark_conversation_read', { p_actor: null, p_ids: [] }],
+]) {
+  const result = await supabase.rpc(name, args);
+  if (result.error?.code !== '42501') throw new Error(`Team scope contract failed (${name}): ${result.error?.message ?? 'Unauthorized actor accepted.'}`);
+}
+
 if (process.env.CRM_MULTI_AGENT_ENABLED === 'true') {
   checks.push(supabase.from('agency_members').select('user_id,role,active,sender_profile,gmail_ai_opt_in', { head: true }));
   checks.push(supabase.from('clients').select('id,agent_user_id', { head: true }));
@@ -217,11 +258,12 @@ if (process.env.CRM_GMAIL_ENABLED === 'true') {
 }
 const results = await Promise.all(checks);
 const privateSocialTables = new Set(['social_oauth_states', 'social_oauth_grants', 'social_provider_grants', 'social_provider_connections']);
+const privateTeamTables = new Set(['team_profile_presets', 'team_setup_challenges', 'personnel_documents', 'personnel_uploads']);
 const failures = results.flatMap((result, index) => {
   const table = checks[index].url.pathname.split('/').pop();
-  if (privateSocialTables.has(table)) {
+  if (privateSocialTables.has(table) || privateTeamTables.has(table)) {
     return result.error?.code === '42501' ? [] : [
-      `Contract ${index + 1} (${table}): ${result.error?.message ?? 'Direct access to private provider credentials was unexpectedly allowed.'}`,
+      `Contract ${index + 1} (${table}): ${result.error?.message ?? 'Direct access to a private table was unexpectedly allowed.'}`,
     ];
   }
   return result.error

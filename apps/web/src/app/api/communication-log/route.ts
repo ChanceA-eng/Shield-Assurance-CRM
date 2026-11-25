@@ -13,7 +13,10 @@ import { appendAgencySignature, appendPersonalSignature } from '../../../lib/age
 import { handleInboundReply } from '../../../lib/outreach-engine';
 import { agencyEnabled } from '../../../lib/agency-membership';
 import { sendAgentEmail } from '../../../lib/agent-email';
-import { workspaceApiError, friendlyErrorMessage } from '../../../lib/workspace-api';
+import { workspaceApiError, friendlyErrorMessage, databaseError } from '../../../lib/workspace-api';
+import { WorkspaceError } from '../../../lib/record-scope';
+import { hasUnrestrictedConversationAccess } from '../../../lib/staff-workspace';
+import { accountDocumentReadScope, assertTeamRecordSendAccess } from '../../../lib/team-request-access';
 import {
   conversationKeyForRow,
   formatConversationKey,
@@ -69,7 +72,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const clientId = params.get('client_id') ?? params.get('contact_id');
   const offset = Number(params.get('offset') ?? '0');
   const limit = Number(params.get('limit') ?? String(THREAD_LIMIT));
-  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) return json({ message: 'Choose a valid message page.' }, 400);
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 2147483447 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) return json({ message: 'Choose a valid message page.' }, 400);
 
   let ref: ConversationRef | null = null;
   if (rawKey) {
@@ -83,6 +86,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     ref = { kind: 'client', id: clientId };
   }
 
+  if (session.teamAccess?.mode === 'restricted' && !hasUnrestrictedConversationAccess(session.teamAccess)) {
+    try {
+      if (!ref || ref.kind === 'unmatched') throw new WorkspaceError('Choose an assigned lead or account conversation.', 403);
+      const { data, error } = await supabase.rpc('team_conversation_thread', {
+        p_actor: session.user.id, p_type: ref.kind, p_id: ref.id, p_offset: offset, p_limit: limit,
+      });
+      if (error) throw databaseError(error);
+      if (!data || !Array.isArray(data.items) || typeof data.total !== 'number') throw new WorkspaceError('The conversation could not be loaded.', 500);
+      return NextResponse.json(data.items, { headers: { 'Cache-Control': 'private, no-store', 'X-Total-Count': String(data.total),
+        'X-Next-Offset': data.nextOffset == null ? '' : String(data.nextOffset) } });
+    } catch (error) { return workspaceApiError(error, 'communication/read'); }
+  }
   if (ref) {
     const thread = await loadThread(supabase, ref, offset, limit);
     if (thread.error) return json({ message: thread.error }, thread.status ?? 500);
@@ -122,16 +137,29 @@ interface Attachment {
   type: string;
 }
 
+async function assertDocumentAttachmentAccess(supabase: SupabaseClient, actor: string, clientId: string): Promise<void> {
+  const { data, error } = await supabase.rpc('team_account_document_allowed', { p_actor: actor, p_client: clientId });
+  if (error) throw databaseError(error);
+  if (data !== true) throw new WorkspaceError("You no longer have access to this account's documents.", 403);
+}
+
 async function profileFileAttachments(
   supabase: SupabaseClient,
   clientId: string | null,
   ids: string[],
+  scope: 'agency' | 'assigned' | null,
+  actor: string,
 ): Promise<{ ok: true; links: Array<{ name: string; url: string }>; attachments: Attachment[] } | { ok: false; status: number; message: string }> {
   if (ids.length === 0) return { ok: true, links: [], attachments: [] };
+  if (!scope) return { ok: false, status: 403, message: 'You do not have access to account documents.' };
   if (!clientId) return { ok: false, status: 400, message: 'Account documents can only be attached to messages on that account.' };
-  const { data, error } = await supabase.from('client_files').select(CLIENT_FILE_COLUMNS).eq('client_id', clientId).in('id', ids);
+  const query = supabase.from('client_files')
+    .select(scope === 'assigned' ? `${CLIENT_FILE_COLUMNS},account:clients!client_files_client_id_fkey!inner()` : CLIENT_FILE_COLUMNS)
+    .eq('client_id', clientId).in('id', ids);
+  if (scope === 'assigned') query.eq('account.agent_user_id', actor);
+  const { data, error } = await query.returns<ClientFileRecord[]>();
   if (error) return { ok: false, status: 500, message: friendlyErrorMessage(error) };
-  const records = (data ?? []) as ClientFileRecord[];
+  const records = data ?? [];
   if (records.length !== ids.length) return { ok: false, status: 400, message: 'One or more selected documents are not on this account.' };
 
   const links: Array<{ name: string; url: string }> = [];
@@ -161,6 +189,9 @@ async function profileFileAttachments(
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
+  if (session.teamAccess?.mode === 'restricted' && !hasUnrestrictedConversationAccess(session.teamAccess)) {
+    return json({ message: 'Sending is not available for your current conversation access.' }, 403);
+  }
 
   const supabase = getSupabaseServerClient();
   if (!supabase) return json({ message: 'The CRM database is not connected. Contact your administrator.' }, 503);
@@ -226,20 +257,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (channel === 'sms') return json({ message: SMS_UNAVAILABLE.message, code: SMS_UNAVAILABLE.code }, SMS_UNAVAILABLE.status);
 
-  const resolved = await resolveOutboundEmailRecipient(supabase, {
+  const outboundTarget = {
     clientId: isUuid(payload.client_id) ? payload.client_id : null,
     leadId: isUuid(payload.lead_id) ? payload.lead_id : null,
     conversationKey: payload.conversation_key ?? null,
     to: payload.to ?? null,
-  });
+  };
+  const resolved = await resolveOutboundEmailRecipient(supabase, outboundTarget);
   if (!resolved.ok) return json({ message: resolved.message, code: resolved.code }, resolved.status);
   const recipient = resolved.recipient;
 
+  if ((payload.profile_file_ids !== undefined && (!Array.isArray(payload.profile_file_ids) || !payload.profile_file_ids.every(isUuid)))
+    || (payload.profile_files !== undefined && (!Array.isArray(payload.profile_files)
+      || !payload.profile_files.every((file) => file !== null && typeof file === 'object' && isUuid(file.id))))) {
+    return json({ message: 'Choose valid account documents before sending.' }, 400);
+  }
   const requestedIds = [
     ...(payload.profile_file_ids ?? []),
     ...(payload.profile_files ?? []).map((file) => file.id ?? ''),
-  ].filter((id, index, all): id is string => isUuid(id) && all.indexOf(id) === index);
-  const profileFiles = await profileFileAttachments(supabase, recipient.clientId, requestedIds);
+  ].filter((id, index, all) => all.indexOf(id) === index);
+  if (requestedIds.length && recipient.clientId && session.teamAccess?.mode === 'restricted') {
+    try { await assertDocumentAttachmentAccess(supabase, session.user.id, recipient.clientId); }
+    catch (error) { return workspaceApiError(error, 'communication/document-access'); }
+  }
+  const profileFiles = await profileFileAttachments(supabase, recipient.clientId, requestedIds,
+    accountDocumentReadScope(session.teamAccess), session.user.id);
   if (!profileFiles.ok) return json({ message: profileFiles.message }, profileFiles.status);
 
   const uploaded = (payload.attachments ?? [])
@@ -268,12 +310,30 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     ? appendPersonalSignature(`${body}${linksBlock}`, templateSignature ?? session.user.user_metadata.signature)
     : appendAgencySignature(`${body}${linksBlock}`, 'system');
 
+  const recheckSendAccess = async (): Promise<void> => {
+    const current = await resolveOutboundEmailRecipient(supabase, outboundTarget);
+    if (!current.ok) throw new WorkspaceError(current.message, current.status);
+    if (current.recipient.to !== recipient.to || current.recipient.clientId !== recipient.clientId
+      || current.recipient.leadId !== recipient.leadId) {
+      throw new WorkspaceError('The recipient or linked record changed. Review the conversation before sending.', 409);
+    }
+    if (session.teamAccess?.mode === 'restricted') {
+      await assertTeamRecordSendAccess(supabase, session.user.id, recipient.leadId, recipient.clientId,
+        'You no longer have permission to send to this conversation.');
+      if (requestedIds.length && recipient.clientId) {
+        await assertDocumentAttachmentAccess(supabase, session.user.id, recipient.clientId);
+      }
+    }
+  };
+  try { await recheckSendAccess(); }
+  catch (error) { return workspaceApiError(error, 'communication/send-access'); }
+
   if (useGmail) {
     try {
       const result = await sendAgentEmail(supabase, session.user.id, { to: recipient.to, subject, body: messageBody, attachments, bodyDocument }, {
         attemptId: payload.request_id ?? '', clientId: recipient.clientId, leadId: recipient.leadId, replyId: payload.reply_to_message_id,
         ...(provenance ? { salesTemplate: provenance } : {}),
-      });
+      }, recheckSendAccess);
       return json({ id: result.id, delivery: result.status, provider: result.provider }, 201);
     } catch (error) { return workspaceApiError(error, 'communication/agent-send'); }
   }
@@ -281,11 +341,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const requestId = payload.request_id ?? randomUUID();
   let provider: string;
   try {
+    const formatting = !templateSignature && automationType.toLowerCase() === 'manual'
+      ? await signatureFormatting(supabase, session.user.id) : {};
+    await recheckSendAccess();
     provider = await sendOutboundEmail({ to: recipient.to, subject, body: messageBody, attachments,
-      bodyDocument, ...(!templateSignature && automationType.toLowerCase() === 'manual' ? await signatureFormatting(supabase, session.user.id) : {}),
+      bodyDocument, ...formatting,
       ...(provenance?.email_design ? { emailDesign: provenance.email_design } : {}),
       requestId, leadId: recipient.leadId ?? undefined, clientId: recipient.clientId ?? undefined });
   } catch (error) {
+    if (error instanceof WorkspaceError) return workspaceApiError(error, 'communication/send-access');
     if (error instanceof ResendSendError) {
       return json({ message: error.message, code: error.code }, error.status);
     }
@@ -356,6 +420,15 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   if (payload.read_ids.some((id) => !isUuid(id))) return json({ message: 'read_ids must contain message ids only.' }, 400);
   if (ids.length > MAX_READ_IDS) return json({ message: `Mark at most ${MAX_READ_IDS} messages at a time.` }, 400);
   if (ids.length === 0) return json({ updated: 0, ids: [] }, 200);
+
+  if (session.teamAccess?.mode === 'restricted' && !hasUnrestrictedConversationAccess(session.teamAccess)) {
+    try {
+      const { data, error } = await supabase.rpc('team_mark_conversation_read', { p_actor: session.user.id, p_ids: ids });
+      if (error) throw databaseError(error);
+      if (!data || typeof data.updated !== 'number' || !Array.isArray(data.ids)) throw new WorkspaceError('The read acknowledgement could not be confirmed.', 500);
+      return NextResponse.json(data, { headers: { 'Cache-Control': 'private, no-store' } });
+    } catch (error) { return workspaceApiError(error, 'communication/mark-read'); }
+  }
 
   const { data, error } = await supabase
     .from('communication_log')

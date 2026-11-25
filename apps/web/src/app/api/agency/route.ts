@@ -9,7 +9,7 @@ import { isUuid } from '../../../lib/workspace-validation';
 import { getOutreachSender } from '../../../lib/marketing-profile';
 import { activateTeamMember } from '../../../lib/team-management';
 import { isTeamActivationRequest } from '../../../lib/route-authentication';
-import { readTeamSettings, writeTeamSettings } from '../../../lib/team-settings';
+import { readTeamContact, readTeamSettings, writeTeamSettings } from '../../../lib/team-settings';
 import { hasTeamPermission, requireTeamPermission } from '../../../lib/team-request-access';
 
 async function handle(request: NextRequest): Promise<NextResponse> {
@@ -23,7 +23,11 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     if (request.nextUrl.searchParams.get('access') === 'true') throw new WorkspaceError('Use the new Team access workspace.', 410);
     if (request.nextUrl.searchParams.get('team') === 'true') {
       const headers = { 'Cache-Control': 'private, no-store' };
-      if (request.method === 'GET') return NextResponse.json(await readTeamSettings(db, session.user.id), { headers });
+      if (request.method === 'GET') {
+        const profile = request.nextUrl.searchParams.get('profile');
+        return NextResponse.json(profile === null ? await readTeamSettings(db, session.user.id)
+          : await readTeamContact(db, session.user.id, profile), { headers });
+      }
       if (request.method !== 'POST') throw new WorkspaceError('Choose a Team action.', 405);
       await writeTeamSettings(request, db, session.user.id);
       return NextResponse.json({ ok: true }, { headers });

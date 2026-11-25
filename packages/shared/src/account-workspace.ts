@@ -155,6 +155,7 @@ export interface WorkspaceTask {
   priority: string;
   assignee?: string | null;
   kind: 'task' | 'reminder';
+  event_id?: string | null;
   related_type: string | null;
   related_id: string | null;
   related_name?: string | null;

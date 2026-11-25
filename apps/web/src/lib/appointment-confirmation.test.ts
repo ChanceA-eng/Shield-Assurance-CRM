@@ -22,11 +22,11 @@ vi.mock('./message-delivery', () => ({ resolveOutboundEmailRecipient: vi.fn() })
 vi.mock('./agent-email', () => ({ sendAgentEmail: vi.fn() }));
 vi.mock('./agency-membership', () => ({ activeAgencyMember: vi.fn().mockResolvedValue({ active: true, role: 'owner' }) }));
 const actor = '10000000-0000-4000-8000-000000000001', id = '10000000-0000-4000-8000-000000000002', lead = '10000000-0000-4000-8000-000000000003';
-let rows: SavedAppointment[], attempt: unknown, urls: URL[];
+let rows: SavedAppointment[], attempt: unknown, urls: URL[], dispatchResponses: boolean[];
 const request = () => new NextRequest(`http://localhost/api/events/${id}/confirmation`, { method: 'POST', body: JSON.stringify({ confirmed: true, conversation: `lead:${lead}` }), headers: { 'Content-Type': 'application/json' } });
 const context = { params: Promise.resolve({ eventId: id }) };
 beforeEach(() => {
-  vi.clearAllMocks(); attempt = null; urls = [];
+  vi.clearAllMocks(); attempt = null; urls = []; dispatchResponses = [];
   vi.stubEnv('GMAIL_OAUTH_REDIRECT_URI', 'https://crm.example.com/api/gmail/callback');
   vi.stubEnv('GMAIL_TOKEN_KEY_VERSION', 'v1');
   vi.stubEnv('GMAIL_TOKEN_KEYS', JSON.stringify({ v1: Buffer.alloc(32, 1).toString('base64') }));
@@ -37,6 +37,7 @@ beforeEach(() => {
   const db = createClient('https://example.supabase.co', 'test-key', { auth: { persistSession: false }, global: {
     fetch: async (input) => {
       const url = new URL(String(input)); urls.push(url);
+      if (url.pathname.endsWith('/team_record_dispatch_allowed')) return Response.json(dispatchResponses.shift() ?? true);
       if (url.pathname.endsWith('/events')) return Response.json(rows);
       if (url.pathname.endsWith('/appointment_manage_tokens')) return Response.json({ token_secret: sealGmailSecret('x'.repeat(43), actor), expires_at: '2040-01-01T00:00:00Z' });
       if (url.pathname.endsWith('/agent_email_attempts')) return Response.json(attempt);
@@ -52,6 +53,35 @@ beforeEach(() => {
   vi.mocked(sendAgentEmail).mockResolvedValue({ id: 'receipt', status: 'accepted_by_provider', provider: 'gmail' });
 });
 describe('saved appointment confirmations', () => {
+  it('refuses to read contact facts or send without current record messaging access', async () => {
+    dispatchResponses = [false];
+    expect((await POST(request(), context)).status).toBe(403);
+    expect(salesFacts).not.toHaveBeenCalled();
+    expect(sendAgentEmail).not.toHaveBeenCalled();
+  });
+  it('rechecks record messaging access immediately before sending', async () => {
+    dispatchResponses = [true, false];
+    expect((await POST(request(), context)).status).toBe(403);
+    expect(sendAgentEmail).not.toHaveBeenCalled();
+    expect(urls.filter((url) => url.pathname.endsWith('/team_record_dispatch_allowed'))).toHaveLength(2);
+  });
+  it('rechecks permission again at the Gmail handoff', async () => {
+    dispatchResponses = [true, true, false];
+    vi.mocked(sendAgentEmail).mockImplementationOnce(async (_db, _actor, _input, _options, beforeDispatch) => {
+      await beforeDispatch?.();
+      return { id: 'receipt', status: 'accepted_by_provider', provider: 'gmail' };
+    });
+    expect((await POST(request(), context)).status).toBe(403);
+    expect(urls.filter((url) => url.pathname.endsWith('/team_record_dispatch_allowed'))).toHaveLength(3);
+  });
+  it('blocks a notification when contact consent changes at the Gmail handoff', async () => {
+    vi.mocked(sendAgentEmail).mockImplementationOnce(async (_db, _actor, _input, _options, beforeDispatch) => {
+      vi.mocked(resolveOutboundEmailRecipient).mockResolvedValueOnce({ ok: false, status: 403, code: 'opted_out', message: 'Recipient opted out.' });
+      await beforeDispatch?.();
+      return { id: 'receipt', status: 'accepted_by_provider', provider: 'gmail' };
+    });
+    expect((await POST(request(), context)).status).toBe(403);
+  });
   it('includes the Zoom attendee link in Gmail confirmation but never sends before Zoom is ready', async () => {
     rows[0] = { ...rows[0]!, meeting_type: 'zoom', zoom_join_url: 'https://zoom.us/j/12345678901?pwd=synthetic', sync_status: 'synced' };
     expect((await POST(request(), context)).status).toBe(200);
@@ -99,7 +129,7 @@ describe('saved appointment confirmations', () => {
     expect((await POST(request(), context)).status).toBe(200);
     expect(sendAgentEmail).toHaveBeenCalledWith(expect.anything(), actor, expect.objectContaining({
       to: 'qa@example.invalid', subject: 'Our appointment', body: expect.stringContaining('Quote review'),
-    }), expect.objectContaining({ attemptId: id, leadId: lead, salesTemplate: { id: 'appointment_confirmation', revision: 0 } }));
+    }), expect.objectContaining({ attemptId: id, leadId: lead, salesTemplate: { id: 'appointment_confirmation', revision: 0 } }), expect.any(Function));
     expect(urls[0]!.searchParams.get('user_id')).toBe(`eq.${actor}`);
     expect(urls[0]!.searchParams.get('id')).toBe(`eq.${id}`);
   });

@@ -11,15 +11,7 @@ import { namedTaskSubject, resolveRecordScope, taskFilter, WorkspaceError } from
 import { databaseError, workspaceApiError, workspaceBody } from '../../../lib/workspace-api';
 import { taskRecordHref } from '../../../lib/task-links';
 import { assertAppointmentTaskAccess } from '../../../lib/appointment-lifecycle';
-import type { RequestAccess } from '../../../lib/team-request-access';
-
-type TaskScope = 'agency' | 'assigned' | 'self';
-
-function taskScope(access: RequestAccess | undefined, permission: 'tasks.view' | 'tasks.edit'): TaskScope | null {
-  if (access?.mode === 'legacy') return 'agency';
-  const scope = access?.mode === 'restricted' ? access.grants[permission] : null;
-  return scope === 'agency' || scope === 'assigned' || scope === 'self' ? scope : null;
-}
+import { taskScope, type TaskScope } from '../../../lib/task-access';
 
 async function isAssignedRecord(db: NonNullable<ReturnType<typeof getSupabaseServerClient>>, actor: string, type: string, id: string): Promise<boolean> {
   if (type !== 'lead' && type !== 'client') return false;
@@ -44,21 +36,6 @@ async function assertTaskScope(
   throw new WorkspaceError('This task is outside your assigned records.', 403);
 }
 
-async function assignedTaskFilter(db: NonNullable<ReturnType<typeof getSupabaseServerClient>>, actor: string): Promise<string> {
-  const [clients, leads] = await Promise.all([
-    db.from('clients').select('id').eq('agent_user_id', actor),
-    db.from('leads').select('id').eq('agent_user_id', actor),
-  ]);
-  if (clients.error) throw databaseError(clients.error);
-  if (leads.error) throw databaseError(leads.error);
-  const clauses = [`and(created_by_user_id.eq.${actor},related_id.is.null,account_id.is.null)`];
-  const clientIds = (clients.data ?? []).map(({ id }) => id);
-  const leadIds = (leads.data ?? []).map(({ id }) => id);
-  if (clientIds.length) clauses.push(`account_id.in.(${clientIds.join(',')})`);
-  if (leadIds.length) clauses.push(`and(related_type.eq.lead,related_id.in.(${leadIds.join(',')}))`);
-  return clauses.join(',');
-}
-
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getApiSession(request);
   if (session.error) return session.error;
@@ -77,9 +54,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (!Number.isSafeInteger(offset) || offset < 0) throw new WorkspaceError('Invalid task offset.', 400);
     const recordHistory = Boolean(params.get('record_id') || params.get('related_id'));
     if (scope === 'self' && recordHistory) throw new WorkspaceError('Personal tasks cannot be filtered by CRM records.', 403);
-    let query = supabase.from(recordHistory ? 'tasks' : 'active_workspace_tasks').select('*', { count: 'exact', head: countOnly });
-    if (scope === 'self') query = query.eq('created_by_user_id', session.user.id);
-    if (scope === 'assigned' && !recordHistory) query = query.or(await assignedTaskFilter(supabase, session.user.id));
+    let query = scope === 'assigned'
+      ? supabase.rpc('team_assigned_workspace_tasks', { p_actor: session.user.id, p_include_archived: recordHistory }, { count: 'exact', head: countOnly }).select('*')
+      : supabase.from(recordHistory ? 'tasks' : 'active_workspace_tasks').select('*', { count: 'exact', head: countOnly });
+    if (scope === 'self') query = query.eq('created_by_user_id', session.user.id).is('related_id', null).is('account_id', null);
     if (status === 'open' || status === 'completed') query = query.eq('status', status);
     else if (status === 'overdue') query = query.eq('status', 'open').lt('due_date', new Date().toISOString());
     else if (status !== 'all') throw new WorkspaceError('Invalid task status filter.', 400);
@@ -246,8 +224,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       subject = namedTaskSubject(recordScope.name, subject);
       accountId = recordScope.clientId;
     }
-    if (scope !== 'agency' && body.assignee !== undefined
-      && session.teamAccess?.mode === 'restricted' && session.teamAccess.grants['tasks.assign'] !== 'agency') {
+    const assignee = assigneeOf(body.assignee ?? null);
+    if (assignee && session.teamAccess?.mode === 'restricted' && session.teamAccess.grants['tasks.assign'] !== 'agency') {
       throw new WorkspaceError('You need task assignment access to assign this task.', 403);
     }
     if (body.id !== undefined && !isUuid(body.id)) throw new WorkspaceError('Invalid task save id.', 400);
@@ -257,7 +235,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       due_date: due, kind, status: statusOf(body.status ?? 'open'), priority: priorityOf(body.priority ?? 'medium'),
       related_type: relatedType, related_id: relatedId, account_id: accountId, created_by: apiActorName(session.user),
       created_by_user_id: session.user.id,
-      assignee: assigneeOf(body.assignee ?? null),
+      assignee,
     };
     const { data, error } = await supabase.from('tasks').insert(input).select('*').single<WorkspaceTask>();
     if (error?.code === '23505') {
@@ -296,6 +274,13 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     if (body.assignee !== undefined && session.teamAccess?.mode === 'restricted'
       && session.teamAccess.grants['tasks.assign'] !== 'agency') {
       throw new WorkspaceError('You need task assignment access to assign this task.', 403);
+    }
+    const appointmentId = existing.data.event_id ?? (existing.data.related_type === 'event' ? existing.data.related_id : null);
+    if (appointmentId && session.teamAccess?.mode === 'restricted' && (body.status !== undefined || body.due_date !== undefined)) {
+      const allowed = await supabase.rpc('assert_team_calendar_access', {
+        p_actor: session.user.id, p_event: appointmentId, p_permission: 'calendar.edit',
+      });
+      if (allowed.error) throw databaseError(allowed.error);
     }
     await assertAppointmentTaskAccess(supabase, session.user.id, existing.data, body);
     const updates: Record<string, unknown> = { updated_by: apiActorName(session.user) };

@@ -12,6 +12,7 @@ import type { OutreachSender, SalesTemplateSnapshot } from '@crm/shared';
 import { outreachQualityIssues } from '../../lib/outreach-quality';
 import AgentOutreachSettings from '../../components/crm/AgentOutreachSettings';
 import EmailDesignPreview from '../../components/crm/EmailDesignPreview';
+import MessageComposer from '../../components/crm/MessageComposer';
 
 interface OutreachSettings {
   approval_mode: boolean;
@@ -374,23 +375,15 @@ function OutreachContent(): JSX.Element {
                     </div>
                   </div>
                   <div className="space-y-2 p-3">
-                    <input
-                      type="text"
-                      aria-label={`Draft subject for ${item.lead_name}`}
-                      disabled={busyId === item.id}
-                      value={draft.subject}
-                      onChange={(event) => setEdits((prev) => ({ ...prev, [item.id]: { ...draft, subject: event.target.value } }))}
-                      className="w-full rounded border border-cui-border px-2.5 py-1.5 text-sm font-semibold focus:border-cui-primary focus:outline-none"
-                    />
-                    <textarea
-                      aria-label={`Draft body for ${item.lead_name}`}
-                      disabled={busyId === item.id}
-                      value={draft.body}
-                      onChange={(event) => setEdits((prev) => ({ ...prev, [item.id]: { ...draft, body: event.target.value } }))}
-                      rows={Math.min(12, Math.max(5, draft.body.split('\n').length + 1))}
-                      className="w-full rounded border border-cui-border px-2.5 py-1.5 text-sm leading-relaxed focus:border-cui-primary focus:outline-none"
-                    />
-                    {item.sales_template?.email_design ? <EmailDesignPreview body={draft.body} design={item.sales_template.email_design} /> : null}
+                    <div className="grid items-start gap-3 lg:grid-cols-2">
+                      <MessageComposer conversationKey={`lead:${item.lead_id}`} subject={draft.subject} body={draft.body}
+                        subjectLabel={`Draft subject for ${item.lead_name}`} bodyLabel={`Draft body for ${item.lead_name}`}
+                        disabled={busyId === item.id} emailDesign={item.sales_template?.email_design}
+                        onSubjectChange={(subject) => setEdits((prev) => ({ ...prev, [item.id]: { ...(prev[item.id] ?? draft), subject } }))}
+                        onBodyChange={(body) => setEdits((prev) => ({ ...prev, [item.id]: { ...(prev[item.id] ?? draft), body } }))} />
+                      <div className="min-w-0 space-y-2"><p className="text-sm font-semibold">{draft.subject}</p>
+                        <EmailDesignPreview body={draft.body} design={item.sales_template?.email_design} /></div>
+                    </div>
                     {rewriteId === item.id ? (
                       <div className="space-y-2 rounded border border-cui-primary/30 bg-cui-primary/5 p-3">
                         <label className="block text-xs font-semibold" htmlFor={`rewrite-${item.id}`}>Rewrite instructions</label>

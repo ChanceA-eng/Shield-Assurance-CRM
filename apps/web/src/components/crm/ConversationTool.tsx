@@ -53,7 +53,7 @@ export default function ConversationTool({ label, title = label, children, large
     <button ref={trigger} type="button" aria-label={title} aria-haspopup="dialog" aria-expanded={open}
       aria-controls={id} disabled={disabled} data-conversation-tool={label}
       onClick={() => { setOpen(open ? null : id); if (!open) onOpen?.(); }}
-      className={`inline-flex min-w-0 items-center justify-center rounded font-semibold disabled:opacity-50 ${action ? 'h-9 border px-3 text-sm' : 'h-9 px-2 text-xs sm:h-8'} ${selected || open
+      className={`inline-flex min-w-0 items-center justify-center rounded font-semibold disabled:opacity-50 ${action ? 'h-9 border px-3 text-sm' : 'h-9 min-w-8 px-1 text-[11px] sm:h-8 sm:px-2 sm:text-xs'} ${selected || open
         ? 'border-cui-primary bg-cui-primary/10 text-cui-primary' : 'border-cui-border text-cui-text hover:bg-cui-light'}`}>
       <span className="truncate">{label}{selected ? ' ·' : ''}</span>
     </button>

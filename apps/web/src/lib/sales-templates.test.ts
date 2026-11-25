@@ -45,7 +45,7 @@ vi.mock('./lead-outreach-context', () => ({ recordOutreachContext: vi.fn(async (
 beforeEach(() => {
   vi.clearAllMocks(); role = 'owner'; grants = {
     'content.view': 'agency', 'content.edit': 'agency', 'campaigns.view': 'agency', 'campaigns.send': 'agency',
-    'leads.view': 'agency', 'messages.view': 'agency', 'messages.send': 'agency', 'automation.manage': 'agency',
+    'leads.view': 'agency', 'accounts.view': 'agency', 'messages.view': 'agency', 'messages.send': 'agency', 'automation.manage': 'agency',
   }; saved = null; enrollment = null; rpcCalls = []; stage = 'new'; reply = false; overlap = false; revisionConflict = false; schemaError = false;
   vi.mocked(getOwnGmailConnection).mockResolvedValue(null);
   vi.mocked(getSupabaseServerClient).mockReturnValue(createClient('https://db.example.invalid', 'test-key', {

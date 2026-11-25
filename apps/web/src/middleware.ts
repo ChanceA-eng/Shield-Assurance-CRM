@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { authenticatesInReadHandler, isTeamActivationRequest } from './lib/route-authentication';
-import { permitsTeamRequest, readTeamRequestAccess, teamLanding } from './lib/team-request-access';
+import { permitsTeamRequest, readTeamRequestAccess } from './lib/team-request-access';
 import { POLICY_ADMIN_HEADER, STAFF_TEAM_ACCESS_HEADER, STAFF_TRAINING_HEADER, STAFF_WORKSPACE_HEADER, TEAM_MANAGER_HEADER, staffWorkspace } from './lib/staff-workspace';
 import { STAFF_RECORDS_HEADER, visibleStaffRecords } from './lib/staff-records';
 
@@ -31,7 +31,7 @@ function isPublicApiRoute(pathname: string, method: string): boolean {
   if (pathname === '/api/google-calendar/callback' || pathname === '/api/zoom/callback') return method === 'GET';
   if (/^\/api\/appointments\/manage\/[A-Za-z0-9_-]{43}$/.test(pathname)) return method === 'GET' || method === 'POST';
   if (pathname === '/api/instantly/webhook') return method === 'POST';
-  if (pathname === '/api/auth/recovery' || pathname === '/api/auth/confirm') return method === 'POST';
+  if (pathname === '/api/auth/recovery' || pathname === '/api/auth/confirm' || pathname === '/api/auth/team-setup') return method === 'POST';
   if (pathname === '/api/email/resend') return method === 'POST';
   if (pathname === '/api/email/unsubscribe') return method === 'GET' || method === 'POST';
   if (PUBLIC_GMAIL_PATHS.has(pathname)) return method === 'POST';
@@ -163,11 +163,6 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     }
     try {
       const access = await readTeamRequestAccess(supabase, user.id);
-      if (pathname === '/' && access.mode === 'restricted') {
-        const redirect = NextResponse.redirect(new URL(teamLanding(access), request.url));
-        response.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie));
-        return redirect;
-      }
       if (!permitsTeamRequest(access, pathname, request.method, request.nextUrl.searchParams.toString())) {
         return NextResponse.json({ message: 'You do not have access to this feature.' }, { status: 403 });
       }

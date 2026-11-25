@@ -24,6 +24,8 @@ import ConversationMessage from '../../components/crm/ConversationMessage';
 import ConversationHistory from '../../components/crm/ConversationHistory';
 import { workspaceFetch } from '../../lib/workspace-fetch';
 import { useUnsavedChanges } from '../../context/WorkspaceNavigationContext';
+import { useStaffAccess, useStaffWorkspace } from '../../context/StaffWorkspaceContext';
+import { hasUnrestrictedConversationAccess } from '../../lib/staff-workspace';
 
 type ConversationKind = 'client' | 'lead' | 'unmatched';
 
@@ -111,6 +113,10 @@ function placeholderConversation(key: string): Conversation {
 }
 
 export default function CommunicationCenterPage(): JSX.Element {
+  const workspace = useStaffWorkspace();
+  const access = useStaffAccess();
+  const canReadReceipts = workspace === 'full' || hasUnrestrictedConversationAccess(access);
+  const canSend = workspace === 'full' || (canReadReceipts && access.mode === 'restricted' && access.grants['messages.send'] === 'agency');
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [hasLoadedList, setHasLoadedList] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
@@ -252,7 +258,7 @@ export default function CommunicationCenterPage(): JSX.Element {
     () => (selectedKey ? conversations.find((conversation) => conversation.key === selectedKey) ?? placeholderConversation(selectedKey) : null),
     [conversations, selectedKey],
   );
-  const emailReceipts = useEmailReceipts(selected?.email, Boolean(selected));
+  const emailReceipts = useEmailReceipts(selected?.email, Boolean(selected) && canReadReceipts);
   const composerBusy = isSending || scheduleBusy || isDrafting;
 
   const draftMessage = async (): Promise<void> => {
@@ -427,13 +433,13 @@ export default function CommunicationCenterPage(): JSX.Element {
                   <p className="truncate text-xs text-slate-300">{[selected.email, selected.phone].filter(Boolean).join(' · ') || 'No contact details on file'}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {selected.kind === 'client' && selected.client_id ? (
+                  {workspace === 'full' && selected.kind === 'client' && selected.client_id ? (
                     <Link href={`/clients/${selected.client_id}?tab=communication` as Route}
                       className="inline-flex items-center gap-1 rounded border border-cui-border bg-white px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/5">
                       <ExternalLink className="h-3 w-3" /> Open account
                     </Link>
                   ) : null}
-                  {selected.lead_id ? (
+                  {workspace === 'full' && selected.lead_id ? (
                     <Link href={`/leads?lead=${selected.lead_id}&tab=conversation` as Route}
                       className="inline-flex items-center gap-1 rounded border border-cui-border bg-white px-2.5 py-1 text-xs font-semibold text-cui-primary transition hover:bg-cui-primary/5">
                       <ExternalLink className="h-3 w-3" /> Open lead
@@ -480,8 +486,8 @@ export default function CommunicationCenterPage(): JSX.Element {
               <div className="shrink-0 space-y-2 border-t border-cui-border/60 bg-white p-3">
                 {sendError ? <div role="alert" className="rounded border border-cui-danger/40 bg-cui-danger/10 px-3 py-1.5 text-sm text-cui-danger">{sendError}</div> : null}
                 {notice ? <div role="status" className="rounded border border-cui-success/40 bg-cui-success/10 px-3 py-1.5 text-sm text-[#2a7a48]">{notice}</div> : null}
-                {selected.can_email ? (
-                  <MessageComposer subject={subjectDraft} body={bodyDraft} onSubjectChange={setSubjectDraft} onBodyChange={setBodyDraft}
+                {!canSend ? <p className="text-sm text-cui-muted">Sending is not available for your current conversation access.</p> : selected.can_email ? (
+                  <MessageComposer conversationKey={selected.key} subject={subjectDraft} body={bodyDraft} onSubjectChange={setSubjectDraft} onBodyChange={setBodyDraft}
                     bodyDocument={bodyDocument} onDocumentChange={setBodyDocument}
                     emailDesign={salesTemplate?.email_design}
                     disabled={composerBusy} bodyPlaceholder={`Email ${selected.name}…`} sender={<AgentSenderBadge />}

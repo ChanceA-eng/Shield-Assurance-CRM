@@ -10,6 +10,7 @@ import SalesTemplateSettings from '../../components/crm/SalesTemplateSettings';
 import { readTeamSettings } from '../../lib/team-settings';
 import { readPendingEmailChanges } from '../../lib/account-security';
 import AgencyTeamSettings from '../../components/crm/AgencyTeamSettings';
+import AccountEmailApprovals from '../../components/crm/AccountEmailApprovals';
 import { readTeamRequestAccess } from '../../lib/team-request-access';
 import type { SettingsTab } from '../../components/crm/SettingsTabs';
 
@@ -32,28 +33,28 @@ export default async function SettingsPage(): Promise<JSX.Element> {
       { id: 'integrations', permission: 'integrations.manage' },
     ];
     const allowedTabs = tabs.filter(({ permission }) => access.grants[permission] === 'agency').map(({ id }) => id);
-    const team = allowedTabs.includes('team') ? await readTeamSettings(db, user.id).catch((failure: unknown) => {
-      console.error('[settings/team]', failure);
-      return null;
-    }) : null;
+    const [team, requests] = allowedTabs.includes('team') ? await Promise.all([
+      readTeamSettings(db, user.id).catch((failure: unknown) => { console.error('[settings/team]', failure); return null; }),
+      readPendingEmailChanges(db, user.id).catch((failure: unknown) => { console.error('[settings/account-email]', failure); return null; }),
+    ]) : [null, null];
     return <SectionLayout title="Settings">
-      <SettingsWorkspace team={team} emailRequests={null} restricted allowedTabs={allowedTabs} />
+      <SettingsWorkspace team={team} emailRequests={requests} restricted allowedTabs={allowedTabs} />
     </SectionLayout>;
   }
   const member = await accountMembership(db, user.id);
   if (member?.active && member.role === 'admin') {
-    const team = await readTeamSettings(db, user.id).catch((failure: unknown) => {
-      console.error('[settings/team]', failure);
-      return null;
-    });
-    return <SectionLayout title="Settings"><AgencyTeamSettings initial={team} /><SalesTemplateSettings /></SectionLayout>;
+    const [team, requests] = await Promise.all([
+      readTeamSettings(db, user.id).catch((failure: unknown) => { console.error('[settings/team]', failure); return null; }),
+      readPendingEmailChanges(db, user.id).catch((failure: unknown) => { console.error('[settings/account-email]', failure); return null; }),
+    ]);
+    return <SectionLayout title="Settings"><AgencyTeamSettings initial={team} /><AccountEmailApprovals initial={requests} /><SalesTemplateSettings /></SectionLayout>;
   }
   if (member?.active && member.role !== 'owner') {
     const manager = await db.rpc('team_profile_manager', { p_actor: user.id });
     if (manager.error) return <SectionLayout title="Settings"><p role="alert">Team administration is unavailable.</p></SectionLayout>;
     if (manager.data === true) {
-      const team = await readTeamSettings(db, user.id);
-      return <SectionLayout title="Settings"><AgencyTeamSettings initial={team} /></SectionLayout>;
+      const [team, requests] = await Promise.all([readTeamSettings(db, user.id), readPendingEmailChanges(db, user.id)]);
+      return <SectionLayout title="Settings"><AgencyTeamSettings initial={team} /><AccountEmailApprovals initial={requests} /></SectionLayout>;
     }
   }
   if (!member?.active || member.role !== 'owner') return <SectionLayout title="Settings">
@@ -66,7 +67,7 @@ export default async function SettingsPage(): Promise<JSX.Element> {
       console.error('[settings/team]', error);
       return null;
     }),
-    readPendingEmailChanges(db).catch((error: unknown) => {
+    readPendingEmailChanges(db, user.id).catch((error: unknown) => {
       console.error('[settings/account-email]', error);
       return null;
     }),

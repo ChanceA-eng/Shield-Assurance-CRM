@@ -82,6 +82,7 @@ export const navigationCategories: NavCategory[] = [
           { label: 'Outreach Sequences', href: '/outreach' },
           { label: 'Campaigns', href: '/outreach/campaigns' },
           { label: 'Social Marketing', href: '/communication/social' },
+          { label: 'Sales Templates', href: '/templates' },
           { label: 'Calendar', href: '/scheduler' },
         ],
       },

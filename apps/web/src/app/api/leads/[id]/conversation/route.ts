@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '../../../../../lib/supabase-server';
-import { requireApiSession } from '../../../../../lib/api-auth';
+import { getApiSession } from '../../../../../lib/api-auth';
+import { databaseError, workspaceApiError } from '../../../../../lib/workspace-api';
+import { isUuid } from '../../../../../lib/workspace-validation';
+import { hasUnrestrictedConversationAccess } from '../../../../../lib/staff-workspace';
 
 import { friendlyErrorMessage } from '../../../../../lib/workspace-api';
 interface RouteContext {
@@ -22,8 +25,8 @@ export async function GET(
   request: NextRequest,
   context: RouteContext,
 ): Promise<NextResponse> {
-  const authError = await requireApiSession(request);
-  if (authError) return authError;
+  const session = await getApiSession(request);
+  if (session.error) return session.error;
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -32,8 +35,21 @@ export async function GET(
 
   const { id } = await context.params;
   const leadId = id?.trim();
-  if (!leadId) {
-    return NextResponse.json({ message: 'Lead id is required.' }, { status: 400 });
+  if (!isUuid(leadId)) {
+    return NextResponse.json({ message: 'A valid lead id is required.' }, { status: 400 });
+  }
+
+  const offset = Number(request.nextUrl.searchParams.get('offset') ?? '0');
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 2147483447) return NextResponse.json({ message: 'Choose a valid message page.' }, { status: 400 });
+  if (session.teamAccess?.mode === 'restricted' && !hasUnrestrictedConversationAccess(session.teamAccess)) {
+    try {
+      const { data, error } = await supabase.rpc('team_conversation_thread', {
+        p_actor: session.user.id, p_type: 'lead', p_id: leadId, p_offset: offset, p_limit: 100,
+      });
+      if (error) throw databaseError(error);
+      if (!data) return NextResponse.json({ message: 'The conversation could not be loaded.' }, { status: 500 });
+      return NextResponse.json(data, { headers: { 'Cache-Control': 'private, no-store' } });
+    } catch (error) { return workspaceApiError(error, 'lead-conversation/read'); }
   }
 
   const leadResult = await supabase
@@ -52,9 +68,6 @@ export async function GET(
   }
 
   const clientId = lead.account_id;
-  const offset = Number(request.nextUrl.searchParams.get('offset') ?? '0');
-  if (!Number.isSafeInteger(offset) || offset < 0) return NextResponse.json({ message: 'Choose a valid message page.' }, { status: 400 });
-
   // Messages from a lead with no account yet are tagged with metadata.lead_id by the inbound webhooks.
   const { data, count, error } = await supabase.from('canonical_communications').select('*', { count: 'exact' })
     .eq('conversation_key', clientId ? `client:${clientId}` : `lead:${lead.id}`)

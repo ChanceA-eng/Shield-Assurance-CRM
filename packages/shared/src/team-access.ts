@@ -55,6 +55,7 @@ export const TEAM_PERMISSIONS = {
   'integrations.manage': { label: 'Manage agency integrations', group: 'Administration', scopes: agencyScope },
   'agency.manage': { label: 'Manage agency identity and settings', group: 'Administration', scopes: agencyScope },
   'team.manage': { label: 'Invite and manage team access', group: 'Administration', scopes: agencyScope },
+  'personnel.manage': { label: 'Manage private personnel documents', group: 'Administration', scopes: agencyScope },
 } as const;
 
 export type TeamPermission = keyof typeof TEAM_PERMISSIONS;
@@ -208,7 +209,8 @@ const contentWork: TeamGrant[] = [
 ];
 
 export const STARTER_TEAM_ROLES: readonly TeamRoleBundle[] = [
-  { id: 'admin', name: 'Admin', version: 1, grants: (Object.keys(TEAM_PERMISSIONS) as TeamPermission[]).map((permission) => grant(permission)) },
+  { id: 'admin', name: 'Admin', version: 1, grants: (Object.keys(TEAM_PERMISSIONS) as TeamPermission[])
+    .filter((permission) => permission !== 'personnel.manage').map((permission) => grant(permission)) },
   { id: 'producer', name: 'Producer', version: 1, grants: [
     ...customerWork, grant('leads.view'), grant('leads.edit'), grant('leads.prospect'), grant('content.view'),
   ] },

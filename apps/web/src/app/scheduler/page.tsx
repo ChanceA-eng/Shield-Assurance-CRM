@@ -21,6 +21,9 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useNotifications } from '../../context/NotificationContext';
 import { sendAppointmentConfirmation } from '../../lib/appointment-confirmation-client';
 import AppointmentMeetingFields, { DEFAULT_APPOINTMENT_MEETING, type AppointmentMeeting } from '../../components/crm/AppointmentMeetingFields';
+import { useStaffAccess, useStaffWorkspace } from '../../context/StaffWorkspaceContext';
+import { canAccessTeamPage } from '../../lib/team-page-access';
+import { staffRecordScope } from '../../lib/staff-records';
 
 interface CalendarEvent {
   id: string; subject: string; title?: string; description: string | null;
@@ -42,6 +45,13 @@ function newForm(timeZone: AgencyTimeZone): EventForm {
 }
 
 function Scheduler(): JSX.Element {
+  const access = useStaffAccess();
+  const full = useStaffWorkspace() === 'full';
+  const canEdit = full || access.mode === 'legacy' || ['agency', 'assigned', 'self'].includes(String(access.grants['calendar.edit']));
+  const canViewTasks = full || canAccessTeamPage(access, '/tasks');
+  const canSend = full || access.mode === 'legacy' || ['agency', 'assigned'].includes(String(access.grants['messages.send']));
+  const canViewLeads = full || staffRecordScope(access, 'leads') !== null;
+  const canViewAccounts = full || staffRecordScope(access, 'accounts') !== null;
   const agency = useAgencyTimeZone();
   const timeZone = agency.timeZone ?? DEFAULT_AGENCY_TIME_ZONE;
   const params = useSearchParams();
@@ -68,12 +78,12 @@ function Scheduler(): JSX.Element {
     try {
       const [rows, dayTasks] = await Promise.all([
         workspacePages<CalendarEvent>('/api/events?status=all&order=asc', 200, 'offset'),
-        workspacePages<DayTask>('/api/tasks?status=open&due=today&sort=due_asc&include=related&limit=200', 200, 'offset'),
+        canViewTasks ? workspacePages<DayTask>('/api/tasks?status=open&due=today&sort=due_asc&include=related&limit=200', 200, 'offset') : Promise.resolve([]),
       ]);
       setEvents(rows); setTasks(dayTasks); setError('');
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not load calendar.'); }
     finally { setLoading(false); }
-  }, []);
+  }, [canViewTasks]);
   useEffect(() => { void load(); }, [load]);
   const open = useCallback((event: CalendarEvent): void => {
     setEditing(event);
@@ -103,6 +113,7 @@ function Scheduler(): JSX.Element {
       allDay: event.all_day, backgroundColor: color, borderColor: color, startEditable: event.status === 'scheduled' };
   });
   async function save(id: string, changes: Record<string, unknown>, create = false): Promise<boolean> {
+    if (!canEdit) { setError('Calendar editing permission is required.'); return false; }
     if (!agency.timeZone) { setError(agency.error ?? 'Agency time zone is still loading.'); return false; }
     setBusy(true); setError('');
     try {
@@ -116,7 +127,7 @@ function Scheduler(): JSX.Element {
       const relatedId = saved.related_id ?? changes.related_id ?? old?.related_id;
       const notify = create || changes.event_date !== undefined || changes.event_time !== undefined || changes.status === 'cancelled'
         || changes.meeting_type !== undefined || changes.location !== undefined || changes.duration_minutes !== undefined;
-      if (notify && confirmEmail && (relatedType === 'lead' || relatedType === 'client') && typeof relatedId === 'string') {
+      if (notify && canSend && confirmEmail && (relatedType === 'lead' || relatedType === 'client') && typeof relatedId === 'string') {
         const pending = { id, conversation: `${relatedType}:${relatedId}` };
         setPendingConfirmation(pending);
         try { const sent = await sendAppointmentConfirmation(id, pending.conversation); setPendingConfirmation(null); setNotice(sent.message); }
@@ -160,7 +171,7 @@ function Scheduler(): JSX.Element {
       <div><h2 className="text-xl font-semibold text-cui-text">Calendar &amp; appointments</h2><p className="mt-2 text-sm text-cui-muted">All times are {timeZone}.</p></div>
       <div className="flex gap-2">
         <Link href={list ? '/scheduler' : '/scheduler?view=list'} className="rounded border border-cui-border px-3 py-2 text-sm font-semibold text-cui-primary">{list ? 'Calendar view' : 'List view'}</Link>
-        <button className={buttonClass} disabled={!agency.timeZone} onClick={() => { setEditing(null); setError(''); setForm(newForm(timeZone)); }}>+ New Event</button>
+        {canEdit ? <button className={buttonClass} disabled={!agency.timeZone} onClick={() => { setEditing(null); setError(''); setForm(newForm(timeZone)); }}>+ New Event</button> : null}
       </div>
     </div>
     {error ? <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<button disabled={loading || busy} onClick={() => void load()} className="font-semibold underline">Refresh calendar</button></div> : null}
@@ -174,7 +185,7 @@ function Scheduler(): JSX.Element {
     }}>Retry appointment confirmation</button> : null}
     {loading ? <p className="mb-3 text-sm text-cui-muted">Loading calendar...</p> : null}
     <div className="mb-4 flex items-center gap-3"><label htmlFor="event-status" className="text-sm font-semibold">Show</label><select id="event-status" className="rounded border border-cui-border bg-white p-2 text-sm" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All appointments</option><option value="scheduled">Scheduled</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select><Link href="/account?tab=signature" className="text-sm font-semibold text-cui-primary underline">Connect calendar</Link></div>
-    <label className="mb-4 flex items-center gap-2 text-sm"><input type="checkbox" checked={confirmEmail} onChange={(event) => setConfirmEmail(event.target.checked)} />Email contacts about cancellations and reschedules</label>
+    {canEdit && canSend ? <label className="mb-4 flex items-center gap-2 text-sm"><input type="checkbox" checked={confirmEmail} onChange={(event) => setConfirmEmail(event.target.checked)} />Email contacts about cancellations and reschedules</label> : null}
     <div className="grid gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]">
       <Card><CardBody>
         {list ? <div className="space-y-3">
@@ -183,44 +194,46 @@ function Scheduler(): JSX.Element {
             <div className="flex flex-wrap gap-2">
               {event.google_meet_url && event.status === 'scheduled' ? <a href={event.google_meet_url} target="_blank" rel="noreferrer" className="px-2 py-1.5 text-xs font-semibold text-cui-primary underline">Join Meet</a> : null}
               {event.zoom_join_url && event.status === 'scheduled' ? <a href={event.zoom_join_url} target="_blank" rel="noreferrer" className="px-2 py-1.5 text-xs font-semibold text-cui-primary underline">Join Zoom</a> : null}
-              {event.status !== 'cancelled' ? <button disabled={busy} onClick={() => void save(event.id, { status: event.status === 'completed' ? 'scheduled' : 'completed' })} className="rounded border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-primary disabled:opacity-50">{event.status === 'completed' ? 'Reopen' : 'Complete'}</button> : null}
-              {event.status === 'scheduled' ? <>
+              {canEdit && event.status !== 'cancelled' ? <button disabled={busy} onClick={() => void save(event.id, { status: event.status === 'completed' ? 'scheduled' : 'completed' })} className="rounded border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-primary disabled:opacity-50">{event.status === 'completed' ? 'Reopen' : 'Complete'}</button> : null}
+              {canEdit && event.status === 'scheduled' ? <>
                 <button disabled={busy} onClick={() => open(event)} className="rounded border border-cui-border px-3 py-1.5 text-xs font-semibold text-cui-primary">Reschedule</button>
                 <button disabled={busy} onClick={() => { if (window.confirm(`Cancel "${event.title || event.subject}"? Its history will remain and reminders will stop.`)) void save(event.id, { status: 'cancelled' }); }} className="rounded border border-cui-danger px-3 py-1.5 text-xs font-semibold text-cui-danger">Cancel appointment</button>
               </> : null}
             </div>
-            {event.sync_status === 'failed' || event.sync_status === 'pending' ? <p role="alert" className="w-full text-xs text-cui-danger">{event.sync_error || 'Calendar update pending.'}{' '}<button disabled={busy} className="font-semibold underline" onClick={() => void retrySync(event.id)}>Retry calendar sync</button>
-              {event.zoom_create_attempted_at && !event.zoom_meeting_id ? <button disabled={busy} className="ml-3 font-semibold underline" onClick={() => void retrySync(event.id, event)}>I checked Zoom: no meeting exists</button> : null}</p> : null}
+            {event.sync_status === 'failed' || event.sync_status === 'pending' ? <p role="alert" className="w-full text-xs text-cui-danger">{event.sync_error || 'Calendar update pending.'}{' '}{canEdit ? <button disabled={busy} className="font-semibold underline" onClick={() => void retrySync(event.id)}>Retry calendar sync</button> : null}
+              {canEdit && event.zoom_create_attempted_at && !event.zoom_meeting_id ? <button disabled={busy} className="ml-3 font-semibold underline" onClick={() => void retrySync(event.id, event)}>I checked Zoom: no meeting exists</button> : null}</p> : null}
           </article>)}
           {!loading && !visible.length ? <p className="text-sm text-cui-muted">No appointments in this view.</p> : null}
-        </div> : <FullCalendar ref={calendar} plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]} timeZone="UTC" initialView="dayGridMonth" headerToolbar={{ left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay' }} events={calendarEvents} editable={!busy} eventDurationEditable={false} selectable dateClick={dateClick} eventClick={(arg) => { const event = events.find((row) => row.id === arg.event.id); if (event) open(event); }} eventDrop={(arg) => void drop(arg)} />}
+        </div> : <FullCalendar ref={calendar} plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]} timeZone="UTC" initialView="dayGridMonth" headerToolbar={{ left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay' }} events={calendarEvents} editable={canEdit && !busy} eventDurationEditable={false} selectable={canEdit} dateClick={canEdit ? dateClick : undefined} eventClick={(arg) => { const event = events.find((row) => row.id === arg.event.id); if (event) open(event); }} eventDrop={(arg) => void drop(arg)} />}
       </CardBody></Card>
       <div className="space-y-5">
         <Card><CardHeader>Today in {timeZone}</CardHeader><CardBody><div className="space-y-3">{events.filter((event) => event.event_date.slice(0, 10) === calendarDate(new Date(), timeZone)).map((event) => <div key={event.id} className="border-b border-cui-border pb-3"><button onClick={() => open(event)} className="text-left text-sm font-semibold text-cui-primary">{event.title || event.subject}</button><p className="mt-1 text-xs text-cui-muted">{event.all_day ? 'All day' : `${event.event_time?.slice(0, 5)} ${timeZone}`} - {event.status}</p></div>)}{!loading && !events.some((event) => event.event_date.slice(0, 10) === calendarDate(new Date(), timeZone)) ? <p className="text-sm text-cui-muted">No appointments today.</p> : null}</div></CardBody></Card>
-        <Card><CardHeader>Tasks due today or overdue</CardHeader><CardBody><div className="space-y-3">{tasks.map((task) => <div key={task.id} className="border-b border-cui-border pb-3"><Link href={(task.related_href || '/tasks') as Route} className="text-sm font-semibold text-cui-primary">{task.subject}</Link><p className="mt-1 text-xs text-cui-muted">{formatAgencyDateTime(task.due_date, timeZone)}</p></div>)}{!loading && !tasks.length ? <p className="text-sm text-cui-muted">No open tasks due today.</p> : null}<Link href="/tasks" className="inline-block text-sm font-semibold text-cui-primary">Open Tasks</Link></div></CardBody></Card>
+        {canViewTasks ? <Card><CardHeader>Tasks due today or overdue</CardHeader><CardBody><div className="space-y-3">{tasks.map((task) => <div key={task.id} className="border-b border-cui-border pb-3"><Link href={(task.related_href || '/tasks') as Route} className="text-sm font-semibold text-cui-primary">{task.subject}</Link><p className="mt-1 text-xs text-cui-muted">{formatAgencyDateTime(task.due_date, timeZone)}</p></div>)}{!loading && !tasks.length ? <p className="text-sm text-cui-muted">No open tasks due today.</p> : null}<Link href="/tasks" className="inline-block text-sm font-semibold text-cui-primary">Open Tasks</Link></div></CardBody></Card> : null}
       </div>
     </div>
     {form ? <Dialog.Root open onOpenChange={(opened) => { if (!opened && !busy) setForm(null); }}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-black/45" /><Dialog.Content onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => event.preventDefault()} className="fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100%_-_2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
-      <Dialog.Title className="mb-2 text-lg font-semibold">{editing ? 'Edit Event' : 'New Event'}</Dialog.Title>
-      <Dialog.Description className="mb-4 text-sm text-cui-muted">Save an appointment in {timeZone} and its connected task together.</Dialog.Description>
+      <Dialog.Title className="mb-2 text-lg font-semibold">{editing ? canEdit ? 'Edit Event' : 'View Event' : 'New Event'}</Dialog.Title>
+      <Dialog.Description className="mb-4 text-sm text-cui-muted">{canEdit ? `Save an appointment in ${timeZone} and its connected task together.` : `Appointment in ${timeZone}.`}</Dialog.Description>
       {error ? <p role="alert" className="mb-3 rounded bg-red-50 p-2 text-sm text-red-800">{error}</p> : null}
       <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void save(form.id, { subject: form.title, title: form.title, description: form.description, event_date: form.event_date, event_time: form.all_day ? null : form.event_time, all_day: form.all_day, related_type: form.related_type || null, related_id: form.related_id || null, client_id: form.related_type === 'client' ? form.related_id : null, meeting_type: form.meeting_type, duration_minutes: form.duration_minutes, location: form.location }, !editing).then((ok) => { if (ok) setForm(null); }); }}>
+        <fieldset disabled={!canEdit} className="space-y-3">
         <label className="block text-sm font-semibold">Event title<input autoFocus required maxLength={240} className={`${inputClass} mt-1 font-normal`} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
         <label className="block text-sm font-semibold">Description<textarea className={`${inputClass} mt-1 font-normal`} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
         <label className="block text-sm font-semibold">Date<input required type="date" className={`${inputClass} mt-1 font-normal`} value={form.event_date} onChange={(event) => setForm({ ...form, event_date: event.target.value })} /></label>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.all_day} onChange={(event) => setForm({ ...form, all_day: event.target.checked, meeting_type: event.target.checked && (form.meeting_type === 'google_meet' || form.meeting_type === 'zoom') ? 'phone' : form.meeting_type })} />All-day event (task due 9 AM {timeZone})</label>
         {!form.all_day ? <label className="block text-sm font-semibold">Time ({timeZone})<input required type="time" className={`${inputClass} mt-1 font-normal`} value={form.event_time} onChange={(event) => setForm({ ...form, event_time: event.target.value })} /></label> : null}
         <AppointmentMeetingFields value={form} onChange={(meeting) => setForm({ ...form, ...meeting })} disabled={busy || editing?.status === 'cancelled'} allDay={form.all_day} />
-        <label className="block text-sm font-semibold">Link to<select aria-label="Link to" className={`${inputClass} mt-1 font-normal`} value={form.related_type} onChange={(event) => setForm({ ...form, related_type: event.target.value === 'lead' ? 'lead' : event.target.value === 'client' ? 'client' : '', related_id: '' })}><option value="">Standalone appointment</option><option value="lead">Lead</option><option value="client">Account</option></select></label>
-        {form.related_type ? <RecordPicker type={form.related_type} value={form.related_id} onChange={(id) => setForm({ ...form, related_id: id })} /> : null}
-        {form.related_type ? <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmEmail}
+        <label className="block text-sm font-semibold">Link to<select aria-label="Link to" className={`${inputClass} mt-1 font-normal`} value={form.related_type} onChange={(event) => setForm({ ...form, related_type: event.target.value === 'lead' ? 'lead' : event.target.value === 'client' ? 'client' : '', related_id: '' })}><option value="">Standalone appointment</option>{canViewLeads ? <option value="lead">Lead</option> : null}{canViewAccounts ? <option value="client">Account</option> : null}</select></label>
+        {form.related_type && canEdit ? <RecordPicker type={form.related_type} value={form.related_id} scoped={!full} onChange={(id) => setForm({ ...form, related_id: id })} /> : null}
+        {form.related_type && canEdit && canSend ? <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmEmail}
           onChange={(event) => setConfirmEmail(event.target.checked)} />Send appointment confirmation from my Gmail after saving.</label> : null}
+        </fieldset>
         <div className="flex flex-wrap justify-end gap-2 pt-2">
-          {editing?.status === 'scheduled' ? <button type="button" disabled={busy} onClick={() => {
+          {canEdit && editing?.status === 'scheduled' ? <button type="button" disabled={busy} onClick={() => {
             if (window.confirm(`Cancel "${editing.title || editing.subject}"? Its history will remain and reminders will stop.`)) void save(editing.id, { status: 'cancelled' }).then((ok) => { if (ok) setForm(null); });
           }} className="rounded border border-cui-danger px-3 py-2 text-sm text-cui-danger">Cancel appointment</button> : null}
           <button type="button" disabled={busy} onClick={() => setForm(null)} className="rounded border border-cui-border px-3 py-2 text-sm">Cancel</button>
-          {editing?.status !== 'cancelled' ? <button type="submit" disabled={busy} className={buttonClass}>{busy ? 'Saving...' : editing ? 'Update Event' : 'Save Event'}</button> : <span className="py-2 text-sm text-cui-muted">Cancelled</span>}
+          {canEdit && editing?.status !== 'cancelled' ? <button type="submit" disabled={busy} className={buttonClass}>{busy ? 'Saving...' : editing ? 'Update Event' : 'Save Event'}</button> : editing?.status === 'cancelled' ? <span className="py-2 text-sm text-cui-muted">Cancelled</span> : null}
         </div>
       </form>
     </Dialog.Content></Dialog.Portal></Dialog.Root> : null}

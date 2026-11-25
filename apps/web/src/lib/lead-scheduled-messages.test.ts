@@ -199,7 +199,7 @@ describe('lead scheduled email', () => {
     expect((await POST(req('POST', { ...body, body_document: documentFromText(body.body) }), context)).status).toBe(409);
     expect(await processAgentScheduled(getSupabaseServerClient()!)).toEqual({ sent: 1, blocked: 0 });
     expect(sendAgentEmail).toHaveBeenCalledWith(expect.anything(), mailbox.user_id,
-      expect.objectContaining({ bodyDocument: parseEmailDocument(body.body_document) }), expect.anything());
+      expect.objectContaining({ bodyDocument: parseEmailDocument(body.body_document) }), expect.anything(), expect.any(Function));
   });
   it('queues explicitly selected personal Gmail while multi-agent mode is off', async () => {
     vi.stubEnv('CRM_MULTI_AGENT_ENABLED', 'false');
@@ -271,7 +271,7 @@ describe('lead scheduled email', () => {
     if (!db) throw new Error('Test database is required');
     expect(await processAgentScheduled(db)).toEqual({ sent: 1, blocked: 0 });
     expect(sendAgentEmail).toHaveBeenCalledWith(db, '11111111-1111-4111-8111-111111111111', expect.objectContaining({ to: 'synthetic@example.test' }),
-      { attemptId: requestId, clientId: null, leadId: lead });
+      { attemptId: requestId, clientId: null, leadId: lead }, expect.any(Function));
     claimed = false;
     await processAgentScheduled(db);
     expect(sendAgentEmail).toHaveBeenCalledTimes(1);
@@ -310,7 +310,7 @@ describe('lead scheduled email', () => {
     if (!db) throw new Error('Test database is required');
     expect(await processAgentScheduled(db)).toEqual({ sent: 1, blocked: 0 });
     expect(sendAgentEmail).toHaveBeenCalledWith(db, mailbox.user_id, expect.anything(),
-      expect.objectContaining({ salesTemplate: expect.objectContaining({ email_design: design }) }));
+      expect.objectContaining({ salesTemplate: expect.objectContaining({ email_design: design }) }), expect.any(Function));
   });
   it('does not deliver a claimed Gmail schedule after sending access is revoked', async () => {
     stored = { ...input(), id: requestId, lead_id: lead, agent_user_id: mailbox.user_id,
@@ -323,6 +323,36 @@ describe('lead scheduled email', () => {
     expect(await processAgentScheduled(db)).toEqual({ sent: 0, blocked: 1 });
     expect(sendAgentEmail).not.toHaveBeenCalled();
     expect(stored).toMatchObject({ status: 'failed', last_error: expect.stringContaining('no longer has permission') });
+  });
+  it('rechecks scheduled sending permission at the Gmail handoff', async () => {
+    stored = { ...input(), id: requestId, lead_id: lead, agent_user_id: mailbox.user_id,
+      gmail_connection_id: mailbox.id, approved_sender: { name: 'Synthetic sender' },
+      approved_recipient: 'synthetic@example.test', channel: 'email', status: 'pending' };
+    vi.mocked(getOwnGmailConnection).mockResolvedValue(mailbox);
+    vi.mocked(sendAgentEmail).mockImplementationOnce(async (_db, _actor, _input, _options, beforeDispatch) => {
+      dispatchAllowed = false;
+      await beforeDispatch?.();
+      return { id: requestId, provider: 'gmail', status: 'accepted_by_provider' };
+    });
+    const db = getSupabaseServerClient();
+    if (!db) throw new Error('Test database is required');
+    expect(await processAgentScheduled(db)).toEqual({ sent: 0, blocked: 1 });
+    expect(stored).toMatchObject({ status: 'failed', last_error: expect.stringContaining('no longer has permission') });
+  });
+  it('blocks a scheduled Gmail send when contact consent changes at the handoff', async () => {
+    stored = { ...input(), id: requestId, lead_id: lead, agent_user_id: mailbox.user_id,
+      gmail_connection_id: mailbox.id, approved_sender: { name: 'Synthetic sender' },
+      approved_recipient: 'synthetic@example.test', channel: 'email', status: 'pending' };
+    vi.mocked(getOwnGmailConnection).mockResolvedValue(mailbox);
+    vi.mocked(sendAgentEmail).mockImplementationOnce(async (_db, _actor, _input, _options, beforeDispatch) => {
+      vi.mocked(resolveOutboundEmailRecipient).mockResolvedValueOnce({ ok: false, status: 403, code: 'opted_out', message: 'Recipient opted out.' });
+      await beforeDispatch?.();
+      return { id: requestId, provider: 'gmail', status: 'accepted_by_provider' };
+    });
+    const db = getSupabaseServerClient();
+    if (!db) throw new Error('Test database is required');
+    expect(await processAgentScheduled(db)).toEqual({ sent: 0, blocked: 1 });
+    expect(stored).toMatchObject({ status: 'failed', last_error: 'Recipient opted out.' });
   });
 
   it('passes the current record to authorization for both shared and Gmail sends', async () => {
